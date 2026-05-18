@@ -1,0 +1,26 @@
+{
+  "name": "slidecraft",
+  "version": "0.1.0",
+  "description": "Multi-agent presentation pipeline that transforms raw material into polished Slidev decks — with corporate template import, iterative improvement, and intelligent visualization suggestions.",
+  "author": {
+    "name": "Florian Simroth",
+    "email": "Florian.Simroth@iu.org"
+  },
+  "homepage": "https://github.com/flsmr/slidecraft",
+  "repository": "https://github.com/flsmr/slidecraft",
+  "license": "MIT",
+  "keywords": [
+    "slidev",
+    "presentation",
+    "slides",
+    "pptx",
+    "theme",
+    "multi-agent",
+    "visualization",
+    "mermaid",
+    "d3",
+    "excalidraw"
+  ],
+  "commands": "./commands",
+  "skills": "./skills"
+}

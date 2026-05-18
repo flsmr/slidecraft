@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# User workspaces (never commit user data)
+# These are created by /slidecraft:start in user-chosen directories,
+# not typically inside this repo, but just in case:
+*.cif.json
+.slide-creator.json
+
+# Build outputs
+dist/
+*.pdf
+*.png
+
+# Environment
+.env
+.env.local

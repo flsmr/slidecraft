@@ -1,0 +1,16 @@
+{
+  "schemaVersion": "1.0",
+  "name": "slidecraft-marketplace",
+  "owner": {
+    "name": "flsmr",
+    "email": "Florian.Simroth@iu.org"
+  },
+  "plugins": [
+    {
+      "name": "slidecraft",
+      "version": "0.1.0",
+      "description": "Raw material to polished Slidev decks. Imports PPTX templates as themes, drafts audience-aware storylines, suggests per-slide visualizations, and iterates with multi-agent review.",
+      "source": "./slidecraft"
+    }
+  ]
+}
