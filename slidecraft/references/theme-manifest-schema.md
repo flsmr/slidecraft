@@ -8,7 +8,7 @@ Read by: `validate-theme.py` (with v1 compat shim), T-05 layout generator, T-06 
 ```json
 {
   "schema_version": "2.0",
-  "source_pptx": "IUG_PPT_Master_Update_EN_V01.pptx",
+  "source_pptx": "template.pptx",
   "slide": {
     "width_emu": 12192000,
     "height_emu": 6858000,
