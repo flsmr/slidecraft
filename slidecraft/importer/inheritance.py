@@ -197,6 +197,11 @@ def _extract_rpr(
     if strike is not None:
         run.strike = strike != "noStrike"
 
+    cap = rpr_el.get("cap")
+    if cap is not None:
+        # "all" → uppercase, "small" → lowercase, "none" → no transform
+        run.cap = cap
+
     sz = rpr_el.get("sz")
     if sz is not None:
         run.font_size_pt = _sz_to_pt(int(sz))
@@ -299,6 +304,7 @@ def _merge_run(base: Run, override: Run) -> Run:
         color=override.color if override.color is not None else base.color,
         font_family=override.font_family if override.font_family is not None else base.font_family,
         font_size_pt=override.font_size_pt if override.font_size_pt is not None else base.font_size_pt,
+        cap=override.cap if override.cap is not None else base.cap,
     )
 
 
@@ -525,6 +531,7 @@ def diff_run(run: Run, default: Run) -> Run:
         color=run.color if run.color != default.color else None,
         font_family=run.font_family if run.font_family != default.font_family else None,
         font_size_pt=run.font_size_pt if run.font_size_pt != default.font_size_pt else None,
+        cap=run.cap if run.cap != default.cap else None,
     )
 
 
