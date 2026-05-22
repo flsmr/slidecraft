@@ -8,11 +8,15 @@ import io
 from pathlib import Path
 
 import pytest
+from lxml import etree
 from pptx import Presentation as PptxPresentation
 from pptx.util import Inches, Pt, Emu
 
-from slidecraft.importer.parse import parse
-from slidecraft.importer.model import Presentation, NoFill, SolidFill
+from slidecraft.importer.parse import parse, _parse_paragraph
+from slidecraft.importer.model import Presentation, NoFill, SolidFill, Run, Paragraph
+
+_A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
+_P_NS = "http://schemas.openxmlformats.org/presentationml/2006/main"
 
 
 # ---------------------------------------------------------------------------
@@ -204,3 +208,63 @@ def test_parse_default_run_props_populated(tmp_path):
         assert ph.default_run_props.text == ""
         # default_para_props must be a Paragraph instance
         assert ph.default_para_props is not None
+
+
+# ---------------------------------------------------------------------------
+# Tests for <a:fld> field element parsing
+# ---------------------------------------------------------------------------
+
+def _make_paragraph_with_fld(field_type: str, field_text: str) -> etree._Element:
+    """Build an <a:p> element containing an <a:fld> child (e.g. slidenum, datetime1)."""
+    p_el = etree.Element(f"{{{_A_NS}}}p")
+    fld = etree.SubElement(p_el, f"{{{_A_NS}}}fld",
+                           attrib={"id": "{DEADBEEF-DEAD-DEAD-DEAD-DEADDEADBEEF}",
+                                   "type": field_type})
+    rpr = etree.SubElement(fld, f"{{{_A_NS}}}rPr", lang="en-US")
+    t_el = etree.SubElement(fld, f"{{{_A_NS}}}t")
+    t_el.text = field_text
+    return p_el
+
+
+class TestFieldElementParsing:
+    """Tests for <a:fld> (slidenum, datetime) parsed as regular runs."""
+
+    def test_fld_slidenum_text_captured(self):
+        """<a:fld type='slidenum'> text is emitted as a Run with the field value."""
+        p_el = _make_paragraph_with_fld("slidenum", "7")
+        default_run = Run(text="")
+        default_para = Paragraph(runs=[])
+        para = _parse_paragraph(p_el, default_run, default_para)
+        texts = [r.text for r in para.runs]
+        assert "7" in texts
+
+    def test_fld_datetime_text_captured(self):
+        """<a:fld type='datetime1'> text is emitted as a Run with the field value."""
+        p_el = _make_paragraph_with_fld("datetime1", "1/1/2025")
+        default_run = Run(text="")
+        default_para = Paragraph(runs=[])
+        para = _parse_paragraph(p_el, default_run, default_para)
+        texts = [r.text for r in para.runs]
+        assert "1/1/2025" in texts
+
+    def test_fld_interleaved_with_runs(self):
+        """Runs and fields in the same paragraph are all captured in order."""
+        p_el = etree.Element(f"{{{_A_NS}}}p")
+        # A regular run before the field
+        r1 = etree.SubElement(p_el, f"{{{_A_NS}}}r")
+        rpr1 = etree.SubElement(r1, f"{{{_A_NS}}}rPr")
+        t1 = etree.SubElement(r1, f"{{{_A_NS}}}t")
+        t1.text = "Slide "
+        # The field
+        fld = etree.SubElement(p_el, f"{{{_A_NS}}}fld",
+                               attrib={"id": "{DEADBEEF}", "type": "slidenum"})
+        rpr_fld = etree.SubElement(fld, f"{{{_A_NS}}}rPr")
+        t_fld = etree.SubElement(fld, f"{{{_A_NS}}}t")
+        t_fld.text = "3"
+
+        default_run = Run(text="")
+        default_para = Paragraph(runs=[])
+        para = _parse_paragraph(p_el, default_run, default_para)
+        all_text = "".join(r.text for r in para.runs)
+        assert "Slide " in all_text
+        assert "3" in all_text
