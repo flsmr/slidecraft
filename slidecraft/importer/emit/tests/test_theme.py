@@ -88,18 +88,15 @@ class TestThemePackageJsonShape:
         emit_theme(pres, tmp_path / "theme")
         assert not (tmp_path / "theme" / "styles" / "index.css").exists()
 
-    def test_styles_index_css_written_with_aliases(self, tmp_path):
-        """When alias_font_faces is supplied, styles/index.css must be written
-        with @font-face blocks for the weight-suffix names."""
+    def test_no_styles_index_css_even_with_aliases(self, tmp_path):
+        """Even when alias_font_faces is supplied, we MUST NOT write
+        styles/index.css. Slidev's conditional-styles plugin breaks on
+        absolute Windows theme paths when this file exists. Weight-suffix
+        names are handled at layout-emit time via strip_weight_suffix."""
         pres = _make_presentation()
         aliases = {"Source Sans Pro Bold": ("Source Sans Pro", 700)}
         emit_theme(pres, tmp_path / "theme", alias_font_faces=aliases)
-        css_path = tmp_path / "theme" / "styles" / "index.css"
-        assert css_path.exists()
-        css = css_path.read_text(encoding="utf-8")
-        assert "@font-face" in css
-        assert "Source Sans Pro Bold" in css
-        assert "font-weight: 700" in css
+        assert not (tmp_path / "theme" / "styles" / "index.css").exists()
 
     def test_no_public_fonts_dir_created(self, tmp_path):
         """No bundled font binaries — Slidev fetches from Google Fonts CDN."""

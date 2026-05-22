@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Union
 
+from ..fonts import strip_weight_suffix
 from ..model import (
     Fill,
     GradientStop,
@@ -70,8 +71,17 @@ def _run_props_css(ph: Placeholder) -> list[str]:
     """Return CSS declarations for the placeholder's default run properties."""
     rp = ph.default_run_props
     parts: list[str] = []
+
+    # Strip weight suffix from font-family so we reference the base family
+    # name (which Google Fonts can fetch) and encode the weight separately.
+    # e.g. PPT "Source Sans Pro Bold" → font-family: 'Source Sans Pro'; font-weight: 700
+    weight_from_family: int | None = None
     if rp.font_family:
-        parts.append(f"font-family: '{rp.font_family}', sans-serif")
+        base_family, natural = strip_weight_suffix(rp.font_family)
+        parts.append(f"font-family: '{base_family}', sans-serif")
+        if natural != 400 and base_family != rp.font_family:
+            weight_from_family = natural
+
     if rp.font_size_pt is not None:
         # pt → px (96dpi, 1pt = 4/3 px)
         px = rp.font_size_pt * 96 / 72
@@ -80,6 +90,10 @@ def _run_props_css(ph: Placeholder) -> list[str]:
         parts.append("font-weight: 700")
     elif rp.bold is False:
         parts.append("font-weight: 400")
+    elif weight_from_family is not None:
+        # Use the weight implied by the PPT family name only if no explicit
+        # bold attribute already overrode it.
+        parts.append(f"font-weight: {weight_from_family}")
     if rp.italic:
         parts.append("font-style: italic")
     if rp.color:

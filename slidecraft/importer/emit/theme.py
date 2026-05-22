@@ -130,9 +130,11 @@ def emit_theme(
         json.dumps(pkg, indent=2), encoding="utf-8"
     )
 
-    if alias_font_faces:
-        css = _build_alias_css(alias_font_faces)
-        styles_dir = theme_dir / "styles"
-        styles_dir.mkdir(parents=True, exist_ok=True)
-        css_path = styles_dir / "index.css"
-        css_path.write_text(css, encoding="utf-8")
+    # We no longer write styles/index.css with @font-face alias blocks.
+    # Slidev's @slidev/conditional-styles Vite plugin chokes on it when the
+    # theme lives at an absolute Windows path. Instead, emit/layout.py strips
+    # the weight suffix from font-family declarations at emit time (so the
+    # CSS already references the correct base family + font-weight pair) and
+    # Slidev's native Google-Fonts auto-import handles the rest.
+    # The alias_font_faces parameter is retained for backwards compatibility
+    # but is no longer written to disk.
