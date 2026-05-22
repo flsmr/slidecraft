@@ -167,10 +167,15 @@ def _parse_blip_fill(
         t = int(src_rect.get("t", "0"))
         r = int(src_rect.get("r", "0"))
         b = int(src_rect.get("b", "0"))
-        derivatives.append({
-            "op": "crop",
-            "params": {"l": l, "t": t, "r": r, "b": b},
-        })
+        # Skip the no-op case: PPT often writes `<a:srcRect/>` with no attrs
+        # (all default to 0), which means "do not crop". Generating a
+        # `image__crop_l0_t0_r0_b0.png` derivative for it just litters
+        # the assets folder.
+        if (l, t, r, b) != (0, 0, 0, 0):
+            derivatives.append({
+                "op": "crop",
+                "params": {"l": l, "t": t, "r": r, "b": b},
+            })
 
     # -- <a:tile> (tiled fill) ------------------------------------------------
     tile = blip_fill_elem.find(_atag("tile"))
