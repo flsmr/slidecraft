@@ -165,7 +165,7 @@ def resolve_fonts(
         # ------------------------------------------------------------------ #
         if typeface in embedded_by_typeface:
             files = embedded_by_typeface[typeface]
-            variants = _infer_variants_from_filenames(files)
+            variants = _infer_variants_from_filenames(files, family_name=typeface)
             entry: dict[str, Any] = {
                 "source": "embedded",
                 "files": files,
@@ -214,34 +214,77 @@ def resolve_fonts(
     return manifest
 
 
-def _infer_variants_from_filenames(files: list[str]) -> list[dict]:
+# Weight modifier names recognized at the end of a family name.
+_SUBFAMILY_WEIGHT_NAMES: dict[str, int] = {
+    "thin": 100, "hairline": 100,
+    "extralight": 200, "ultralight": 200,
+    "light": 300,
+    "medium": 500,
+    "semibold": 600, "demibold": 600,
+    "bold": 700,
+    "extrabold": 800, "ultrabold": 800, "heavy": 800,
+    "black": 900,
+}
+
+
+def _natural_weight_for_family(family_name: str) -> int:
+    """Return the natural CSS weight encoded by a family name's trailing modifier.
+
+    "Source Sans Pro Bold" → 700, "Helvetica Neue Light" → 300, otherwise 400.
+    """
+    norm = family_name.strip()
+    for name, weight in sorted(_SUBFAMILY_WEIGHT_NAMES.items(), key=lambda x: -len(x[0])):
+        for sep in (" ", "-"):
+            suffix = f"{sep}{name}"
+            if len(norm) > len(suffix) and norm.lower().endswith(suffix.lower()):
+                return weight
+    return 400
+
+
+def _infer_variants_from_filenames(files: list[str], family_name: str = "") -> list[dict]:
     """Infer weight/style metadata from font filenames.
 
     Handles common naming patterns: *-Regular.ttf, *-Bold.ttf, *-Italic.ttf,
     *-BoldItalic.ttf, and the w400/w700 pattern used by Google downloads.
+
+    When ``family_name`` ends in a weight modifier ("Source Sans Pro Bold",
+    "Helvetica Neue Light", etc.), the variant suffix is interpreted relative
+    to that natural weight: a "Bold" file inside a Bold subfamily is the
+    family's natural rendering (CSS weight = the modifier), not extra-bold.
+    Only "BoldItalic" within a non-400 subfamily is mapped one step bolder.
     """
+    natural = _natural_weight_for_family(family_name) if family_name else 400
+    is_modified = natural != 400
+    extra_bold = min(natural + 200, 900) if is_modified else 700
+
     variants = []
     for filename in files:
-        stem = Path(filename).stem.lower()
-        weight = 400
+        stem = Path(filename).stem
+        # Variant info comes from the trailing "-<suffix>" only, never the
+        # family prefix — otherwise "SourceSansProBold-Italic" would match
+        # both "bold" and "italic" patterns due to the family name.
+        suffix = stem.rsplit("-", 1)[-1].lower() if "-" in stem else stem.lower()
+        weight = natural
         style = "normal"
 
-        if "bolditalic" in stem or ("bold" in stem and "italic" in stem):
+        if "bolditalic" in suffix or ("bold" in suffix and "italic" in suffix):
+            weight = extra_bold if is_modified else 700
+            style = "italic"
+        elif "bold" in suffix:
+            # In a Bold/Light/etc. subfamily the "Bold" file IS the natural
+            # rendering (the family name already implies the weight).
+            weight = natural if is_modified else 700
+            style = "normal"
+        elif "italic" in suffix:
+            weight = natural
+            style = "italic"
+        elif "w700i" in suffix:
             weight = 700
             style = "italic"
-        elif "bold" in stem:
+        elif "w700" in suffix:
             weight = 700
             style = "normal"
-        elif "italic" in stem:
-            weight = 400
-            style = "italic"
-        elif "w700i" in stem:
-            weight = 700
-            style = "italic"
-        elif "w700" in stem:
-            weight = 700
-            style = "normal"
-        elif "w400i" in stem:
+        elif "w400i" in suffix:
             weight = 400
             style = "italic"
 
