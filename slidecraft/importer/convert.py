@@ -99,14 +99,17 @@ def convert(
         alias_font_faces=alias_font_faces or None,
     )
 
-    # Layer 2 (P6): extract picture assets and apply pre-bake derivatives
+    # Layer 2 (P6 + P9a): extract picture assets and apply pre-bake derivatives
     # (crop / duotone / soft_edge). The deterministic derivative_filename
     # contract means emit_layouts can emit URLs without waiting on Pillow,
     # but the files do need to exist before Slidev serves them — so this
     # block runs before emit_layouts/emit_deck. extract_pictures is a no-op
     # for decks without any media, so the cost is negligible on text-only PPTX.
-    manifest = extract_pictures(pptx_path, theme_dir)
-    assets_dir = theme_dir / "public" / "assets"
+    #
+    # Assets land under the *deck* (not the theme): Slidev's Vite dev server
+    # only serves the deck's public/ at site root. See pictures/extract.py.
+    manifest = extract_pictures(pptx_path, deck_dir)
+    assets_dir = deck_dir / "public" / "assets"
     derivative_warnings: list[str] = []
     for slide in presentation.slides:
         for pic in slide.pictures:

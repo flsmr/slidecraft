@@ -125,7 +125,7 @@ class Picture:
     derivatives all live in the ``effects`` dict (output of
     ``pictures.effects.parse_effects``) — emit reads them from there.
 
-    ``asset_ref`` is the basename written into ``theme/public/assets/`` by
+    ``asset_ref`` is the basename written into ``deck/public/assets/`` by
     ``pictures.extract.extract_pictures`` (preserves the original
     ``ppt/media/<name>``). It is ``None`` only for a picture-typed placeholder
     that has no image bound on either slide or layout (empty box rendering).

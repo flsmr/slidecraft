@@ -493,7 +493,7 @@ def _resolve_blip_asset_ref(blip_fill_el: Optional[etree._Element], part) -> Opt
     relationship on *part* to find the target media partname. Returns the
     basename only (e.g. ``"image1.png"``) so it matches what
     :func:`pictures.extract.extract_pictures` writes to
-    ``theme/public/assets/``.
+    ``deck/public/assets/``.
 
     Returns ``None`` if *blip_fill_el* is missing the ``<a:blip>`` child, the
     ``r:embed`` attribute is absent, the rId is unknown, or the target is
