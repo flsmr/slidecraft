@@ -63,7 +63,9 @@ class TestThemePackageJsonShape:
         defaults = slidev_block["defaults"]
         assert defaults["canvasWidth"] == 1920
         assert defaults["aspectRatio"] == "16/9"
-        assert defaults["fonts"]["provider"] == "none"
+        # provider key is no longer emitted by default — Slidev's default
+        # (google) handles fetching from CDN. weights are always written.
+        assert "weights" in defaults["fonts"]
 
     def test_theme_aspect_ratio_simplified(self, tmp_path):
         """4:3 canvas should produce '4/3', not '1024/768'."""
@@ -79,24 +81,35 @@ class TestThemePackageJsonShape:
         pkg = json.loads((tmp_path / "theme" / "package.json").read_text())
         assert pkg["slidev"]["defaults"]["canvasWidth"] == 2560
 
-    def test_creates_styles_index_css(self, tmp_path):
+    def test_no_styles_index_css_created(self, tmp_path):
+        """We rely on Slidev's native fonts config, not bundled @font-face,
+        so styles/index.css must NOT be emitted (Slidev's conditional-styles
+        plugin choked on it on Windows-absolute-path themes)."""
         pres = _make_presentation()
         emit_theme(pres, tmp_path / "theme")
-        assert (tmp_path / "theme" / "styles" / "index.css").exists()
+        assert not (tmp_path / "theme" / "styles" / "index.css").exists()
 
-    def test_creates_public_fonts_dir(self, tmp_path):
+    def test_no_public_fonts_dir_created(self, tmp_path):
+        """No bundled font binaries — Slidev fetches from Google Fonts CDN."""
         pres = _make_presentation()
         emit_theme(pres, tmp_path / "theme")
-        assert (tmp_path / "theme" / "public" / "fonts").is_dir()
+        assert not (tmp_path / "theme" / "public" / "fonts").exists()
 
     def test_idempotent(self, tmp_path):
-        """Calling emit_theme twice must not raise or corrupt output."""
+        """Calling emit_theme twice must not raise."""
         pres = _make_presentation()
         theme_dir = tmp_path / "theme"
         emit_theme(pres, theme_dir)
-        # Write something into index.css to verify it isn't cleared on re-run
-        (theme_dir / "styles" / "index.css").write_text("/* fonts */", encoding="utf-8")
         emit_theme(pres, theme_dir)
-        # index.css should NOT be overwritten (idempotent: only create if absent)
-        content = (theme_dir / "styles" / "index.css").read_text()
-        assert "/* fonts */" in content
+        assert (theme_dir / "package.json").exists()
+
+    def test_sans_families_emitted(self, tmp_path):
+        """When sans_families is passed, fonts.sans should be a comma-joined string."""
+        pres = _make_presentation()
+        emit_theme(
+            pres,
+            tmp_path / "theme",
+            sans_families=["Source Sans Pro", "Roboto"],
+        )
+        pkg = json.loads((tmp_path / "theme" / "package.json").read_text())
+        assert pkg["slidev"]["defaults"]["fonts"]["sans"] == "Source Sans Pro, Roboto"
