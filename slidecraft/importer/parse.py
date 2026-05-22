@@ -620,7 +620,6 @@ def parse(pptx_path: Path) -> Presentation:
                 is_prompt_fallback=is_prompt_fallback,
             ))
 
-        _apply_contrast_inversion(placeholders, bg_fill)
         slides.append(Slide(index=slide_idx, placeholders=placeholders, background_fill=bg_fill))
 
     return Presentation(
@@ -631,40 +630,3 @@ def parse(pptx_path: Path) -> Presentation:
     )
 
 
-def _apply_contrast_inversion(placeholders: list, bg_fill) -> None:
-    """When a placeholder's resolved text color matches the slide background,
-    flip the text color so it stays visible.
-
-    PowerPoint applies an implicit contrast rule: if both the slide background
-    and a placeholder's text color resolve to the same scheme color (typically
-    ``tx1`` on dark layouts where the layout sets ``<p:bg>`` to ``tx1``), the
-    actual rendered text uses the complementary color (``bg1``). We don't track
-    scheme provenance through resolution, so we approximate by comparing the
-    final RGB: if equal, flip the text to its luminance complement.
-
-    This only mutates the placeholder's *default* run/para props and any runs
-    that inherited (None) — explicit per-run colors are respected as-is.
-    """
-    if not isinstance(bg_fill, SolidFill):
-        return
-    bg = bg_fill.color
-    inverted = _luminance_complement(bg)
-    for ph in placeholders:
-        tc = ph.default_run_props.color
-        if tc is not None and tc.r == bg.r and tc.g == bg.g and tc.b == bg.b:
-            ph.default_run_props.color = inverted
-        # Also flip explicit per-run colors that happen to match (rare).
-        if ph.text_frame is not None:
-            for para in ph.text_frame.paragraphs:
-                for run in para.runs:
-                    rc = run.color
-                    if rc is not None and rc.r == bg.r and rc.g == bg.g and rc.b == bg.b:
-                        run.color = inverted
-
-
-def _luminance_complement(c: RGB) -> RGB:
-    """Return white if *c* is dark, black if *c* is light. Preserves alpha."""
-    luminance = (0.299 * c.r + 0.587 * c.g + 0.114 * c.b) / 255.0
-    if luminance < 0.5:
-        return RGB(255, 255, 255, c.alpha)
-    return RGB(0, 0, 0, c.alpha)
