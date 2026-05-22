@@ -956,9 +956,52 @@ def parse(pptx_path: Path) -> Presentation:
                 if inherited_free is not None:
                     pictures.append(inherited_free)
 
+        # Master-level inheritance. OOXML: master shapes render under every
+        # slide unless the slide or its layout sets showMasterSp="0". The IU
+        # template's "black on light background" logo lives on the master and
+        # only appears on slides whose layout doesn't override it with the
+        # white variant. Dedup by position so a layout's own logo (e.g. the
+        # white variant at the same top-right position) suppresses the
+        # master's logo for that slide.
+        slide_show_master = slide._element.get("showMasterSp")
+        layout_show_master = (
+            layout._element.get("showMasterSp")
+            if layout._element is not None
+            else None
+        )
+        effective_show_master = slide_show_master or layout_show_master or "1"
+        if effective_show_master != "0":
+            master_sp_tree = None
+            m_csld = master._element.find(_x("p:cSld"))
+            if m_csld is not None:
+                master_sp_tree = m_csld.find(_x("p:spTree"))
+            if master_sp_tree is not None:
+                # Build a position set from already-collected pictures so
+                # master pics overlapping a layout pic at the same xy can be
+                # skipped (layout overrides). Rounded-int positions tolerate
+                # subpixel EMU conversion noise.
+                covered_positions = {
+                    (round(p.x_px), round(p.y_px)) for p in pictures
+                }
+                master_base = 20_000
+                for k, mpic in enumerate(master_sp_tree.findall(_x("p:pic"))):
+                    inherited_master = _parse_pic(
+                        mpic, master.part, master_base + k,
+                    )
+                    if inherited_master is None:
+                        continue
+                    pos_key = (
+                        round(inherited_master.x_px),
+                        round(inherited_master.y_px),
+                    )
+                    if pos_key in covered_positions:
+                        continue  # Layout's own pic at this xy overrides.
+                    pictures.append(inherited_master)
+
         # Stable document order across both <p:pic> shapes and <p:ph type="pic">
-        # placeholders (which arrive from three sources: slide-level <p:pic>,
-        # slide-level <p:sp type="pic">, and layout-inherited <p:sp type="pic">).
+        # placeholders (which arrive from four sources: slide-level <p:pic>,
+        # slide-level <p:sp type="pic">, layout-inherited shapes, and
+        # master-inherited <p:pic> shapes).
         pictures.sort(key=lambda p: p.order_index)
 
         slides.append(Slide(
