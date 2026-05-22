@@ -265,12 +265,24 @@ def _parse_paragraph(
         diffed_run.text = text
         runs.append(diffed_run)
 
-    # Handle line breaks <a:br/> — emit as a Run with text="\n"
-    # We interleave runs and breaks by parsing in document order
+    # Handle line breaks <a:br/> and field runs <a:fld/> — emit in document order
+    # <a:fld> elements (date, slide number, footer) contain <a:t> with their
+    # auto-populated text; we emit the field value as a regular run.
     runs_ordered: list[Run] = []
     for child in p_el:
         tag = etree.QName(child.tag).localname
         if tag == "r":
+            t_el = child.find(_x("a:t"))
+            text = t_el.text or "" if t_el is not None else ""
+            rpr_el = child.find(_x("a:rPr"))
+            run_props = _extract_rpr(rpr_el, theme_el, clr_map)
+            run_props.text = text
+            diffed_run = diff_run(run_props, default_run)
+            diffed_run.text = text
+            runs_ordered.append(diffed_run)
+        elif tag == "fld":
+            # Field element: <a:fld type="slidenum"|"datetime1"|…>
+            # Extract the current field value from <a:t>, and run props from <a:rPr>.
             t_el = child.find(_x("a:t"))
             text = t_el.text or "" if t_el is not None else ""
             rpr_el = child.find(_x("a:rPr"))

@@ -67,6 +67,8 @@ class Run:
     color: Optional[RGB] = None
     font_family: Optional[str] = None
     font_size_pt: Optional[float] = None
+    # cap: "all" → text-transform:uppercase, "small" → text-transform:lowercase, None → inherit
+    cap: Optional[str] = None
 
 
 @dataclass

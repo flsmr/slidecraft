@@ -84,6 +84,10 @@ def _run_props_css(ph: Placeholder) -> list[str]:
         parts.append("font-style: italic")
     if rp.color:
         parts.append(f"color: {_hex_css(rp.color)}")
+    if rp.cap == "all":
+        parts.append("text-transform: uppercase")
+    elif rp.cap == "small":
+        parts.append("text-transform: lowercase")
     if rp.strike:
         parts.append("text-decoration: line-through")
     if rp.underline:
