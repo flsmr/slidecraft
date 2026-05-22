@@ -76,24 +76,44 @@ def _resolve_fill(
     sp_el: etree._Element,
     theme_el: Optional[etree._Element],
     clr_map: Optional[dict[str, str]] = None,
+    layout_sp: Optional[etree._Element] = None,
 ) -> Fill:
-    """Resolve shape fill from <p:sp><p:spPr> (solid, gradient, no-fill)."""
-    sp_pr = sp_el.find(_x("p:spPr"))
-    if sp_pr is None:
-        return NoFill()
+    """Resolve placeholder fill using a slide → layout cascade.
 
-    if sp_pr.find(_x("a:noFill")) is not None:
-        return NoFill()
+    For placeholder shapes the OOXML spec says that if the slide-level <p:spPr>
+    contains no fill directive (no <a:solidFill>, <a:gradFill>, or <a:noFill>),
+    the fill should be inherited from the corresponding layout placeholder.  We
+    implement that two-level cascade here so that layout-defined solid fills
+    (like the ``bg2`` band boxes on IU slide 1) appear correctly.
+    """
+    def _read_fill_from_sp_pr(sp_pr: Optional[etree._Element]) -> Optional[Fill]:
+        """Return a Fill or None if sp_pr carries no fill directive."""
+        if sp_pr is None:
+            return None
+        if sp_pr.find(_x("a:noFill")) is not None:
+            return NoFill()
+        solid = sp_pr.find(_x("a:solidFill"))
+        if solid is not None:
+            color = _parse_color(solid, theme_el, clr_map)
+            if color:
+                return SolidFill(color)
+        grad = sp_pr.find(_x("a:gradFill"))
+        if grad is not None:
+            return _parse_grad_fill(grad, theme_el, clr_map)
+        return None  # no directive found
 
-    solid = sp_pr.find(_x("a:solidFill"))
-    if solid is not None:
-        color = _parse_color(solid, theme_el, clr_map)
-        if color:
-            return SolidFill(color)
+    # Level 1: slide-level shape
+    slide_sp_pr = sp_el.find(_x("p:spPr"))
+    fill = _read_fill_from_sp_pr(slide_sp_pr)
+    if fill is not None:
+        return fill
 
-    grad = sp_pr.find(_x("a:gradFill"))
-    if grad is not None:
-        return _parse_grad_fill(grad, theme_el, clr_map)
+    # Level 2: layout placeholder (cascade fallback)
+    if layout_sp is not None:
+        layout_sp_pr = layout_sp.find(_x("p:spPr"))
+        fill = _read_fill_from_sp_pr(layout_sp_pr)
+        if fill is not None:
+            return fill
 
     return NoFill()
 
@@ -329,6 +349,28 @@ def _ph_has_text(sp_el: etree._Element) -> bool:
     return False
 
 
+def _txbody_is_empty(tx_body: etree._Element) -> bool:
+    """Return True if all <a:t> runs in a txBody are missing or contain only whitespace."""
+    for t_el in tx_body.iter(_x("a:t")):
+        if t_el.text and t_el.text.strip():
+            return False
+    return True
+
+
+def _layout_ph_has_custom_prompt(layout_sp: etree._Element) -> bool:
+    """Return True if the layout <p:sp> has hasCustomPrompt='1' on its <p:ph>."""
+    nv_sp_pr = layout_sp.find(_x("p:nvSpPr"))
+    if nv_sp_pr is None:
+        return False
+    nv_pr = nv_sp_pr.find(_x("p:nvPr"))
+    if nv_pr is None:
+        return False
+    ph = nv_pr.find(_x("p:ph"))
+    if ph is None:
+        return False
+    return ph.get("hasCustomPrompt") == "1"
+
+
 def _get_sp_position(sp_el: etree._Element) -> tuple[float, float, float, float, float]:
     """Return (x_px, y_px, width_px, height_px, rotation_deg) from <p:spPr><a:xfrm>."""
     sp_pr = sp_el.find(_x("p:spPr"))
@@ -488,21 +530,38 @@ def parse(pptx_path: Path) -> Presentation:
                 if master_sp is not None:
                     x_px, y_px, w_px, h_px, rot_deg = _get_sp_position(master_sp)
 
-            # Fill
-            fill = _resolve_fill(sp_el, theme_el, clr_map)
+            # Fill — cascades slide → layout
+            fill = _resolve_fill(sp_el, theme_el, clr_map, layout_sp=layout_sp)
 
             # Opacity (not commonly set on placeholders, default 1.0)
             opacity = 1.0
 
-            # TextFrame
+            # TextFrame — with prompt-fallback for empty slide-level content
             text_frame = None
+            is_prompt_fallback = False
             if tx_body is not None:
-                text_frame = _parse_text_frame(tx_body, default_run, default_para, theme_el, clr_map)
+                if (
+                    _txbody_is_empty(tx_body)
+                    and layout_sp is not None
+                    and _layout_ph_has_custom_prompt(layout_sp)
+                ):
+                    # Slide placeholder is empty; use layout's prompt text as the content.
+                    # Only the text RUNS come from the layout; styling cascade is already
+                    # resolved from slide → layout → master defaults (default_run/default_para).
+                    layout_tx_body = layout_sp.find(_x("p:txBody"))
+                    if layout_tx_body is not None and not _txbody_is_empty(layout_tx_body):
+                        text_frame = _parse_text_frame(
+                            layout_tx_body, default_run, default_para, theme_el, clr_map
+                        )
+                        is_prompt_fallback = True
+                if text_frame is None:
+                    text_frame = _parse_text_frame(tx_body, default_run, default_para, theme_el, clr_map)
                 # Collect typefaces from actual runs
-                for para in text_frame.paragraphs:
-                    for run in para.runs:
-                        if run.font_family:
-                            typefaces.add(run.font_family)
+                if text_frame is not None:
+                    for para in text_frame.paragraphs:
+                        for run in para.runs:
+                            if run.font_family:
+                                typefaces.add(run.font_family)
 
             placeholders.append(Placeholder(
                 idx=idx,
@@ -517,6 +576,7 @@ def parse(pptx_path: Path) -> Presentation:
                 text_frame=text_frame,
                 default_run_props=default_run,
                 default_para_props=default_para,
+                is_prompt_fallback=is_prompt_fallback,
             ))
 
         _apply_contrast_inversion(placeholders, bg_fill)
