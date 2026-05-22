@@ -5,13 +5,15 @@ All PPTX fixtures are built in-memory using python-pptx; no binary files are com
 from __future__ import annotations
 
 import io
+import zipfile
 from pathlib import Path
 
 import pytest
+from lxml import etree
 from pptx import Presentation as PptxPresentation
 from pptx.util import Inches, Pt, Emu
 
-from slidecraft.importer.parse import parse
+from slidecraft.importer.parse import parse, _txbody_is_empty, _layout_ph_has_custom_prompt
 from slidecraft.importer.model import Presentation, NoFill, SolidFill
 
 
@@ -204,3 +206,296 @@ def test_parse_default_run_props_populated(tmp_path):
         assert ph.default_run_props.text == ""
         # default_para_props must be a Paragraph instance
         assert ph.default_para_props is not None
+
+
+# ---------------------------------------------------------------------------
+# Helpers for building minimal PPTX fixtures from scratch via lxml
+# ---------------------------------------------------------------------------
+
+_A = "http://schemas.openxmlformats.org/drawingml/2006/main"
+_P = "http://schemas.openxmlformats.org/presentationml/2006/main"
+_R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+_PKG = "http://schemas.openxmlformats.org/package/2006/relationships"
+
+
+def _build_pptx_with_prompt_fallback(tmp_path: Path) -> Path:
+    """Build a minimal .pptx where slide1/ph_5 is empty and layout ph_5 has
+    hasCustomPrompt='1' with text 'Layout Prompt Text'.
+
+    We start from a normal python-pptx blank presentation and then
+    post-edit the layout XML via zipfile manipulation to inject the
+    hasCustomPrompt attribute and prompt text.
+    """
+    from pptx.util import Inches
+    prs = PptxPresentation()
+
+    # Use "Title and Content" layout (index 1) which has a body ph idx=1
+    layout = prs.slide_layouts[1]
+    slide = prs.slides.add_slide(layout)
+
+    # Leave the body placeholder EMPTY (just set title so slide is valid)
+    slide.shapes.title.text = "My Title"
+    # body placeholder (idx=1) gets no text
+
+    pptx_path = tmp_path / "prompt_test.pptx"
+    prs.save(str(pptx_path))
+
+    # Now post-edit the PPTX (zip) to set hasCustomPrompt on the layout's body ph
+    import zipfile, shutil
+    edited_path = tmp_path / "prompt_test_edited.pptx"
+    with zipfile.ZipFile(pptx_path, "r") as zin, zipfile.ZipFile(edited_path, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if "slideLayout" in item.filename and item.filename.endswith(".xml"):
+                # Find layout used by slide1 — check rels first is complex; edit ALL layouts
+                try:
+                    root = etree.fromstring(data)
+                    ns_map = {
+                        "a": _A, "p": _P, "r": _R
+                    }
+                    sp_tree = root.find(".//p:spTree", ns_map)
+                    if sp_tree is not None:
+                        for sp in sp_tree.findall("p:sp", ns_map):
+                            nv_pr = sp.find(".//p:ph", ns_map)
+                            if nv_pr is not None and nv_pr.get("idx") == "1":
+                                # Set hasCustomPrompt
+                                nv_pr.set("hasCustomPrompt", "1")
+                                # Inject prompt text into txBody
+                                tx_body = sp.find("p:txBody", ns_map)
+                                if tx_body is not None:
+                                    for p_el in list(tx_body.findall(f"{{{_A}}}p")):
+                                        tx_body.remove(p_el)
+                                    p_new = etree.SubElement(tx_body, f"{{{_A}}}p")
+                                    r_new = etree.SubElement(p_new, f"{{{_A}}}r")
+                                    rpr_new = etree.SubElement(r_new, f"{{{_A}}}rPr")
+                                    rpr_new.set("lang", "en-US")
+                                    t_new = etree.SubElement(r_new, f"{{{_A}}}t")
+                                    t_new.text = "Layout Prompt Text"
+                    data = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+                except Exception:
+                    pass  # leave data unchanged
+            zout.writestr(item, data)
+
+    return edited_path
+
+
+def _build_pptx_with_layout_fill(tmp_path: Path) -> Path:
+    """Build a minimal .pptx where slide1/ph_1 has empty spPr and layout ph_1
+    has a solidFill with schemeClr 'accent1', to test fill cascading.
+    """
+    from pptx.util import Inches
+    prs = PptxPresentation()
+    layout = prs.slide_layouts[1]
+    slide = prs.slides.add_slide(layout)
+    slide.shapes.title.text = "Fill Test"
+
+    pptx_path = tmp_path / "fill_test.pptx"
+    prs.save(str(pptx_path))
+
+    import zipfile
+    edited_path = tmp_path / "fill_test_edited.pptx"
+    with zipfile.ZipFile(pptx_path, "r") as zin, zipfile.ZipFile(edited_path, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if "slideLayout" in item.filename and item.filename.endswith(".xml"):
+                try:
+                    root = etree.fromstring(data)
+                    ns_map = {"a": _A, "p": _P}
+                    sp_tree = root.find(".//p:spTree", ns_map)
+                    if sp_tree is not None:
+                        for sp in sp_tree.findall("p:sp", ns_map):
+                            nv_pr = sp.find(".//p:ph", ns_map)
+                            if nv_pr is not None and nv_pr.get("idx") == "1":
+                                sp_pr = sp.find("p:spPr", ns_map)
+                                if sp_pr is None:
+                                    sp_pr = etree.SubElement(sp, f"{{{_P}}}spPr")
+                                # Remove any existing fill
+                                for tag in ["a:noFill", "a:solidFill", "a:gradFill"]:
+                                    el = sp_pr.find(tag, ns_map)
+                                    if el is not None:
+                                        sp_pr.remove(el)
+                                # Add solidFill with a known sRGB color
+                                solid = etree.SubElement(sp_pr, f"{{{_A}}}solidFill")
+                                srgb = etree.SubElement(solid, f"{{{_A}}}srgbClr")
+                                srgb.set("val", "FF4422")
+                    data = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+                except Exception:
+                    pass
+            zout.writestr(item, data)
+
+    return edited_path
+
+
+# ---------------------------------------------------------------------------
+# Test: prompt fallback (Deliverable 1)
+# ---------------------------------------------------------------------------
+
+class TestPromptFallback:
+    def test_empty_placeholder_uses_layout_prompt(self, tmp_path):
+        """When slide ph is empty and layout ph has hasCustomPrompt='1', use layout text."""
+        pptx_path = _build_pptx_with_prompt_fallback(tmp_path)
+        result = parse(pptx_path)
+        slide = result.slides[0]
+        body_phs = [p for p in slide.placeholders if p.idx == 1]
+        assert body_phs, "Expected a body placeholder with idx=1"
+        ph = body_phs[0]
+        assert ph.is_prompt_fallback is True, "Placeholder should be flagged as prompt fallback"
+        assert ph.text_frame is not None, "TextFrame should be populated from layout prompt"
+        all_text = "".join(
+            run.text
+            for para in ph.text_frame.paragraphs
+            for run in para.runs
+        )
+        assert "Layout Prompt Text" in all_text, (
+            f"Expected 'Layout Prompt Text' in fallback content, got: {all_text!r}"
+        )
+
+    def test_non_empty_placeholder_not_fallback(self, tmp_path):
+        """When slide ph has real content, is_prompt_fallback must stay False."""
+        prs = PptxPresentation()
+        layout = prs.slide_layouts[1]
+        slide = prs.slides.add_slide(layout)
+        slide.shapes.title.text = "Title"
+        for ph in slide.placeholders:
+            if ph.placeholder_format.idx == 1:
+                ph.text = "Real content"
+                break
+        out = _save_pptx(prs, tmp_path)
+        result = parse(out)
+        body_phs = [p for p in result.slides[0].placeholders if p.idx == 1]
+        if body_phs:
+            assert body_phs[0].is_prompt_fallback is False
+
+    def test_prompt_fallback_false_by_default_no_layout_prompt(self, tmp_path):
+        """When layout ph has no hasCustomPrompt, is_prompt_fallback stays False even if empty."""
+        prs = PptxPresentation()
+        layout = prs.slide_layouts[1]
+        slide = prs.slides.add_slide(layout)
+        slide.shapes.title.text = "Title"
+        # Leave body empty — but layout doesn't have hasCustomPrompt
+        out = _save_pptx(prs, tmp_path)
+        result = parse(out)
+        for ph in result.slides[0].placeholders:
+            assert ph.is_prompt_fallback is False
+
+
+# ---------------------------------------------------------------------------
+# Helpers for unit tests
+# ---------------------------------------------------------------------------
+
+def _make_sp_with_prompt(idx: int, has_custom: bool, text: str) -> etree._Element:
+    """Build a minimal <p:sp> element for testing _layout_ph_has_custom_prompt."""
+    sp = etree.Element(f"{{{_P}}}sp")
+    nv_sp_pr = etree.SubElement(sp, f"{{{_P}}}nvSpPr")
+    etree.SubElement(nv_sp_pr, f"{{{_P}}}cNvPr", {"id": "1", "name": "test"})
+    etree.SubElement(nv_sp_pr, f"{{{_P}}}cNvSpPr")
+    nv_pr = etree.SubElement(nv_sp_pr, f"{{{_P}}}nvPr")
+    ph_attrs = {"idx": str(idx)}
+    if has_custom:
+        ph_attrs["hasCustomPrompt"] = "1"
+    etree.SubElement(nv_pr, f"{{{_P}}}ph", ph_attrs)
+    sp_pr = etree.SubElement(sp, f"{{{_P}}}spPr")
+    tx_body = etree.SubElement(sp, f"{{{_P}}}txBody")
+    body_pr = etree.SubElement(tx_body, f"{{{_A}}}bodyPr")
+    lst_style = etree.SubElement(tx_body, f"{{{_A}}}lstStyle")
+    p_el = etree.SubElement(tx_body, f"{{{_A}}}p")
+    if text:
+        r_el = etree.SubElement(p_el, f"{{{_A}}}r")
+        t_el = etree.SubElement(r_el, f"{{{_A}}}t")
+        t_el.text = text
+    return sp
+
+
+class TestLayoutPhHasCustomPrompt:
+    def test_has_custom_prompt_true(self):
+        sp = _make_sp_with_prompt(5, True, "Click to edit")
+        assert _layout_ph_has_custom_prompt(sp) is True
+
+    def test_has_custom_prompt_false(self):
+        sp = _make_sp_with_prompt(5, False, "")
+        assert _layout_ph_has_custom_prompt(sp) is False
+
+    def test_has_custom_prompt_no_ph(self):
+        sp = etree.Element(f"{{{_P}}}sp")
+        assert _layout_ph_has_custom_prompt(sp) is False
+
+
+class TestTxBodyIsEmpty:
+    def test_empty_txbody(self):
+        tx = etree.fromstring(
+            f'<txBody xmlns="{_A}"><bodyPr/><p><endParaRPr/></p></txBody>'
+        )
+        assert _txbody_is_empty(tx) is True
+
+    def test_whitespace_only_txbody(self):
+        tx = etree.fromstring(
+            f'<txBody xmlns="{_A}"><bodyPr/><p><r><t>   </t></r></p></txBody>'
+        )
+        assert _txbody_is_empty(tx) is True
+
+    def test_non_empty_txbody(self):
+        tx = etree.fromstring(
+            f'<txBody xmlns="{_A}"><bodyPr/><p><r><t>Hello</t></r></p></txBody>'
+        )
+        assert _txbody_is_empty(tx) is False
+
+
+# ---------------------------------------------------------------------------
+# Test: layout fill cascade (Deliverable 2)
+# ---------------------------------------------------------------------------
+
+class TestLayoutFillCascade:
+    def test_layout_solidfill_propagates_when_slide_sppr_empty(self, tmp_path):
+        """When slide ph has empty spPr, fill cascades from layout placeholder."""
+        pptx_path = _build_pptx_with_layout_fill(tmp_path)
+        result = parse(pptx_path)
+        slide = result.slides[0]
+        body_phs = [p for p in slide.placeholders if p.idx == 1]
+        assert body_phs, "Expected body placeholder idx=1"
+        ph = body_phs[0]
+        assert isinstance(ph.fill, SolidFill), (
+            f"Expected SolidFill cascaded from layout, got {ph.fill!r}"
+        )
+        # The color we injected was #FF4422
+        assert ph.fill.color.r == 0xFF
+        assert ph.fill.color.g == 0x44
+        assert ph.fill.color.b == 0x22
+
+    def test_slide_sppr_nofill_is_respected(self, tmp_path):
+        """When slide ph has explicit <a:noFill>, layout fill should NOT override."""
+        prs = PptxPresentation()
+        layout = prs.slide_layouts[1]
+        slide = prs.slides.add_slide(layout)
+        slide.shapes.title.text = "NoFill Test"
+        pptx_path = tmp_path / "nofill_test.pptx"
+        prs.save(str(pptx_path))
+
+        # Post-edit: add noFill to slide ph_1 spPr
+        edited = tmp_path / "nofill_edited.pptx"
+        with zipfile.ZipFile(pptx_path, "r") as zin, zipfile.ZipFile(edited, "w", zipfile.ZIP_DEFLATED) as zout:
+            for item in zin.infolist():
+                data = zin.read(item.filename)
+                if "slides/slide1.xml" in item.filename:
+                    try:
+                        root = etree.fromstring(data)
+                        ns_map = {"a": _A, "p": _P}
+                        sp_tree = root.find(".//p:spTree", ns_map)
+                        if sp_tree is not None:
+                            for sp in sp_tree.findall("p:sp", ns_map):
+                                nv_pr = sp.find(".//p:ph", ns_map)
+                                if nv_pr is not None and nv_pr.get("idx") == "1":
+                                    sp_pr = sp.find("p:spPr", ns_map)
+                                    if sp_pr is None:
+                                        sp_pr = etree.SubElement(sp, f"{{{_P}}}spPr")
+                                    etree.SubElement(sp_pr, f"{{{_A}}}noFill")
+                        data = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+                    except Exception:
+                        pass
+                zout.writestr(item, data)
+
+        result = parse(edited)
+        body_phs = [p for p in result.slides[0].placeholders if p.idx == 1]
+        if body_phs:
+            assert isinstance(body_phs[0].fill, NoFill), (
+                "Explicit noFill on slide should not be overridden by layout fill"
+            )
