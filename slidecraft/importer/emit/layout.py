@@ -10,6 +10,7 @@ from ..model import (
     GradientStop,
     LinearGradientFill,
     NoFill,
+    Picture,
     Placeholder,
     Presentation,
     RadialGradientFill,
@@ -17,6 +18,8 @@ from ..model import (
     Slide,
     SolidFill,
 )
+from ..pictures.derivatives import derivative_filename
+from ..pictures.geometry import preset_to_css
 
 # ---------------------------------------------------------------------------
 # Fill → CSS helpers
@@ -189,6 +192,102 @@ def _placeholder_style(ph: Placeholder, frame_anchor: str = "t") -> str:
 
 
 # ---------------------------------------------------------------------------
+# Picture helpers (P6)
+# ---------------------------------------------------------------------------
+
+def _resolve_asset_url(asset_ref: str, effects: dict) -> str:
+    """Compute the final ``/assets/...`` URL after the derivative chain.
+
+    PPT effects that require pre-baked image work (crop / duotone / soft_edge)
+    produce ``derivatives_needed`` entries on the effects dict. Their
+    filenames are deterministic via
+    :func:`pictures.derivatives.derivative_filename`, so emit can predict the
+    final URL without running Pillow — the actual file write happens later in
+    the build pipeline (convert.py orchestrates the work-order list).
+    """
+    name = asset_ref
+    for d in effects.get("derivatives_needed", []) or []:
+        try:
+            name = derivative_filename(name, d["op"], d["params"])
+        except (KeyError, ValueError):
+            # Skip a malformed work order rather than break emit; warnings
+            # for unsupported ops live in effects.warnings already.
+            continue
+    return f"/assets/{name}"
+
+
+def _picture_wrapper_style(pic: Picture) -> str:
+    """Inline style for a Picture wrapper div.
+
+    Carries position/size, prstGeom mask (clip-path or border-radius),
+    rotation+flip transforms, css filter chain, alphaModFix opacity, inner
+    shadow mask hint, and -webkit-box-reflect — i.e. everything from the
+    effects dict that lives on the wrapper rather than the inner ``<img>``.
+    ``overflow: hidden`` ensures the prstGeom clip + child overflow play
+    well together.
+    """
+    parts: list[str] = [
+        "position:absolute",
+        f"left:{pic.x_px:.4g}px",
+        f"top:{pic.y_px:.4g}px",
+        f"width:{pic.width_px:.4g}px",
+        f"height:{pic.height_px:.4g}px",
+        "overflow:hidden",
+    ]
+
+    eff = pic.effects or {}
+
+    transforms = eff.get("transforms") or []
+    if transforms:
+        parts.append(f"transform:{' '.join(transforms)}")
+
+    css_filter = eff.get("css_filter") or ""
+    if css_filter:
+        parts.append(f"filter:{css_filter}")
+
+    opacity = eff.get("opacity")
+    if opacity is not None and opacity != 1.0:
+        parts.append(f"opacity:{opacity:.4g}")
+
+    box_reflect = eff.get("box_reflect")
+    if box_reflect:
+        parts.append(f"-webkit-box-reflect:{box_reflect}")
+
+    # prstGeom mask
+    if pic.preset_geom:
+        geom = preset_to_css(
+            pic.preset_geom,
+            int(pic.width_px) if pic.width_px else 0,
+            int(pic.height_px) if pic.height_px else 0,
+            pic.preset_geom_av,
+        )
+        if geom is not None:
+            if geom.get("clip_path"):
+                parts.append(f"clip-path:{geom['clip_path']}")
+            if geom.get("border_radius"):
+                parts.append(f"border-radius:{geom['border_radius']}")
+
+    return ";".join(parts)
+
+
+def _picture_img_tag(pic: Picture) -> str:
+    """Emit the inner ``<img>`` element for a Picture, or empty string if no asset.
+
+    The ``<img>`` always fills the wrapper (object-fit: fill mirrors PPT's
+    default stretch behaviour). Alt text is HTML-escaped on quotes only —
+    other characters are safe inside an attribute value.
+    """
+    if not pic.asset_ref:
+        return ""
+    alt = (pic.alt_text or "").replace('"', "&quot;")
+    url = _resolve_asset_url(pic.asset_ref, pic.effects or {})
+    return (
+        f'<img src="{url}" alt="{alt}" '
+        f'style="width:100%;height:100%;object-fit:fill;display:block;"/>'
+    )
+
+
+# ---------------------------------------------------------------------------
 # Vue template builder
 # ---------------------------------------------------------------------------
 
@@ -208,6 +307,33 @@ def _emit_layout_vue(slide: Slide, canvas_width: int, canvas_height: int) -> str
         lines.append(f'{_INDENT * 3}<div class="ph-{ph.idx}" style="{style}">')
         lines.append(f'{_INDENT * 4}<slot name="ph_{ph.idx}" />')
         lines.append(f"{_INDENT * 3}</div>")
+
+    # Pictures (P6): free <p:pic> shapes baked fully into the layout; picture
+    # placeholders emit a wrapped <slot> with the layout's default <img> as the
+    # slot's default content, so slides can override per-placeholder by
+    # supplying their own ::ph_<idx>:: block.
+    for pic in slide.pictures:
+        style = _picture_wrapper_style(pic)
+        img_tag = _picture_img_tag(pic)
+        if pic.is_placeholder and pic.ph_idx is not None:
+            lines.append(
+                f'{_INDENT * 3}<div class="ph-{pic.ph_idx}" style="{style}">'
+            )
+            if img_tag:
+                lines.append(f'{_INDENT * 4}<slot name="ph_{pic.ph_idx}">{img_tag}</slot>')
+            else:
+                # Un-bound picture placeholder — empty box; slide may still
+                # override via ::ph_<idx>:: to supply its own image.
+                lines.append(f'{_INDENT * 4}<slot name="ph_{pic.ph_idx}" />')
+            lines.append(f"{_INDENT * 3}</div>")
+        else:
+            # Free <p:pic> — baked completely; no slot, no override.
+            lines.append(
+                f'{_INDENT * 3}<div class="pic-{pic.shape_id}" style="{style}">'
+            )
+            if img_tag:
+                lines.append(f"{_INDENT * 4}{img_tag}")
+            lines.append(f"{_INDENT * 3}</div>")
 
     lines.append(f"{_INDENT * 2}</div>")
     lines.append(f"{_INDENT}</div>")
