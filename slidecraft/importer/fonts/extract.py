@@ -145,13 +145,28 @@ def _iter_embedded_font_parts(
         if not typeface:
             continue
 
-        # Each variant (regular, bold, italic, boldItalic) is a child element
-        variants = {
-            "regular":    (400, "normal"),
-            "bold":       (700, "normal"),
-            "italic":     (400, "italic"),
-            "boldItalic": (700, "italic"),
-        }
+        # If the family name encodes a weight modifier ("Source Sans Pro Bold",
+        # "Helvetica Neue Light"), the variant tags are interpreted relative to
+        # that natural weight. e.g. <p:bold> for "Source Sans Pro Bold" is the
+        # subfamily's *natural* rendering (CSS weight = the modifier's value),
+        # not extra-bold. Only <p:boldItalic> in a non-400 subfamily
+        # represents a one-step-bolder italic.
+        natural_weight = _natural_weight_for_family(typeface)
+        if natural_weight == 400:
+            variants = {
+                "regular":    (400, "normal"),
+                "bold":       (700, "normal"),
+                "italic":     (400, "italic"),
+                "boldItalic": (700, "italic"),
+            }
+        else:
+            extra_bold = min(natural_weight + 200, 900)
+            variants = {
+                "regular":    (natural_weight, "normal"),
+                "bold":       (natural_weight, "normal"),
+                "italic":     (natural_weight, "italic"),
+                "boldItalic": (extra_bold,     "italic"),
+            }
         for variant_tag, (weight, style) in variants.items():
             variant_el = embedded.find(f"{{{ns_p}}}{variant_tag}")
             if variant_el is None:
@@ -198,6 +213,37 @@ def _iter_embedded_font_parts(
             filename = f"{safe_name}-{variant_suffix}{ext}"
 
             yield typeface, filename, font_bytes
+
+
+# Weight modifier names recognized at the end of a family name.
+# Maps the normalized (lowercased, spaceless) name to a CSS font-weight value.
+_SUBFAMILY_WEIGHT_NAMES: dict[str, int] = {
+    "thin": 100, "hairline": 100,
+    "extralight": 200, "ultralight": 200,
+    "light": 300,
+    "medium": 500,
+    "semibold": 600, "demibold": 600,
+    "bold": 700,
+    "extrabold": 800, "ultrabold": 800, "heavy": 800,
+    "black": 900,
+}
+
+
+def _natural_weight_for_family(family_name: str) -> int:
+    """Return the natural CSS weight for a family name.
+
+    If the family name ends in a recognized weight modifier
+    (separated by a space or hyphen), return that modifier's CSS weight value.
+    Otherwise return 400.
+    """
+    norm = family_name.strip()
+    # Prefer longer matches so "extra bold" wins over "bold".
+    for name, weight in sorted(_SUBFAMILY_WEIGHT_NAMES.items(), key=lambda x: -len(x[0])):
+        for sep in (" ", "-"):
+            suffix = f"{sep}{name}"
+            if len(norm) > len(suffix) and norm.lower().endswith(suffix.lower()):
+                return weight
+    return 400
 
 
 def _extract_guid_from_path(path: str) -> str | None:
