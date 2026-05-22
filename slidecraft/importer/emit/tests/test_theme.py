@@ -81,13 +81,25 @@ class TestThemePackageJsonShape:
         pkg = json.loads((tmp_path / "theme" / "package.json").read_text())
         assert pkg["slidev"]["defaults"]["canvasWidth"] == 2560
 
-    def test_no_styles_index_css_created(self, tmp_path):
-        """We rely on Slidev's native fonts config, not bundled @font-face,
-        so styles/index.css must NOT be emitted (Slidev's conditional-styles
-        plugin choked on it on Windows-absolute-path themes)."""
+    def test_no_styles_index_css_without_aliases(self, tmp_path):
+        """When there are no weight-suffix alias typefaces, styles/index.css
+        must NOT be emitted — Slidev's native fonts mechanism handles it."""
         pres = _make_presentation()
         emit_theme(pres, tmp_path / "theme")
         assert not (tmp_path / "theme" / "styles" / "index.css").exists()
+
+    def test_styles_index_css_written_with_aliases(self, tmp_path):
+        """When alias_font_faces is supplied, styles/index.css must be written
+        with @font-face blocks for the weight-suffix names."""
+        pres = _make_presentation()
+        aliases = {"Source Sans Pro Bold": ("Source Sans Pro", 700)}
+        emit_theme(pres, tmp_path / "theme", alias_font_faces=aliases)
+        css_path = tmp_path / "theme" / "styles" / "index.css"
+        assert css_path.exists()
+        css = css_path.read_text(encoding="utf-8")
+        assert "@font-face" in css
+        assert "Source Sans Pro Bold" in css
+        assert "font-weight: 700" in css
 
     def test_no_public_fonts_dir_created(self, tmp_path):
         """No bundled font binaries — Slidev fetches from Google Fonts CDN."""

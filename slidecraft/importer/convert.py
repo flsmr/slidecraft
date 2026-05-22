@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .emit import emit_deck, emit_layouts, emit_theme
+from .fonts import strip_weight_suffix
 from .fonts.substitute import SUBSTITUTE_TABLE
 from .parse import parse
 
@@ -24,6 +25,7 @@ class ConvertResult:
     typefaces_total: int
     typefaces_substituted: int
     sans_families: list[str] = field(default_factory=list)
+    alias_font_faces: dict[str, tuple[str, int]] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
 
 
@@ -56,24 +58,42 @@ def convert(
 
     presentation = parse(pptx_path)
 
-    # Build the Google-Fonts-resolvable sans list (substitute MS fonts).
+    # Build the Google-Fonts-resolvable sans list (substitute MS fonts, strip
+    # weight suffixes so Google Fonts receives the base family name).
+    # Also collect aliases: weight-suffix typeface names → (base, weight) so
+    # emit_theme can write @font-face alias blocks in styles/index.css.
     sans_families: list[str] = []
+    alias_font_faces: dict[str, tuple[str, int]] = {}
     seen: set[str] = set()
     substituted_count = 0
+
     for tf in sorted(presentation.typefaces_referenced):
-        resolved, was_sub = _resolve_typeface_for_google_fonts(tf)
-        if resolved in seen:
-            continue
-        seen.add(resolved)
-        sans_families.append(resolved)
+        # First apply MS-proprietary substitution (Calibri → Carlito etc.)
+        resolved_ms, was_sub = _resolve_typeface_for_google_fonts(tf)
         if was_sub:
             substituted_count += 1
+
+        # Then strip any trailing weight/style modifier from the name so Google
+        # Fonts receives "Source Sans Pro" instead of "Source Sans Pro Bold".
+        base_family, natural_weight = strip_weight_suffix(resolved_ms)
+        is_weight_alias = base_family != resolved_ms
+
+        if is_weight_alias:
+            # Record alias so emit_theme can write @font-face blocks.
+            # Key is the verbatim PPT name (what layouts reference),
+            # value is (base_family, natural_weight) for the @font-face src.
+            alias_font_faces[tf] = (base_family, natural_weight)
+
+        if base_family not in seen:
+            seen.add(base_family)
+            sans_families.append(base_family)
 
     emit_theme(
         presentation,
         theme_dir,
         theme_name=theme_name,
         sans_families=sans_families,
+        alias_font_faces=alias_font_faces or None,
     )
     emit_layouts(presentation, theme_dir)
 
@@ -87,5 +107,6 @@ def convert(
         typefaces_total=len(presentation.typefaces_referenced),
         typefaces_substituted=substituted_count,
         sans_families=sans_families,
+        alias_font_faces=alias_font_faces,
         warnings=warnings,
     )
