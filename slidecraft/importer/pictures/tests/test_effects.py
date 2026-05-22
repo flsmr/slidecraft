@@ -178,10 +178,22 @@ class TestSrcRect:
         assert d["op"] == "crop"
         assert d["params"] == {"l": 5000, "t": 10000, "r": 5000, "b": 0}
 
-    def test_missing_attrs_default_to_zero(self) -> None:
+    def test_missing_attrs_skip_noop_crop(self) -> None:
+        """`<a:srcRect/>` with all-zero attrs is a no-op and produces no derivative.
+
+        PPT routinely emits empty `<a:srcRect/>` on un-cropped pictures. Generating
+        an ``image__crop_l0_t0_r0_b0`` derivative file for every such picture
+        litters the assets folder with byte-identical copies.
+        """
         result = _effects_bf('<a:srcRect/>')
-        d = result["derivatives_needed"][0]
-        assert d["params"] == {"l": 0, "t": 0, "r": 0, "b": 0}
+        crops = [d for d in result["derivatives_needed"] if d["op"] == "crop"]
+        assert crops == []
+
+    def test_single_nonzero_attr_still_crops(self) -> None:
+        result = _effects_bf('<a:srcRect l="100"/>')
+        crops = [d for d in result["derivatives_needed"] if d["op"] == "crop"]
+        assert len(crops) == 1
+        assert crops[0]["params"] == {"l": 100, "t": 0, "r": 0, "b": 0}
 
 
 class TestTile:

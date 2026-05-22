@@ -684,6 +684,58 @@ def _parse_picture_placeholder(
     )
 
 
+def _parse_layout_only_picture_placeholder(
+    layout_sp: etree._Element,
+    layout_part,
+    idx: int,
+    order_index: int,
+) -> Optional[Picture]:
+    """Parse a layout-level ``<p:sp>`` picture placeholder NOT redeclared on the slide.
+
+    OOXML semantics: a layout's picture-typed placeholder renders on every
+    slide using that layout unless the slide overrides it by redeclaring the
+    same idx. ``parse.py`` only walks the slide's own spTree, so without this
+    helper layout-only picture placeholders never reach the resolved model
+    (this was the cause of "16 assets extracted but only 5 rendered" against
+    the IU template).
+
+    Both blipFill and geometry resolve entirely against the layout part — no
+    slide-level cascade since the slide has no matching shape.
+
+    Returns ``None`` if the layout shape itself is degenerate (no image and
+    zero geometry).
+    """
+    nv_sp_pr = layout_sp.find(_x("p:nvSpPr"))
+    shape_id, alt_text = _read_cnv_pr(nv_sp_pr)
+
+    sp_pr = layout_sp.find(_x("p:spPr"))
+    blip_fill = sp_pr.find(_x("a:blipFill")) if sp_pr is not None else None
+    asset_ref = _resolve_blip_asset_ref(blip_fill, layout_part)
+
+    x, y, w, h, _rot = _get_sp_position(layout_sp)
+    if asset_ref is None and w == 0 and h == 0:
+        return None
+
+    preset_name, preset_av = _read_prst_geom(sp_pr)
+    effects = parse_effects(sp_pr, blip_fill if asset_ref is not None else None)
+
+    return Picture(
+        asset_ref=asset_ref,
+        x_px=x,
+        y_px=y,
+        width_px=w,
+        height_px=h,
+        preset_geom=preset_name,
+        preset_geom_av=preset_av,
+        effects=effects,
+        alt_text=alt_text,
+        shape_id=shape_id,
+        is_placeholder=True,
+        ph_idx=idx,
+        order_index=order_index,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Main parse function
 # ---------------------------------------------------------------------------
@@ -858,8 +910,55 @@ def parse(pptx_path: Path) -> Presentation:
                 is_prompt_fallback=is_prompt_fallback,
             ))
 
+        # Surface layout-only picture placeholders. OOXML: a layout-level
+        # <p:sp type="pic"> renders on every slide using that layout unless
+        # the slide redeclares the same idx. Without this pass, the IU
+        # template's layout-bound decorative images (logos, sidebars, sample
+        # photos baked into the layout's blipFill) never reach the model.
+        slide_ph_idxes = {p.idx for p in placeholders} | {
+            p.ph_idx for p in pictures if p.is_placeholder and p.ph_idx is not None
+        }
+        layout_sp_tree = (
+            layout._element.find(_x("p:cSld") + "/" + _x("p:spTree"))
+            if layout._element is not None
+            else None
+        )
+        if layout_sp_tree is None:
+            # Fallback: find with explicit walk
+            l_csld = layout._element.find(_x("p:cSld"))
+            layout_sp_tree = l_csld.find(_x("p:spTree")) if l_csld is not None else None
+        if layout_sp_tree is not None:
+            # Use a high base order_index so layout-inherited pics naturally land
+            # behind slide-level pics in DOM order (they're the background).
+            base = 10_000
+            for i, lsp in enumerate(layout_sp_tree.findall(_x("p:sp"))):
+                lidx = _ph_idx(lsp)
+                if lidx is None:
+                    continue
+                if lidx in slide_ph_idxes:
+                    continue  # Slide overrides this layout placeholder.
+                if _ph_type(lsp) != "pic":
+                    continue
+                inherited = _parse_layout_only_picture_placeholder(
+                    lsp, layout.part, lidx, base + i,
+                )
+                if inherited is not None:
+                    pictures.append(inherited)
+
+            # Also walk layout-level free <p:pic> shapes (e.g. the IU template's
+            # decorative logo lives as a <p:pic> directly on the layout, not
+            # inside a placeholder). These render under every slide that uses
+            # the layout, so we surface them per-slide.
+            for j, lpic in enumerate(layout_sp_tree.findall(_x("p:pic"))):
+                inherited_free = _parse_pic(
+                    lpic, layout.part, base + 5_000 + j,
+                )
+                if inherited_free is not None:
+                    pictures.append(inherited_free)
+
         # Stable document order across both <p:pic> shapes and <p:ph type="pic">
-        # placeholders (which arrive from two separate findall loops).
+        # placeholders (which arrive from three sources: slide-level <p:pic>,
+        # slide-level <p:sp type="pic">, and layout-inherited <p:sp type="pic">).
         pictures.sort(key=lambda p: p.order_index)
 
         slides.append(Slide(
