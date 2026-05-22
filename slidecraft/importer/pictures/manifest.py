@@ -1,4 +1,4 @@
-"""Read/write theme/public/assets/manifest.json for the pictures pipeline.
+"""Read/write deck/public/assets/manifest.json for the pictures pipeline.
 
 The manifest records, per image file, the source format, fidelity, any
 derivative files, and warnings raised during classification.

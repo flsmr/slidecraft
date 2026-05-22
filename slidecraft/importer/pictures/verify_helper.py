@@ -3,7 +3,7 @@
 Provides utilities to determine the SSIM threshold to use when comparing a
 rendered Slidev layout against the original PPTX slide.  The threshold is
 relaxed when any picture referenced by the layout has a ``fidelity`` of
-``"low"`` in ``theme/public/assets/manifest.json`` (e.g. an EMF or WMF that
+``"low"`` in ``deck/public/assets/manifest.json`` (e.g. an EMF or WMF that
 was converted to PNG with lossy re-encoding), and strict when all pictures are
 ``"exact"`` or ``"high"``.
 
@@ -96,7 +96,7 @@ def threshold_for_slide(
     Args:
         asset_names:   List of asset basenames to check (as returned by
                        :func:`collect_asset_refs_from_layout`).
-        manifest_path: Path to ``theme/public/assets/manifest.json``.
+        manifest_path: Path to ``deck/public/assets/manifest.json``.
         strict:        Threshold used when all assets have high/exact fidelity.
         relaxed:       Threshold used when at least one asset has low fidelity
                        or is unknown.
@@ -139,7 +139,7 @@ def threshold_for_layout(
 
     Args:
         layout_vue_path: Absolute path to the ``layoutN.vue`` file.
-        manifest_path:   Path to ``theme/public/assets/manifest.json``.
+        manifest_path:   Path to ``deck/public/assets/manifest.json``.
         strict:          Strict SSIM threshold (default 0.98).
         relaxed:         Relaxed SSIM threshold (default 0.90).
 
