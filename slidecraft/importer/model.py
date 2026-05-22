@@ -118,10 +118,44 @@ class Placeholder:
 
 
 @dataclass
+class Picture:
+    """A `<p:pic>` shape or picture-typed placeholder, fully resolved at slide level.
+
+    Geometry (x/y/w/h) is in px. Rotation, flips, opacity, filters, and pre-bake
+    derivatives all live in the ``effects`` dict (output of
+    ``pictures.effects.parse_effects``) — emit reads them from there.
+
+    ``asset_ref`` is the basename written into ``theme/public/assets/`` by
+    ``pictures.extract.extract_pictures`` (preserves the original
+    ``ppt/media/<name>``). It is ``None`` only for a picture-typed placeholder
+    that has no image bound on either slide or layout (empty box rendering).
+    """
+    asset_ref: Optional[str]
+    x_px: float
+    y_px: float
+    width_px: float
+    height_px: float
+    # Shape geometry mask (prstGeom). None means rectangular (no clip).
+    preset_geom: Optional[str] = None
+    preset_geom_av: Optional[dict[str, int]] = None
+    # Output of pictures.effects.parse_effects (transforms/css_filter/opacity/
+    # derivatives_needed/box_reflect/mask_image/warnings). Empty when not parsed.
+    effects: dict = field(default_factory=dict)
+    alt_text: str = ""
+    shape_id: int = 0                # cNvPr/@id — used as `pic-<id>` wrapper class
+    # Placeholder marker. True iff parsed from `<p:sp>` with `<p:ph type="pic"/>`.
+    is_placeholder: bool = False
+    ph_idx: Optional[int] = None     # set iff is_placeholder; used as `ph_<idx>` slot name
+    # 0-based index in slide XML document order; lets emit interleave pics + placeholders.
+    order_index: int = 0
+
+
+@dataclass
 class Slide:
     index: int                       # 1-based
     placeholders: list[Placeholder]
     background_fill: Fill = field(default_factory=NoFill)
+    pictures: list[Picture] = field(default_factory=list)
 
 
 @dataclass

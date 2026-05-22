@@ -23,6 +23,7 @@ from slidecraft.importer.model import (
     LinearGradientFill,
     NoFill,
     Paragraph,
+    Picture,
     Placeholder,
     Presentation,
     RGB,
@@ -44,6 +45,7 @@ from slidecraft.importer.inheritance import (
     get_clr_map,
     resolve_placeholder,
 )
+from slidecraft.importer.pictures.effects import parse_effects
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -481,6 +483,208 @@ def _get_theme_el(master) -> Optional[etree._Element]:
 
 
 # ---------------------------------------------------------------------------
+# Picture helpers (P4)
+# ---------------------------------------------------------------------------
+
+def _resolve_blip_asset_ref(blip_fill_el: Optional[etree._Element], part) -> Optional[str]:
+    """Resolve a ``<a:blipFill>``'s embedded image to a media basename.
+
+    Reads ``<a:blip r:embed="rIdN"/>`` from *blip_fill_el* and follows the
+    relationship on *part* to find the target media partname. Returns the
+    basename only (e.g. ``"image1.png"``) so it matches what
+    :func:`pictures.extract.extract_pictures` writes to
+    ``theme/public/assets/``.
+
+    Returns ``None`` if *blip_fill_el* is missing the ``<a:blip>`` child, the
+    ``r:embed`` attribute is absent, the rId is unknown, or the target is
+    not an image relationship.
+    """
+    if blip_fill_el is None:
+        return None
+    blip = blip_fill_el.find(_x("a:blip"))
+    if blip is None:
+        return None
+    r_embed = blip.get(_x("r:embed"))
+    if r_embed is None:
+        # `r:link` (linked external image) is out of scope — we only handle embedded.
+        return None
+    try:
+        rel = part.rels[r_embed]
+    except KeyError:
+        return None
+    if "image" not in rel.reltype:
+        return None
+    try:
+        partname = rel.target_part.partname
+    except Exception:
+        return None
+    return Path(str(partname)).name
+
+
+def _read_prst_geom(
+    sp_pr: Optional[etree._Element],
+) -> tuple[Optional[str], Optional[dict[str, int]]]:
+    """Return (preset_name, adjust_values) for a shape's ``<a:prstGeom>``.
+
+    Returns ``(None, None)`` when *sp_pr* is missing or has no prstGeom child,
+    or when the preset is a freeform/custom geometry. Adjust values are read
+    from ``<a:avLst><a:gd name="adj" fmla="val N"/></a:avLst>``; only the
+    ``val N`` formula form is supported (the only one that maps directly to
+    a CSS clip-path parameter — caller may pass the returned dict to
+    :func:`pictures.geometry.preset_to_css`).
+    """
+    if sp_pr is None:
+        return None, None
+    prst = sp_pr.find(_x("a:prstGeom"))
+    if prst is None:
+        return None, None
+    name = prst.get("prst")
+    if not name:
+        return None, None
+    av_lst = prst.find(_x("a:avLst"))
+    if av_lst is None:
+        return name, None
+    avs: dict[str, int] = {}
+    for gd in av_lst.findall(_x("a:gd")):
+        gd_name = gd.get("name")
+        fmla = gd.get("fmla", "")
+        if gd_name and fmla.startswith("val "):
+            try:
+                avs[gd_name] = int(fmla[4:])
+            except ValueError:
+                continue
+    return name, (avs or None)
+
+
+def _read_cnv_pr(parent_nv: Optional[etree._Element]) -> tuple[int, str]:
+    """Return (shape_id, alt_text) from a ``<p:nvPicPr>`` or ``<p:nvSpPr>``.
+
+    *parent_nv* should be the container that holds ``<p:cNvPr>``. Alt text is
+    taken from ``@descr`` first, then ``@title``, then empty. Shape id defaults
+    to 0 when not parsable.
+    """
+    if parent_nv is None:
+        return 0, ""
+    c_nv_pr = parent_nv.find(_x("p:cNvPr"))
+    if c_nv_pr is None:
+        return 0, ""
+    try:
+        shape_id = int(c_nv_pr.get("id", "0"))
+    except ValueError:
+        shape_id = 0
+    alt_text = c_nv_pr.get("descr") or c_nv_pr.get("title") or ""
+    return shape_id, alt_text
+
+
+def _parse_pic(
+    pic_el: etree._Element,
+    slide_part,
+    order_index: int,
+) -> Optional[Picture]:
+    """Parse a ``<p:pic>`` shape into a :class:`Picture`.
+
+    Returns ``None`` only when the picture lacks both a resolvable image and
+    geometry (degenerate case worth skipping silently).
+    """
+    nv_pic_pr = pic_el.find(_x("p:nvPicPr"))
+    shape_id, alt_text = _read_cnv_pr(nv_pic_pr)
+
+    blip_fill = pic_el.find(_x("p:blipFill"))
+    asset_ref = _resolve_blip_asset_ref(blip_fill, slide_part)
+
+    sp_pr = pic_el.find(_x("p:spPr"))
+    x, y, w, h, _rot = _get_sp_position(pic_el)
+    preset_name, preset_av = _read_prst_geom(sp_pr)
+    effects = parse_effects(sp_pr, blip_fill)
+
+    # Degenerate skip: no image, no size — nothing to render.
+    if asset_ref is None and w == 0 and h == 0:
+        return None
+
+    return Picture(
+        asset_ref=asset_ref,
+        x_px=x,
+        y_px=y,
+        width_px=w,
+        height_px=h,
+        preset_geom=preset_name,
+        preset_geom_av=preset_av,
+        effects=effects,
+        alt_text=alt_text,
+        shape_id=shape_id,
+        is_placeholder=False,
+        ph_idx=None,
+        order_index=order_index,
+    )
+
+
+def _parse_picture_placeholder(
+    sp_el: etree._Element,
+    slide_part,
+    layout_part,
+    layout_sp: Optional[etree._Element],
+    idx: int,
+    order_index: int,
+) -> Picture:
+    """Parse a picture-typed ``<p:sp>`` (``<p:ph type="pic">``) into a :class:`Picture`.
+
+    blipFill cascade: slide-level ``<p:blipFill>`` wins; if missing or has no
+    embed, fall back to the layout's blipFill on the matching layout shape
+    (resolved against the layout part's rels).
+
+    Geometry cascade: slide-level xfrm wins; if zero-sized, fall back to
+    layout's xfrm.
+
+    Returns a :class:`Picture` even when no image is bound on either level —
+    in that case ``asset_ref`` is ``None`` and emit renders an empty
+    positioned box (mirroring PPT's behaviour for un-bound picture
+    placeholders).
+    """
+    nv_sp_pr = sp_el.find(_x("p:nvSpPr"))
+    shape_id, alt_text = _read_cnv_pr(nv_sp_pr)
+
+    sp_pr = sp_el.find(_x("p:spPr"))
+
+    # blipFill cascade: slide → layout
+    slide_blip_fill = sp_pr.find(_x("a:blipFill")) if sp_pr is not None else None
+    asset_ref = _resolve_blip_asset_ref(slide_blip_fill, slide_part)
+    effective_blip_fill = slide_blip_fill if asset_ref is not None else None
+    if asset_ref is None and layout_sp is not None:
+        layout_sp_pr = layout_sp.find(_x("p:spPr"))
+        layout_blip_fill = (
+            layout_sp_pr.find(_x("a:blipFill")) if layout_sp_pr is not None else None
+        )
+        layout_asset = _resolve_blip_asset_ref(layout_blip_fill, layout_part)
+        if layout_asset is not None:
+            asset_ref = layout_asset
+            effective_blip_fill = layout_blip_fill
+
+    # Geometry cascade
+    x, y, w, h, _rot = _get_sp_position(sp_el)
+    if w == 0 and h == 0 and layout_sp is not None:
+        x, y, w, h, _rot = _get_sp_position(layout_sp)
+
+    preset_name, preset_av = _read_prst_geom(sp_pr)
+    effects = parse_effects(sp_pr, effective_blip_fill)
+
+    return Picture(
+        asset_ref=asset_ref,
+        x_px=x,
+        y_px=y,
+        width_px=w,
+        height_px=h,
+        preset_geom=preset_name,
+        preset_geom_av=preset_av,
+        effects=effects,
+        alt_text=alt_text,
+        shape_id=shape_id,
+        is_placeholder=True,
+        ph_idx=idx,
+        order_index=order_index,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Main parse function
 # ---------------------------------------------------------------------------
 
@@ -512,6 +716,7 @@ def parse(pptx_path: Path) -> Presentation:
         bg_fill = _resolve_background(slide, prs, theme_el, clr_map)
 
         placeholders: list[Placeholder] = []
+        pictures: list[Picture] = []
 
         # Iterate shapes via lxml on the slide's XML
         cSld = slide._element.find(_x("p:cSld"))
@@ -520,14 +725,47 @@ def parse(pptx_path: Path) -> Presentation:
             slides.append(Slide(index=slide_idx, placeholders=[], background_fill=bg_fill))
             continue
 
+        # Record document order so picture/placeholder interleaving is reproducible
+        # in emit (P6). Each direct child of <p:spTree> gets a sequential index.
+        doc_order: dict[int, int] = {}
+        for i, child in enumerate(sp_tree):
+            doc_order[id(child)] = i
+
+        # ----- Picture placeholders + free <p:pic> -----
+        # These are walked before the text-placeholder loop only because the
+        # text-loop's `continue` path skips picture-typed phs; we still rely on
+        # the same per-element traversal otherwise. Order is preserved via
+        # the `order_index` field on Picture so emit can interleave correctly.
+        for pic_el in sp_tree.findall(_x("p:pic")):
+            picture = _parse_pic(
+                pic_el,
+                slide.part,
+                doc_order.get(id(pic_el), 0),
+            )
+            if picture is not None:
+                pictures.append(picture)
+
         for sp_el in sp_tree.findall(_x("p:sp")):
             idx = _ph_idx(sp_el)
             if idx is None:
                 continue  # Not a placeholder
 
             ph_type = _ph_type(sp_el)
+            if ph_type == "pic":
+                # Picture placeholder: cascades blipFill slide → layout
+                layout_sp_for_pic = _find_layout_sp(layout, idx)
+                picture = _parse_picture_placeholder(
+                    sp_el,
+                    slide.part,
+                    layout.part,
+                    layout_sp_for_pic,
+                    idx,
+                    doc_order.get(id(sp_el), 0),
+                )
+                pictures.append(picture)
+                continue
             if ph_type not in _TEXT_PH_TYPES:
-                continue  # Non-text placeholder (pic, chart, tbl, etc.)
+                continue  # Non-text placeholder (chart, tbl, etc.) — still out of scope
 
             # Check if there's a txBody (for non-text types, skip gracefully)
             tx_body = sp_el.find(_x("p:txBody"))
@@ -620,7 +858,16 @@ def parse(pptx_path: Path) -> Presentation:
                 is_prompt_fallback=is_prompt_fallback,
             ))
 
-        slides.append(Slide(index=slide_idx, placeholders=placeholders, background_fill=bg_fill))
+        # Stable document order across both <p:pic> shapes and <p:ph type="pic">
+        # placeholders (which arrive from two separate findall loops).
+        pictures.sort(key=lambda p: p.order_index)
+
+        slides.append(Slide(
+            index=slide_idx,
+            placeholders=placeholders,
+            background_fill=bg_fill,
+            pictures=pictures,
+        ))
 
     return Presentation(
         slides=slides,

@@ -15,6 +15,8 @@ from pptx.util import Inches, Pt, Emu
 
 from slidecraft.importer.parse import (
     parse,
+    _read_prst_geom,
+    _resolve_blip_asset_ref,
     _txbody_is_empty,
     _layout_ph_has_custom_prompt,
     _parse_paragraph,
@@ -22,6 +24,7 @@ from slidecraft.importer.parse import (
 from slidecraft.importer.model import (
     NoFill,
     Paragraph,
+    Picture,
     Presentation,
     Run,
     SolidFill,
@@ -573,3 +576,204 @@ class TestFieldElementParsing:
         all_text = "".join(r.text for r in para.runs)
         assert "Slide " in all_text
         assert "3" in all_text
+
+
+# ---------------------------------------------------------------------------
+# Tests: picture extraction (P4)
+# ---------------------------------------------------------------------------
+
+def _make_test_png(path: Path, size: tuple[int, int] = (10, 10), color: str = "red") -> Path:
+    """Write a small PNG to *path* and return it."""
+    from PIL import Image
+    Image.new("RGB", size, color).save(path)
+    return path
+
+
+class TestPictureExtraction:
+    """parse() walks <p:pic> shapes and populates Slide.pictures."""
+
+    def test_no_pictures_when_slide_has_none(self, tmp_path):
+        prs = PptxPresentation()
+        prs.slides.add_slide(prs.slide_layouts[5])  # "Title Only" — no pics
+        out = _save_pptx(prs, tmp_path)
+        result = parse(out)
+        assert result.slides[0].pictures == []
+
+    def test_one_pic_shape_is_extracted(self, tmp_path):
+        prs = PptxPresentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[5])
+        img_path = _make_test_png(tmp_path / "src.png")
+        slide.shapes.add_picture(
+            str(img_path),
+            left=Emu(914400),       # 1 inch -> 96 px
+            top=Emu(914400),
+            width=Emu(1828800),     # 2 inches -> 192 px
+            height=Emu(1371600),    # 1.5 inches -> 144 px
+        )
+        out = _save_pptx(prs, tmp_path)
+        result = parse(out)
+
+        pics = result.slides[0].pictures
+        assert len(pics) == 1
+        pic = pics[0]
+        assert pic.asset_ref is not None and pic.asset_ref.endswith(".png")
+        assert pic.x_px == pytest.approx(96.0, abs=0.5)
+        assert pic.y_px == pytest.approx(96.0, abs=0.5)
+        assert pic.width_px == pytest.approx(192.0, abs=0.5)
+        assert pic.height_px == pytest.approx(144.0, abs=0.5)
+        assert pic.is_placeholder is False
+        assert pic.ph_idx is None
+        assert pic.shape_id > 0
+        # python-pptx populates cNvPr/@descr with the source filename when
+        # add_picture() is called from a file path; just confirm alt_text is
+        # a string. The descr/title fallback paths are covered in their own
+        # tests below.
+        assert isinstance(pic.alt_text, str)
+
+    def test_pic_asset_ref_matches_extract_pictures(self, tmp_path):
+        """asset_ref must exactly match a key extract_pictures() would write to assets/.
+
+        This is the contract that lets convert.py reconcile the parsed model
+        against the manifest without further name munging.
+        """
+        from slidecraft.importer.pictures.extract import extract_pictures
+
+        prs = PptxPresentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[5])
+        img_path = _make_test_png(tmp_path / "src.png")
+        slide.shapes.add_picture(str(img_path), left=Emu(0), top=Emu(0))
+        out = _save_pptx(prs, tmp_path)
+
+        result = parse(out)
+        manifest = extract_pictures(out, tmp_path / "theme")
+
+        pic = result.slides[0].pictures[0]
+        assert pic.asset_ref in manifest, (
+            f"Picture asset_ref {pic.asset_ref!r} not in extracted manifest keys "
+            f"{list(manifest.keys())}"
+        )
+
+    def test_pic_alt_text_from_descr(self, tmp_path):
+        prs = PptxPresentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[5])
+        img_path = _make_test_png(tmp_path / "src.png")
+        pic_shape = slide.shapes.add_picture(str(img_path), left=Emu(0), top=Emu(0))
+        c_nv_pr = pic_shape._element.find(
+            f"{{{_P_NS}}}nvPicPr/{{{_P_NS}}}cNvPr"
+        )
+        c_nv_pr.set("descr", "Decorative landscape")
+        out = _save_pptx(prs, tmp_path)
+        result = parse(out)
+        assert result.slides[0].pictures[0].alt_text == "Decorative landscape"
+
+    def test_pic_alt_text_falls_back_to_title(self, tmp_path):
+        prs = PptxPresentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[5])
+        img_path = _make_test_png(tmp_path / "src.png")
+        pic_shape = slide.shapes.add_picture(str(img_path), left=Emu(0), top=Emu(0))
+        c_nv_pr = pic_shape._element.find(
+            f"{{{_P_NS}}}nvPicPr/{{{_P_NS}}}cNvPr"
+        )
+        if "descr" in c_nv_pr.attrib:
+            del c_nv_pr.attrib["descr"]
+        c_nv_pr.set("title", "Diagram 1")
+        out = _save_pptx(prs, tmp_path)
+        result = parse(out)
+        assert result.slides[0].pictures[0].alt_text == "Diagram 1"
+
+    def test_multiple_pics_get_distinct_order_indexes(self, tmp_path):
+        prs = PptxPresentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[5])
+        img_path = _make_test_png(tmp_path / "src.png")
+        slide.shapes.add_picture(str(img_path), left=Emu(0), top=Emu(0))
+        slide.shapes.add_picture(str(img_path), left=Emu(2000000), top=Emu(0))
+        slide.shapes.add_picture(str(img_path), left=Emu(4000000), top=Emu(0))
+        out = _save_pptx(prs, tmp_path)
+        result = parse(out)
+        pics = result.slides[0].pictures
+        assert len(pics) == 3
+        indexes = [p.order_index for p in pics]
+        assert indexes == sorted(indexes)
+        assert len(set(indexes)) == 3
+
+    def test_pic_effects_dict_is_populated(self, tmp_path):
+        """parse() runs pictures.effects.parse_effects and stores the result."""
+        prs = PptxPresentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[5])
+        img_path = _make_test_png(tmp_path / "src.png")
+        slide.shapes.add_picture(str(img_path), left=Emu(0), top=Emu(0))
+        out = _save_pptx(prs, tmp_path)
+        result = parse(out)
+        pic = result.slides[0].pictures[0]
+        for key in ("css_filter", "transforms", "opacity", "derivatives_needed", "warnings"):
+            assert key in pic.effects, f"effects dict missing key {key!r}"
+        # Default fixture has no effects -> empty filter, no derivatives
+        assert pic.effects["css_filter"] == ""
+        assert pic.effects["derivatives_needed"] == []
+
+
+class TestResolveBlipAssetRef:
+    """Unit tests for the rels resolver."""
+
+    def test_returns_none_for_none_input(self):
+        assert _resolve_blip_asset_ref(None, part=object()) is None
+
+    def test_returns_none_when_no_blip_child(self):
+        blip_fill = etree.fromstring(
+            f'<a:blipFill xmlns:a="{_A_NS}"><a:stretch/></a:blipFill>'
+        )
+        assert _resolve_blip_asset_ref(blip_fill, part=object()) is None
+
+    def test_returns_none_when_embed_missing(self):
+        # <a:blip> with neither r:embed nor r:link
+        blip_fill = etree.fromstring(
+            f'<a:blipFill xmlns:a="{_A_NS}"><a:blip/></a:blipFill>'
+        )
+        assert _resolve_blip_asset_ref(blip_fill, part=object()) is None
+
+
+class TestReadPrstGeom:
+    """Unit tests for prstGeom + adjust-value parsing."""
+
+    def test_returns_none_for_missing_sp_pr(self):
+        assert _read_prst_geom(None) == (None, None)
+
+    def test_returns_none_when_no_prst_geom(self):
+        sp_pr = etree.fromstring(f'<p:spPr xmlns:p="{_P_NS}"/>')
+        assert _read_prst_geom(sp_pr) == (None, None)
+
+    def test_reads_preset_name(self):
+        sp_pr = etree.fromstring(
+            f'<p:spPr xmlns:p="{_P_NS}" xmlns:a="{_A_NS}">'
+            f'<a:prstGeom prst="ellipse"/></p:spPr>'
+        )
+        name, av = _read_prst_geom(sp_pr)
+        assert name == "ellipse"
+        assert av is None
+
+    def test_reads_adjust_values(self):
+        sp_pr = etree.fromstring(
+            f'<p:spPr xmlns:p="{_P_NS}" xmlns:a="{_A_NS}">'
+            f'<a:prstGeom prst="roundRect">'
+            f'<a:avLst>'
+            f'<a:gd name="adj" fmla="val 25000"/>'
+            f'</a:avLst>'
+            f'</a:prstGeom></p:spPr>'
+        )
+        name, av = _read_prst_geom(sp_pr)
+        assert name == "roundRect"
+        assert av == {"adj": 25000}
+
+    def test_ignores_non_val_formulas(self):
+        """Non-`val N` formulas (e.g. `*/ 1 2 3`) are ignored as not CSS-mappable."""
+        sp_pr = etree.fromstring(
+            f'<p:spPr xmlns:p="{_P_NS}" xmlns:a="{_A_NS}">'
+            f'<a:prstGeom prst="wave">'
+            f'<a:avLst>'
+            f'<a:gd name="adj1" fmla="*/ 1 2 3"/>'
+            f'</a:avLst>'
+            f'</a:prstGeom></p:spPr>'
+        )
+        name, av = _read_prst_geom(sp_pr)
+        assert name == "wave"
+        assert av is None
