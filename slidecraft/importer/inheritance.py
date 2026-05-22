@@ -73,22 +73,97 @@ def _sz_to_pt(hundredths_pt: Optional[int]) -> Optional[float]:
     return hundredths_pt / 100.0
 
 
-def _parse_color(solid_fill_el: Optional[etree._Element]) -> Optional[RGB]:
-    """Parse <a:solidFill> → RGB.  Supports srgbClr and schemeClr (raw hex only for now)."""
+def get_clr_map(master_el: Optional[etree._Element]) -> Optional[dict[str, str]]:
+    """Read the <p:clrMap> from a slideMaster, returning a name → name remap dict.
+
+    Example: clrMap bg1="lt1" tx1="dk1" → {"bg1": "lt1", "tx1": "dk1", ...}
+    Used to translate logical schemeClr names into theme clrScheme names.
+    """
+    if master_el is None:
+        return None
+    clr_map_el = master_el.find(_x("p:clrMap"))
+    if clr_map_el is None:
+        return None
+    return dict(clr_map_el.attrib)
+
+
+_SYS_COLOR_FALLBACK: dict[str, str] = {
+    "windowText": "000000", "window": "FFFFFF",
+    "btnText": "000000", "btnFace": "F0F0F0",
+}
+
+
+def _hex_to_rgb(val: str, alpha: float = 1.0) -> Optional[RGB]:
+    if len(val) != 6:
+        return None
+    return RGB(int(val[0:2], 16), int(val[2:4], 16), int(val[4:6], 16), alpha)
+
+
+def _resolve_scheme_color(
+    scheme_name: str,
+    theme_el: Optional[etree._Element],
+    clr_map: Optional[dict[str, str]],
+) -> Optional[RGB]:
+    """Resolve a schemeClr name → RGB via clrMap remap then clrScheme lookup."""
+    if theme_el is None:
+        return None
+    name = clr_map.get(scheme_name, scheme_name) if clr_map else scheme_name
+    clr_scheme = _find(theme_el, "a:themeElements", "a:clrScheme")
+    if clr_scheme is None:
+        return None
+    color_el = clr_scheme.find(_x(f"a:{name}"))
+    if color_el is None:
+        return None
+    srgb = color_el.find(_x("a:srgbClr"))
+    if srgb is not None:
+        return _hex_to_rgb(srgb.get("val", ""))
+    sysclr = color_el.find(_x("a:sysClr"))
+    if sysclr is not None:
+        last = sysclr.get("lastClr") or _SYS_COLOR_FALLBACK.get(sysclr.get("val", ""), "")
+        return _hex_to_rgb(last)
+    return None
+
+
+def _resolve_font_ref(ref: str, theme_el: Optional[etree._Element]) -> Optional[str]:
+    """Resolve a theme font ref like '+mj-lt' / '+mn-lt' → actual typeface name."""
+    if theme_el is None or not ref.startswith("+"):
+        return None
+    # +mj-lt = major Latin; +mn-lt = minor Latin; -ea = East Asian; -cs = Complex Script
+    family_key = "a:majorFont" if ref.startswith("+mj-") else "a:minorFont"
+    script_suffix = ref[4:] if len(ref) >= 5 else "lt"
+    script_tag = {"lt": "a:latin", "ea": "a:ea", "cs": "a:cs"}.get(script_suffix, "a:latin")
+    font_el = _find(theme_el, "a:themeElements", "a:fontScheme", family_key, script_tag)
+    if font_el is not None:
+        return font_el.get("typeface") or None
+    return None
+
+
+def _parse_color(
+    solid_fill_el: Optional[etree._Element],
+    theme_el: Optional[etree._Element] = None,
+    clr_map: Optional[dict[str, str]] = None,
+) -> Optional[RGB]:
+    """Parse <a:solidFill> → RGB. Supports srgbClr, schemeClr (via theme+clrMap), and sysClr."""
     if solid_fill_el is None:
         return None
     srgb = solid_fill_el.find(_x("a:srgbClr"))
     if srgb is not None:
-        val = srgb.get("val", "")
-        if len(val) == 6:
-            r = int(val[0:2], 16)
-            g = int(val[2:4], 16)
-            b = int(val[4:6], 16)
-            alpha_el = srgb.find(_x("a:alpha"))
-            alpha = int(alpha_el.get("val", "100000")) / 100000.0 if alpha_el is not None else 1.0
-            return RGB(r, g, b, alpha)
-    # schemeClr / sysClr are not resolved here — handled by the caller in parse.py with
-    # full theme access; return None to signal "unresolved scheme color".
+        alpha_el = srgb.find(_x("a:alpha"))
+        alpha = int(alpha_el.get("val", "100000")) / 100000.0 if alpha_el is not None else 1.0
+        return _hex_to_rgb(srgb.get("val", ""), alpha)
+    scheme = solid_fill_el.find(_x("a:schemeClr"))
+    if scheme is not None:
+        rgb = _resolve_scheme_color(scheme.get("val", ""), theme_el, clr_map)
+        if rgb is not None:
+            alpha_el = scheme.find(_x("a:alpha"))
+            if alpha_el is not None:
+                alpha = int(alpha_el.get("val", "100000")) / 100000.0
+                rgb = RGB(rgb.r, rgb.g, rgb.b, alpha)
+            return rgb
+    sysclr = solid_fill_el.find(_x("a:sysClr"))
+    if sysclr is not None:
+        last = sysclr.get("lastClr") or _SYS_COLOR_FALLBACK.get(sysclr.get("val", ""), "")
+        return _hex_to_rgb(last)
     return None
 
 
@@ -96,7 +171,11 @@ def _parse_color(solid_fill_el: Optional[etree._Element]) -> Optional[RGB]:
 # Per-element rPr / pPr extractors
 # ---------------------------------------------------------------------------
 
-def _extract_rpr(rpr_el: Optional[etree._Element]) -> Run:
+def _extract_rpr(
+    rpr_el: Optional[etree._Element],
+    theme_el: Optional[etree._Element] = None,
+    clr_map: Optional[dict[str, str]] = None,
+) -> Run:
     """Extract explicit run properties from an <a:rPr> element into a Run(text='')."""
     run = Run(text="")
     if rpr_el is None:
@@ -125,12 +204,17 @@ def _extract_rpr(rpr_el: Optional[etree._Element]) -> Run:
     latin = rpr_el.find(_x("a:latin"))
     if latin is not None:
         tf = latin.get("typeface")
-        if tf and not tf.startswith("+"):  # skip theme font refs (+mj-lt, +mn-lt)
-            run.font_family = tf
+        if tf:
+            if tf.startswith("+"):
+                resolved = _resolve_font_ref(tf, theme_el)
+                if resolved:
+                    run.font_family = resolved
+            else:
+                run.font_family = tf
 
     solid = rpr_el.find(_x("a:solidFill"))
     if solid is not None:
-        run.color = _parse_color(solid)
+        run.color = _parse_color(solid, theme_el, clr_map)
 
     return run
 
@@ -242,6 +326,8 @@ def _txstyles_defaults(
     tx_styles_el: Optional[etree._Element],
     ph_type: Optional[str],
     level: int = 0,
+    theme_el: Optional[etree._Element] = None,
+    clr_map: Optional[dict[str, str]] = None,
 ) -> tuple[Run, Paragraph]:
     """Extract level-N default rPr/pPr from master's <p:txStyles> for the given ph type.
 
@@ -277,7 +363,7 @@ def _txstyles_defaults(
 
     # Default rPr inside the lvlXpPr
     def_rpr = lvl_el.find(_x("a:defRPr"))
-    rpr = _extract_rpr(def_rpr)
+    rpr = _extract_rpr(def_rpr, theme_el, clr_map)
 
     return rpr, ppr
 
@@ -326,6 +412,7 @@ def resolve_placeholder(
     theme_el: Optional[etree._Element],
     ph_type: Optional[str] = None,
     level: int = 0,
+    clr_map: Optional[dict[str, str]] = None,
 ) -> tuple[Run, Paragraph]:
     """Resolve the default Run and Paragraph props for a placeholder by walking the cascade.
 
@@ -357,21 +444,21 @@ def resolve_placeholder(
     base_para = Paragraph(runs=[])
 
     # Level 4: master txStyles
-    tx_run, tx_para = _txstyles_defaults(master_tx_styles, ph_type, level)
+    tx_run, tx_para = _txstyles_defaults(master_tx_styles, ph_type, level, theme_el, clr_map)
     base_run = _merge_run(base_run, tx_run)
     base_para = _merge_para(base_para, tx_para)
 
     # Level 3: master placeholder shape's txBody lstStyle / defRPr
     if master_ph is not None:
-        base_run, base_para = _apply_sp_defaults(master_ph, base_run, base_para, level)
+        base_run, base_para = _apply_sp_defaults(master_ph, base_run, base_para, level, theme_el, clr_map)
 
     # Level 2: layout placeholder shape's txBody
     if layout_ph is not None:
-        base_run, base_para = _apply_sp_defaults(layout_ph, base_run, base_para, level)
+        base_run, base_para = _apply_sp_defaults(layout_ph, base_run, base_para, level, theme_el, clr_map)
 
     # Level 1: slide-level shape's txBody
     if slide_sp is not None:
-        base_run, base_para = _apply_sp_defaults(slide_sp, base_run, base_para, level)
+        base_run, base_para = _apply_sp_defaults(slide_sp, base_run, base_para, level, theme_el, clr_map)
 
     return base_run, base_para
 
@@ -381,6 +468,8 @@ def _apply_sp_defaults(
     base_run: Run,
     base_para: Paragraph,
     level: int,
+    theme_el: Optional[etree._Element] = None,
+    clr_map: Optional[dict[str, str]] = None,
 ) -> tuple[Run, Paragraph]:
     """Apply the txBody-level lstStyle / bodyPr defaults from a <p:sp> element."""
     tx_body = sp_el.find(_x("p:txBody"))
@@ -398,12 +487,9 @@ def _apply_sp_defaults(
             base_para = _merge_para(base_para, ppr_override)
             def_rpr = lvl_el.find(_x("a:defRPr"))
             if def_rpr is not None:
-                rpr_override = _extract_rpr(def_rpr)
+                rpr_override = _extract_rpr(def_rpr, theme_el, clr_map)
                 base_run = _merge_run(base_run, rpr_override)
 
-    # Also check the first paragraph's <a:pPr> and first run's <a:rPr> in the shape
-    # as a fallback for properties not captured in lstStyle (e.g. font size on title).
-    # Only do this for non-slide shapes (layout/master) to avoid pulling text content.
     first_p = tx_body.find(_x("a:p"))
     if first_p is not None:
         ppr_el = first_p.find(_x("a:pPr"))
@@ -415,16 +501,14 @@ def _apply_sp_defaults(
         if first_r is not None:
             rpr_el = first_r.find(_x("a:rPr"))
             if rpr_el is not None:
-                rpr_override = _extract_rpr(rpr_el)
+                rpr_override = _extract_rpr(rpr_el, theme_el, clr_map)
                 base_run = _merge_run(base_run, rpr_override)
 
-        # defRPr at paragraph level
         def_rpr_p = first_p.find(_x("a:endParaRPr"))
         if def_rpr_p is None:
             def_rpr_p = first_p.find(_x("a:defRPr"))
-        # Note: endParaRPr is used as run default in some PPT files
         if def_rpr_p is not None:
-            rpr_override = _extract_rpr(def_rpr_p)
+            rpr_override = _extract_rpr(def_rpr_p, theme_el, clr_map)
             base_run = _merge_run(base_run, rpr_override)
 
     return base_run, base_para

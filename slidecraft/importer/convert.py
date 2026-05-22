@@ -1,6 +1,7 @@
 """Top-level orchestrator: pptx_path → theme_dir + deck_dir."""
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -41,11 +42,8 @@ def convert(
     )
     emit_layouts(presentation, theme_dir)
 
-    try:
-        theme_rel = Path("..") / theme_dir.resolve().relative_to(deck_dir.resolve().parent)
-    except ValueError:
-        theme_rel = theme_dir.resolve()
-    emit_deck(presentation, deck_dir, theme_relative_path=str(theme_rel).replace("\\", "/"))
+    theme_rel = os.path.relpath(theme_dir.resolve(), deck_dir.resolve()).replace("\\", "/")
+    emit_deck(presentation, deck_dir, theme_relative_path=theme_rel)
 
     substituted = sum(1 for e in font_manifest.values() if e.get("source") == "metric-substitute")
     fallback = sum(1 for e in font_manifest.values() if e.get("source") == "fallback")

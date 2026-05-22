@@ -71,7 +71,7 @@ def _run_props_css(ph: Placeholder) -> list[str]:
     rp = ph.default_run_props
     parts: list[str] = []
     if rp.font_family:
-        parts.append(f'font-family: "{rp.font_family}", sans-serif')
+        parts.append(f"font-family: '{rp.font_family}', sans-serif")
     if rp.font_size_pt is not None:
         # pt → px (96dpi, 1pt = 4/3 px)
         px = rp.font_size_pt * 96 / 72
