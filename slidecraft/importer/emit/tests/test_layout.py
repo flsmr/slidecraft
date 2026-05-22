@@ -201,3 +201,49 @@ class TestLayoutScoping:
         emit_layouts(pres, tmp_path / "theme")
         assert (tmp_path / "theme" / "layouts" / "slide1.vue").exists()
         assert (tmp_path / "theme" / "layouts" / "slide2.vue").exists()
+
+
+class TestLayoutCapTextTransform:
+    """Tests for cap → text-transform CSS emission."""
+
+    def _make_ph_with_cap(self, cap: str | None) -> Placeholder:
+        """Build a placeholder whose default_run_props has the given cap value."""
+        tf = TextFrame(paragraphs=[], anchor="t")
+        default_run = Run(text="", cap=cap)
+        return Placeholder(
+            idx=1,
+            type="title",
+            x_px=0.0, y_px=0.0, width_px=500.0, height_px=80.0,
+            fill=NoFill(), opacity=1.0,
+            text_frame=tf,
+            default_run_props=default_run,
+        )
+
+    def test_cap_all_emits_uppercase(self, tmp_path):
+        ph = self._make_ph_with_cap("all")
+        slide = Slide(index=1, placeholders=[ph])
+        pres = _make_pres([slide])
+        content = _emit_and_read(tmp_path, pres)
+        assert "text-transform: uppercase" in content
+
+    def test_cap_small_emits_lowercase(self, tmp_path):
+        ph = self._make_ph_with_cap("small")
+        slide = Slide(index=1, placeholders=[ph])
+        pres = _make_pres([slide])
+        content = _emit_and_read(tmp_path, pres)
+        assert "text-transform: lowercase" in content
+
+    def test_cap_none_no_text_transform(self, tmp_path):
+        ph = self._make_ph_with_cap(None)
+        slide = Slide(index=1, placeholders=[ph])
+        pres = _make_pres([slide])
+        content = _emit_and_read(tmp_path, pres)
+        assert "text-transform" not in content
+
+    def test_cap_none_literal_no_text_transform(self, tmp_path):
+        """cap='none' explicitly set should not emit text-transform."""
+        ph = self._make_ph_with_cap("none")
+        slide = Slide(index=1, placeholders=[ph])
+        pres = _make_pres([slide])
+        content = _emit_and_read(tmp_path, pres)
+        assert "text-transform" not in content
