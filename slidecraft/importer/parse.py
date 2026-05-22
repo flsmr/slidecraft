@@ -41,6 +41,7 @@ from slidecraft.importer.inheritance import (
     _x,
     diff_run,
     diff_para,
+    get_clr_map,
     resolve_placeholder,
 )
 
@@ -71,32 +72,37 @@ def _emu_to_pt(emu: int) -> float:
 # Fill resolver
 # ---------------------------------------------------------------------------
 
-def _resolve_fill(sp_el: etree._Element, theme_el: Optional[etree._Element]) -> Fill:
+def _resolve_fill(
+    sp_el: etree._Element,
+    theme_el: Optional[etree._Element],
+    clr_map: Optional[dict[str, str]] = None,
+) -> Fill:
     """Resolve shape fill from <p:sp><p:spPr> (solid, gradient, no-fill)."""
     sp_pr = sp_el.find(_x("p:spPr"))
     if sp_pr is None:
         return NoFill()
 
-    # noFill
     if sp_pr.find(_x("a:noFill")) is not None:
         return NoFill()
 
-    # solidFill
     solid = sp_pr.find(_x("a:solidFill"))
     if solid is not None:
-        color = _parse_color(solid)
+        color = _parse_color(solid, theme_el, clr_map)
         if color:
             return SolidFill(color)
 
-    # gradFill
     grad = sp_pr.find(_x("a:gradFill"))
     if grad is not None:
-        return _parse_grad_fill(grad)
+        return _parse_grad_fill(grad, theme_el, clr_map)
 
     return NoFill()
 
 
-def _parse_grad_fill(grad_el: etree._Element) -> Fill:
+def _parse_grad_fill(
+    grad_el: etree._Element,
+    theme_el: Optional[etree._Element] = None,
+    clr_map: Optional[dict[str, str]] = None,
+) -> Fill:
     """Parse <a:gradFill> into LinearGradientFill or RadialGradientFill."""
     stops: list[GradientStop] = []
     gs_lst = grad_el.find(_x("a:gsLst"))
@@ -105,7 +111,7 @@ def _parse_grad_fill(grad_el: etree._Element) -> Fill:
             pos_str = gs.get("pos", "0")
             pos = int(pos_str) / 100000.0
             solid = gs.find(_x("a:solidFill"))
-            color = _parse_color(solid) if solid is not None else RGB(0, 0, 0)
+            color = _parse_color(solid, theme_el, clr_map) if solid is not None else RGB(0, 0, 0)
             if color:
                 stops.append(GradientStop(position=pos, color=color))
 
@@ -131,6 +137,7 @@ def _resolve_background(
     slide_part,
     pptx_prs: PptxPresentation,
     theme_el: Optional[etree._Element],
+    clr_map: Optional[dict[str, str]] = None,
 ) -> Fill:
     """Walk slide → layout → master for <p:bg> / <p:bgRef> to find the background fill."""
     for part in [slide_part, slide_part.slide_layout, slide_part.slide_layout.slide_master]:
@@ -147,12 +154,12 @@ def _resolve_background(
                 return NoFill()
             solid = bg_pr.find(_x("a:solidFill"))
             if solid is not None:
-                color = _parse_color(solid)
+                color = _parse_color(solid, theme_el, clr_map)
                 if color:
                     return SolidFill(color)
             grad = bg_pr.find(_x("a:gradFill"))
             if grad is not None:
-                return _parse_grad_fill(grad)
+                return _parse_grad_fill(grad, theme_el, clr_map)
         # bgRef references a fill style in the theme — not resolved in v1
         bg_ref = bg.find(_x("p:bgRef"))
         if bg_ref is not None:
@@ -161,7 +168,7 @@ def _resolve_background(
                 # srgbClr directly under bgRef (unusual but valid)
                 pass
             else:
-                color = _parse_color(solid)
+                color = _parse_color(solid, theme_el, clr_map)
                 if color:
                     return SolidFill(color)
     return NoFill()
@@ -171,7 +178,13 @@ def _resolve_background(
 # TextFrame parser
 # ---------------------------------------------------------------------------
 
-def _parse_text_frame(tx_body: etree._Element, default_run: Run, default_para: Paragraph) -> TextFrame:
+def _parse_text_frame(
+    tx_body: etree._Element,
+    default_run: Run,
+    default_para: Paragraph,
+    theme_el: Optional[etree._Element] = None,
+    clr_map: Optional[dict[str, str]] = None,
+) -> TextFrame:
     """Parse <p:txBody> into a TextFrame, diffing each run/paragraph against the defaults."""
     # bodyPr attributes
     body_pr = tx_body.find(_x("a:bodyPr"))
@@ -207,7 +220,7 @@ def _parse_text_frame(tx_body: etree._Element, default_run: Run, default_para: P
     # Parse paragraphs
     paragraphs: list[Paragraph] = []
     for p_el in tx_body.findall(_x("a:p")):
-        para = _parse_paragraph(p_el, default_run, default_para)
+        para = _parse_paragraph(p_el, default_run, default_para, theme_el, clr_map)
         paragraphs.append(para)
 
     return TextFrame(
@@ -219,7 +232,13 @@ def _parse_text_frame(tx_body: etree._Element, default_run: Run, default_para: P
     )
 
 
-def _parse_paragraph(p_el: etree._Element, default_run: Run, default_para: Paragraph) -> Paragraph:
+def _parse_paragraph(
+    p_el: etree._Element,
+    default_run: Run,
+    default_para: Paragraph,
+    theme_el: Optional[etree._Element] = None,
+    clr_map: Optional[dict[str, str]] = None,
+) -> Paragraph:
     """Parse a single <a:p> element, returning a Paragraph with diffed properties."""
     ppr_el = p_el.find(_x("a:pPr"))
     para_props = _extract_ppr(ppr_el)
@@ -255,7 +274,7 @@ def _parse_paragraph(p_el: etree._Element, default_run: Run, default_para: Parag
             t_el = child.find(_x("a:t"))
             text = t_el.text or "" if t_el is not None else ""
             rpr_el = child.find(_x("a:rPr"))
-            run_props = _extract_rpr(rpr_el)
+            run_props = _extract_rpr(rpr_el, theme_el, clr_map)
             run_props.text = text
             diffed_run = diff_run(run_props, default_run)
             diffed_run.text = text
@@ -370,13 +389,16 @@ def _get_master_tx_styles(master_part) -> Optional[etree._Element]:
     return master_part._element.find(_x("p:txStyles"))
 
 
-def _get_theme_el(master_part) -> Optional[etree._Element]:
+def _get_theme_el(master) -> Optional[etree._Element]:
     """Return the <a:theme> element from the theme part associated with a slide master."""
     try:
-        theme_part = master_part.part_related_by(
+        part = master.part if hasattr(master, "part") else master
+        theme_part = part.part_related_by(
             "http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme"
         )
-        return theme_part._element
+        if hasattr(theme_part, "_element"):
+            return theme_part._element
+        return etree.fromstring(theme_part.blob)
     except Exception:
         return None
 
@@ -408,8 +430,9 @@ def parse(pptx_path: Path) -> Presentation:
         master = layout.slide_master
         theme_el = _get_theme_el(master)
         master_tx_styles = _get_master_tx_styles(master)
+        clr_map = get_clr_map(master._element)
 
-        bg_fill = _resolve_background(slide, prs, theme_el)
+        bg_fill = _resolve_background(slide, prs, theme_el, clr_map)
 
         placeholders: list[Placeholder] = []
 
@@ -449,6 +472,7 @@ def parse(pptx_path: Path) -> Presentation:
                 theme_el=theme_el,
                 ph_type=ph_type,
                 level=0,
+                clr_map=clr_map,
             )
 
             # Collect typefaces from defaults
@@ -465,7 +489,7 @@ def parse(pptx_path: Path) -> Presentation:
                     x_px, y_px, w_px, h_px, rot_deg = _get_sp_position(master_sp)
 
             # Fill
-            fill = _resolve_fill(sp_el, theme_el)
+            fill = _resolve_fill(sp_el, theme_el, clr_map)
 
             # Opacity (not commonly set on placeholders, default 1.0)
             opacity = 1.0
@@ -473,7 +497,7 @@ def parse(pptx_path: Path) -> Presentation:
             # TextFrame
             text_frame = None
             if tx_body is not None:
-                text_frame = _parse_text_frame(tx_body, default_run, default_para)
+                text_frame = _parse_text_frame(tx_body, default_run, default_para, theme_el, clr_map)
                 # Collect typefaces from actual runs
                 for para in text_frame.paragraphs:
                     for run in para.runs:
