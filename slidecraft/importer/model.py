@@ -109,6 +109,10 @@ class Placeholder:
     # against these to decide what to emit on each one.
     default_run_props: Run = field(default_factory=lambda: Run(text=""))
     default_para_props: Paragraph = field(default_factory=lambda: Paragraph(runs=[]))
+    # When True, text_frame content came from the layout's hasCustomPrompt placeholder
+    # (slide-level txBody was empty).  Emit layer may style this differently (e.g. lighter
+    # opacity or italic) in future; for v1 it is rendered as normal text.
+    is_prompt_fallback: bool = False
 
 
 @dataclass
