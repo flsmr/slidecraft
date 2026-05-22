@@ -39,6 +39,10 @@ temp.pptx
 # Worktrees + agent transcripts
 .claude/
 
+# Skills CLI (npx skills add ...) — installs into .agents/ + maintains skills-lock.json
+.agents/
+skills-lock.json
+
 # Transient render outputs
 validation-output/
 validation-output-generated/
