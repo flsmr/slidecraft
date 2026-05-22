@@ -88,18 +88,25 @@ def _emit_run_markdown(text: str, deviations: dict) -> str:
         return f'<span style="{style}">{text}</span>'
 
     # Only markdown-able properties (subset of bold/italic/strike)
-    # Apply markdown markers
+    # CommonMark requires non-whitespace adjacent to emphasis markers, so peel
+    # leading/trailing whitespace out of the wrapped span.
+    stripped = text.strip()
+    if not stripped:
+        return text
+    lead = text[: len(text) - len(text.lstrip())]
+    trail = text[len(text.rstrip()):]
+    inner = stripped
     if deviations.get("bold") and deviations.get("italic"):
-        text = f"***{text}***"
+        inner = f"***{inner}***"
     elif deviations.get("bold"):
-        text = f"**{text}**"
+        inner = f"**{inner}**"
     elif deviations.get("italic"):
-        text = f"*{text}*"
+        inner = f"*{inner}*"
     if deviations.get("strike"):
-        text = f"~~{text}~~"
+        inner = f"~~{inner}~~"
     if deviations.get("underline"):
-        text = f"<u>{text}</u>"
-    return text
+        inner = f"<u>{inner}</u>"
+    return f"{lead}{inner}{trail}"
 
 
 def _emit_run_html(text: str, deviations: dict) -> str:
@@ -196,16 +203,28 @@ def _emit_paragraph(para: Paragraph, ph: Placeholder, use_html: bool = False) ->
     default_run = ph.default_run_props
 
     def emit_runs(html_mode: bool) -> str:
-        pieces = []
+        # Merge adjacent runs with identical deviation sets so we emit one
+        # markdown wrapper (or one <span>) per stretch of same-styled text
+        # instead of many tiny ones that produce broken markers.
+        grouped: list[tuple[str, dict | None, str]] = []
         for run in para.runs:
             if run.text == "\n":
-                pieces.append("<br/>")
+                grouped.append(("br", None, ""))
                 continue
             devs = _run_deviations(run, default_run)
-            if html_mode:
-                pieces.append(_emit_run_html(run.text, devs))
+            if grouped and grouped[-1][0] == "run" and grouped[-1][1] == devs:
+                grouped[-1] = ("run", devs, grouped[-1][2] + run.text)
             else:
-                pieces.append(_emit_run_markdown(run.text, devs))
+                grouped.append(("run", devs, run.text))
+
+        pieces = []
+        for kind, devs, text in grouped:
+            if kind == "br":
+                pieces.append("<br/>")
+            elif html_mode:
+                pieces.append(_emit_run_html(text, devs or {}))
+            else:
+                pieces.append(_emit_run_markdown(text, devs or {}))
         return "".join(pieces)
 
     default_para = ph.default_para_props
@@ -248,6 +267,16 @@ def _emit_slot_content(ph: Placeholder) -> str:
 
     rendered_paras: list[str] = []
     for para in ph.text_frame.paragraphs:
+        # Skip paragraphs whose runs together have no actual text content.
+        # Without this we emit useless `- ` lines and empty `<p style="...">`
+        # wrappers for paragraphs that exist only to override formatting on
+        # blank lines in the PPT source.
+        has_text = any(
+            run.text and run.text != "\n" and run.text.strip()
+            for run in para.runs
+        )
+        if not has_text:
+            continue
         rendered_paras.append(_emit_paragraph(para, ph))
 
     # Join consecutive bullet paragraphs directly (one newline),
@@ -312,17 +341,24 @@ def emit_deck(
     # ------------------------------------------------------------------ #
     md_parts: list[str] = []
 
-    # Global frontmatter
-    md_parts.append("---")
-    md_parts.append(f"theme: {theme_name}")
-    md_parts.append("---")
+    if not presentation.slides:
+        md_parts.append("---")
+        md_parts.append(f"theme: {theme_name}")
+        md_parts.append("---")
 
-    for slide in presentation.slides:
-        # Slide separator + layout frontmatter
-        md_parts.append("")
-        md_parts.append("---")
-        md_parts.append(f"layout: slide{slide.index}")
-        md_parts.append("---")
+    for i, slide in enumerate(presentation.slides):
+        if i == 0:
+            # First slide frontmatter carries the deck-level theme: declaration.
+            # Slidev parses this as slide 1, not a separate cover.
+            md_parts.append("---")
+            md_parts.append(f"theme: {theme_name}")
+            md_parts.append(f"layout: slide{slide.index}")
+            md_parts.append("---")
+        else:
+            md_parts.append("")
+            md_parts.append("---")
+            md_parts.append(f"layout: slide{slide.index}")
+            md_parts.append("---")
 
         for ph in slide.placeholders:
             md_parts.append("")
