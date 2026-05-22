@@ -204,38 +204,61 @@ def _parse_text_frame(
     default_para: Paragraph,
     theme_el: Optional[etree._Element] = None,
     clr_map: Optional[dict[str, str]] = None,
+    layout_tx_body: Optional[etree._Element] = None,
 ) -> TextFrame:
-    """Parse <p:txBody> into a TextFrame, diffing each run/paragraph against the defaults."""
-    # bodyPr attributes
-    body_pr = tx_body.find(_x("a:bodyPr"))
-    anchor = "t"
-    insets_pt = (7.2, 3.6, 7.2, 3.6)  # l, t, r, b defaults per OOXML spec (EMU: 91440, 45720, 91440, 45720)
-    rotation_deg = 0.0
+    """Parse <p:txBody> into a TextFrame, diffing each run/paragraph against the defaults.
+
+    bodyPr attributes (anchor, insets, rotation, autofit) cascade slide → layout
+    per OOXML semantics: a missing or unset attribute on the slide-level bodyPr
+    inherits from the layout's bodyPr. Hardcoded OOXML defaults apply only when
+    neither slide nor layout sets the attribute.
+    """
+    # Collect slide- and layout-level bodyPr (either may be None or empty).
+    slide_body_pr = tx_body.find(_x("a:bodyPr"))
+    layout_body_pr = (
+        layout_tx_body.find(_x("a:bodyPr")) if layout_tx_body is not None else None
+    )
+
+    def _attr_cascade(name: str) -> Optional[str]:
+        """Return the first non-None occurrence of bodyPr@name across slide → layout."""
+        for src in (slide_body_pr, layout_body_pr):
+            if src is not None:
+                v = src.get(name)
+                if v is not None:
+                    return v
+        return None
+
+    def _child_cascade(local_name: str) -> Optional[etree._Element]:
+        """Return the first child element with the given local name across slide → layout."""
+        for src in (slide_body_pr, layout_body_pr):
+            if src is not None:
+                el = src.find(_x(f"a:{local_name}"))
+                if el is not None:
+                    return el
+        return None
+
+    anchor_val = _attr_cascade("anchor") or "t"
+    anchor = anchor_val  # "t", "ctr", "b"
+
+    l_ins = _attr_cascade("lIns")
+    t_ins = _attr_cascade("tIns")
+    r_ins = _attr_cascade("rIns")
+    b_ins = _attr_cascade("bIns")
+    # Hardcoded OOXML defaults: lIns=91440, tIns=45720, rIns=91440, bIns=45720
+    l_pt = _emu_to_pt(int(l_ins)) if l_ins is not None else 7.2
+    t_pt = _emu_to_pt(int(t_ins)) if t_ins is not None else 3.6
+    r_pt = _emu_to_pt(int(r_ins)) if r_ins is not None else 7.2
+    b_pt = _emu_to_pt(int(b_ins)) if b_ins is not None else 3.6
+    insets_pt = (l_pt, t_pt, r_pt, b_pt)
+
+    rot = _attr_cascade("rot")
+    rotation_deg = int(rot) / 60000.0 if rot is not None else 0.0
+
+    norm_auto = _child_cascade("normAutofit")
     autofit_font_scale = 1.0
-
-    if body_pr is not None:
-        anchor_val = body_pr.get("anchor", "t")
-        anchor = anchor_val  # "t", "ctr", "b"
-
-        l_ins = body_pr.get("lIns")
-        t_ins = body_pr.get("tIns")
-        r_ins = body_pr.get("rIns")
-        b_ins = body_pr.get("bIns")
-        # Defaults per spec: lIns=91440, tIns=45720, rIns=91440, bIns=45720
-        l_pt = _emu_to_pt(int(l_ins)) if l_ins is not None else 7.2
-        t_pt = _emu_to_pt(int(t_ins)) if t_ins is not None else 3.6
-        r_pt = _emu_to_pt(int(r_ins)) if r_ins is not None else 7.2
-        b_pt = _emu_to_pt(int(b_ins)) if b_ins is not None else 3.6
-        insets_pt = (l_pt, t_pt, r_pt, b_pt)
-
-        rot = body_pr.get("rot")
-        if rot is not None:
-            rotation_deg = int(rot) / 60000.0
-
-        norm_auto = body_pr.find(_x("a:normAutofit"))
-        if norm_auto is not None:
-            fs_str = norm_auto.get("fontScale", "100000")
-            autofit_font_scale = int(fs_str) / 100000.0
+    if norm_auto is not None:
+        fs_str = norm_auto.get("fontScale", "100000")
+        autofit_font_scale = int(fs_str) / 100000.0
 
     # Parse paragraphs
     paragraphs: list[Paragraph] = []
@@ -567,7 +590,13 @@ def parse(pptx_path: Path) -> Presentation:
                         )
                         is_prompt_fallback = True
                 if text_frame is None:
-                    text_frame = _parse_text_frame(tx_body, default_run, default_para, theme_el, clr_map)
+                    layout_tx_body = (
+                        layout_sp.find(_x("p:txBody")) if layout_sp is not None else None
+                    )
+                    text_frame = _parse_text_frame(
+                        tx_body, default_run, default_para, theme_el, clr_map,
+                        layout_tx_body=layout_tx_body,
+                    )
                 # Collect typefaces from actual runs
                 if text_frame is not None:
                     for para in text_frame.paragraphs:
