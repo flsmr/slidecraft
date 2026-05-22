@@ -86,14 +86,19 @@ def _run_props_css(ph: Placeholder) -> list[str]:
         # pt → px (96dpi, 1pt = 4/3 px)
         px = rp.font_size_pt * 96 / 72
         parts.append(f"font-size: {px:.4g}px")
+    # Weight resolution order:
+    #  - explicit b="1" → always 700 (force bold)
+    #  - family name implies weight ("Source Sans Pro Bold") → that natural weight,
+    #    EVEN when b="0" is set. PPT convention: b="0" with a Bold-named subfamily
+    #    means "no additional bold styling" — the family itself already provides bold.
+    #  - explicit b="0" → 400 (only when the family doesn't already encode a weight)
+    #  - otherwise → inherit (no font-weight emitted)
     if rp.bold:
         parts.append("font-weight: 700")
+    elif weight_from_family is not None:
+        parts.append(f"font-weight: {weight_from_family}")
     elif rp.bold is False:
         parts.append("font-weight: 400")
-    elif weight_from_family is not None:
-        # Use the weight implied by the PPT family name only if no explicit
-        # bold attribute already overrode it.
-        parts.append(f"font-weight: {weight_from_family}")
     if rp.italic:
         parts.append("font-style: italic")
     if rp.color:
