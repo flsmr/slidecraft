@@ -241,6 +241,31 @@ def _natural_weight_for_family(family_name: str) -> int:
     return 400
 
 
+def strip_weight_suffix(family_name: str) -> tuple[str, int]:
+    """Strip a trailing weight modifier from *family_name*.
+
+    Returns ``(base_family, natural_weight)`` where ``base_family`` has the
+    modifier removed and ``natural_weight`` is the CSS font-weight value it
+    implied.
+
+    Examples::
+
+        strip_weight_suffix("Source Sans Pro Bold")    → ("Source Sans Pro", 700)
+        strip_weight_suffix("Helvetica Neue Light")    → ("Helvetica Neue", 300)
+        strip_weight_suffix("Source Sans Pro")         → ("Source Sans Pro", 400)
+
+    When the name has no recognised trailing modifier the original name is
+    returned unchanged with weight 400.
+    """
+    norm = family_name.strip()
+    for mod_name, weight in sorted(_SUBFAMILY_WEIGHT_NAMES.items(), key=lambda x: -len(x[0])):
+        for sep in (" ", "-"):
+            suffix = f"{sep}{mod_name}"
+            if len(norm) > len(suffix) and norm.lower().endswith(suffix.lower()):
+                return norm[: -len(suffix)], weight
+    return norm, 400
+
+
 def _infer_variants_from_filenames(files: list[str], family_name: str = "") -> list[dict]:
     """Infer weight/style metadata from font filenames.
 
