@@ -155,10 +155,33 @@ class TestExtractRpr:
         assert run.color.g == 0
         assert run.color.b == 0
 
+    def test_cap_all(self):
+        rpr = _make_rpr(cap="all")
+        run = _extract_rpr(rpr)
+        assert run.cap == "all"
+
+    def test_cap_small(self):
+        rpr = _make_rpr(cap="small")
+        run = _extract_rpr(rpr)
+        assert run.cap == "small"
+
+    def test_cap_none_string(self):
+        """cap='none' (explicit PPT 'no transform') is preserved as 'none'."""
+        rpr = _make_rpr(cap="none")
+        run = _extract_rpr(rpr)
+        assert run.cap == "none"
+
+    def test_cap_absent_returns_none(self):
+        """When cap attr is absent, Run.cap should be None (inherit)."""
+        rpr = _make_rpr(b="1")  # no cap attr
+        run = _extract_rpr(rpr)
+        assert run.cap is None
+
     def test_none_element_returns_empty_run(self):
         run = _extract_rpr(None)
         assert run.bold is None
         assert run.font_family is None
+        assert run.cap is None
 
 
 class TestExtractPpr:
@@ -191,6 +214,18 @@ class TestMerge:
         merged = _merge_run(base, override)
         assert merged.font_size_pt == pytest.approx(18.0)
 
+    def test_merge_run_cap_override_wins(self):
+        base = Run(text="", cap="all")
+        override = Run(text="", cap="none")
+        merged = _merge_run(base, override)
+        assert merged.cap == "none"
+
+    def test_merge_run_cap_none_keeps_base(self):
+        base = Run(text="", cap="all")
+        override = Run(text="")  # cap is None → inherit
+        merged = _merge_run(base, override)
+        assert merged.cap == "all"
+
     def test_merge_para_override_wins(self):
         base = Paragraph(runs=[], align="l")
         override = Paragraph(runs=[], align="ctr")
@@ -218,6 +253,24 @@ class TestDiff:
         run = Run(text="x", bold=True)
         diffed = diff_run(run, default)
         assert diffed.bold is True
+
+    def test_diff_run_cap_same_returns_none(self):
+        default = Run(text="", cap="all")
+        run = Run(text="x", cap="all")
+        diffed = diff_run(run, default)
+        assert diffed.cap is None
+
+    def test_diff_run_cap_different_kept(self):
+        default = Run(text="", cap="all")
+        run = Run(text="x", cap="none")
+        diffed = diff_run(run, default)
+        assert diffed.cap == "none"
+
+    def test_diff_run_cap_from_none_to_all(self):
+        default = Run(text="")  # cap=None
+        run = Run(text="x", cap="all")
+        diffed = diff_run(run, default)
+        assert diffed.cap == "all"
 
     def test_diff_para_same_returns_none(self):
         default = Paragraph(runs=[], align="l")
@@ -359,6 +412,46 @@ class TestInheritanceLayoutInheritsMaster:
         assert run.bold is None
         assert run.font_family is None
         assert para.align is None
+
+
+class TestCapCascade:
+    """Tests for cap attribute flowing through the txStyles cascade (IU template scenario)."""
+
+    def _make_tx_styles_with_cap(self, style_tag: str, cap: str) -> etree._Element:
+        tx_styles = etree.Element(f"{{{_P_NS}}}txStyles")
+        style_el = etree.SubElement(tx_styles, f"{{{_P_NS}}}{style_tag}")
+        lvl1 = etree.SubElement(style_el, f"{{{_A_NS}}}lvl1pPr")
+        def_rpr = etree.SubElement(lvl1, f"{{{_A_NS}}}defRPr", cap=cap)
+        return tx_styles
+
+    def test_title_cap_all_cascades_to_default_run(self):
+        """cap='all' in master txStyles titleStyle flows into resolve_placeholder default_run."""
+        tx_styles = self._make_tx_styles_with_cap("titleStyle", "all")
+        run, para = resolve_placeholder(
+            slide_sp=None,
+            layout_ph=None,
+            master_ph=None,
+            master_tx_styles=tx_styles,
+            theme_el=None,
+            ph_type="title",
+        )
+        assert run.cap == "all"
+
+    def test_slide_cap_none_overrides_master_cap_all(self):
+        """Slide-level cap='none' on rPr should override master txStyles cap='all'."""
+        tx_styles = self._make_tx_styles_with_cap("titleStyle", "all")
+        slide_sp = _make_sp_with_paragraph(rpr_attrs={"cap": "none"})
+        run, para = resolve_placeholder(
+            slide_sp=slide_sp,
+            layout_ph=None,
+            master_ph=None,
+            master_tx_styles=tx_styles,
+            theme_el=None,
+            ph_type="title",
+        )
+        # Slide wins — but note: _apply_sp_defaults reads the first run's rPr,
+        # so 'none' overrides 'all' from txStyles.
+        assert run.cap == "none"
 
 
 class TestTxStylesDefaults:
