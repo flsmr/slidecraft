@@ -1,0 +1,6 @@
+Pillow>=10.0
+scikit-image>=0.22
+numpy>=1.26
+python-pptx>=0.6.23
+lxml>=4.9
+requests>=2.31

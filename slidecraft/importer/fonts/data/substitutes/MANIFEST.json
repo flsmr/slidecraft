@@ -1,0 +1,262 @@
+[
+  {
+    "family": "Carlito",
+    "variant": "Regular",
+    "weight": 400,
+    "style": "normal",
+    "file": "Carlito-Regular.ttf",
+    "licenseSpdx": "OFL-1.1",
+    "sourceUrl": "https://github.com/googlefonts/carlito/raw/main/fonts/ttf/Carlito-Regular.ttf",
+    "sha256": "f6418f708baede9789daef5d458c0f53d2a888af9820e8062934e504fedc6595"
+  },
+  {
+    "family": "Carlito",
+    "variant": "Bold",
+    "weight": 700,
+    "style": "normal",
+    "file": "Carlito-Bold.ttf",
+    "licenseSpdx": "OFL-1.1",
+    "sourceUrl": "https://github.com/googlefonts/carlito/raw/main/fonts/ttf/Carlito-Bold.ttf",
+    "sha256": "bb5d20f79b82599ec72983597437373a80f2d2085fa91fc144fd74e876a594db"
+  },
+  {
+    "family": "Carlito",
+    "variant": "Italic",
+    "weight": 400,
+    "style": "italic",
+    "file": "Carlito-Italic.ttf",
+    "licenseSpdx": "OFL-1.1",
+    "sourceUrl": "https://github.com/googlefonts/carlito/raw/main/fonts/ttf/Carlito-Italic.ttf",
+    "sha256": "0b019225e58d702bfedcbd35c21696769f8ee115cb6343f84c2f240312450d1c"
+  },
+  {
+    "family": "Carlito",
+    "variant": "BoldItalic",
+    "weight": 700,
+    "style": "italic",
+    "file": "Carlito-BoldItalic.ttf",
+    "licenseSpdx": "OFL-1.1",
+    "sourceUrl": "https://github.com/googlefonts/carlito/raw/main/fonts/ttf/Carlito-BoldItalic.ttf",
+    "sha256": "b32928186c119599e03ca6a1ffc680fdcb7fac95772f4b95d989cf6cd3861517"
+  },
+  {
+    "family": "Caladea",
+    "variant": "Regular",
+    "weight": 400,
+    "style": "normal",
+    "file": "Caladea-Regular.ttf",
+    "licenseSpdx": "OFL-1.1",
+    "sourceUrl": "https://fonts.gstatic.com/s/caladea/v8/kJEzBugZ7AAjhybUjR8.ttf",
+    "sha256": "fa977acf1ce079add3eb108928b2635a6b303a898b31a6ead3ff6852abf778f9"
+  },
+  {
+    "family": "Caladea",
+    "variant": "Bold",
+    "weight": 700,
+    "style": "normal",
+    "file": "Caladea-Bold.ttf",
+    "licenseSpdx": "OFL-1.1",
+    "sourceUrl": "https://fonts.gstatic.com/s/caladea/v8/kJE2BugZ7AAjhybUtaNY39o.ttf",
+    "sha256": "eed59e782d5e3ba27daf45f48a81239568ea76cb1d9d4bb5c5de35ce5db18a18"
+  },
+  {
+    "family": "Caladea",
+    "variant": "Italic",
+    "weight": 400,
+    "style": "italic",
+    "file": "Caladea-Italic.ttf",
+    "licenseSpdx": "OFL-1.1",
+    "sourceUrl": "https://fonts.gstatic.com/s/caladea/v8/kJExBugZ7AAjhybUvR19_w.ttf",
+    "sha256": "68bb8c36f55326b11873bc273c8224f0e42d7fba90c9172b48226390bea88014"
+  },
+  {
+    "family": "Caladea",
+    "variant": "BoldItalic",
+    "weight": 700,
+    "style": "italic",
+    "file": "Caladea-BoldItalic.ttf",
+    "licenseSpdx": "OFL-1.1",
+    "sourceUrl": "https://fonts.gstatic.com/s/caladea/v8/kJE0BugZ7AAjhybUvR1FQ98SrA.ttf",
+    "sha256": "289c6ada32fd76dd29aaf62e451c0b3aa3fcc0f9cbbd213ffa94c77a4a0a0f7b"
+  },
+  {
+    "family": "Tinos",
+    "variant": "Regular",
+    "weight": 400,
+    "style": "normal",
+    "file": "Tinos-Regular.ttf",
+    "licenseSpdx": "Apache-2.0",
+    "sourceUrl": "https://fonts.gstatic.com/s/tinos/v26/buE4poGnedXvwgX8.ttf",
+    "sha256": "e30f146a85623eff54453d733e5e5102fee69f07584d8ea074175a9732028be6"
+  },
+  {
+    "family": "Tinos",
+    "variant": "Bold",
+    "weight": 700,
+    "style": "normal",
+    "file": "Tinos-Bold.ttf",
+    "licenseSpdx": "Apache-2.0",
+    "sourceUrl": "https://fonts.gstatic.com/s/tinos/v26/buE1poGnedXvwj1AW0Fp.ttf",
+    "sha256": "6ce81af2cbe9244156ee0399ae1c2e029f99ed3e64d4a0d49f5d4c59a715d743"
+  },
+  {
+    "family": "Tinos",
+    "variant": "Italic",
+    "weight": 400,
+    "style": "italic",
+    "file": "Tinos-Italic.ttf",
+    "licenseSpdx": "Apache-2.0",
+    "sourceUrl": "https://fonts.gstatic.com/s/tinos/v26/buE2poGnedXvwjX-fmE.ttf",
+    "sha256": "129bc194acf669456c93f8fbd9786504b85bf7516cb683567e6f4396f75e2918"
+  },
+  {
+    "family": "Tinos",
+    "variant": "BoldItalic",
+    "weight": 700,
+    "style": "italic",
+    "file": "Tinos-BoldItalic.ttf",
+    "licenseSpdx": "Apache-2.0",
+    "sourceUrl": "https://fonts.gstatic.com/s/tinos/v26/buEzpoGnedXvwjX-Rt1s0Co.ttf",
+    "sha256": "c2a4ece0ff91caf9c053a6367981e507ecca81cc48285fdae7df1f780f828380"
+  },
+  {
+    "family": "Arimo",
+    "variant": "Regular",
+    "weight": 400,
+    "style": "normal",
+    "file": "Arimo-Regular.ttf",
+    "licenseSpdx": "Apache-2.0",
+    "sourceUrl": "https://fonts.gstatic.com/s/arimo/v36/P5sfzZCDf9_T_3cV7NCUECyoxNk37cxsBw.ttf",
+    "sha256": "e5717ff6c2063b0e596176ddad929b0a98a6d8db694f43a8ba26c99675625b67"
+  },
+  {
+    "family": "Arimo",
+    "variant": "Bold",
+    "weight": 700,
+    "style": "normal",
+    "file": "Arimo-Bold.ttf",
+    "licenseSpdx": "Apache-2.0",
+    "sourceUrl": "https://fonts.gstatic.com/s/arimo/v36/P5sfzZCDf9_T_3cV7NCUECyoxNk3CstsBw.ttf",
+    "sha256": "22261f10e78d5e16e5ae305cc6f4a0c5ca24a4b1f0e14d3eec5750fb57877a5a"
+  },
+  {
+    "family": "Arimo",
+    "variant": "Italic",
+    "weight": 400,
+    "style": "italic",
+    "file": "Arimo-Italic.ttf",
+    "licenseSpdx": "Apache-2.0",
+    "sourceUrl": "https://fonts.gstatic.com/s/arimo/v36/P5sdzZCDf9_T_10c3i9MeUcyat4iJY-ERBrE.ttf",
+    "sha256": "a442dfa53860966c8a895ada31313f0bc3e0e3a821b1e0ec032e8cfe6524fc1c"
+  },
+  {
+    "family": "Arimo",
+    "variant": "BoldItalic",
+    "weight": 700,
+    "style": "italic",
+    "file": "Arimo-BoldItalic.ttf",
+    "licenseSpdx": "Apache-2.0",
+    "sourceUrl": "https://fonts.gstatic.com/s/arimo/v36/P5sdzZCDf9_T_10c3i9MeUcyat4iJY9jQxrE.ttf",
+    "sha256": "cd9567cc96a376549a10a0812b72753839b00f56fc775bf18b5f04acfd06a53f"
+  },
+  {
+    "family": "Cousine",
+    "variant": "Regular",
+    "weight": 400,
+    "style": "normal",
+    "file": "Cousine-Regular.ttf",
+    "licenseSpdx": "Apache-2.0",
+    "sourceUrl": "https://fonts.gstatic.com/s/cousine/v30/d6lIkaiiRdih4SpPzSM.ttf",
+    "sha256": "bf23310775fbf08bd8aeac83cd204ab0a8db407bc51e1039357f0d2250952bb9"
+  },
+  {
+    "family": "Cousine",
+    "variant": "Bold",
+    "weight": 700,
+    "style": "normal",
+    "file": "Cousine-Bold.ttf",
+    "licenseSpdx": "Apache-2.0",
+    "sourceUrl": "https://fonts.gstatic.com/s/cousine/v30/d6lNkaiiRdih4SpP9Z8K6T4.ttf",
+    "sha256": "c1c2452be047a9c3c7e74e0ff32d933cc347d95275db9ebba6ec1b033d73e7dd"
+  },
+  {
+    "family": "Cousine",
+    "variant": "Italic",
+    "weight": 400,
+    "style": "italic",
+    "file": "Cousine-Italic.ttf",
+    "licenseSpdx": "Apache-2.0",
+    "sourceUrl": "https://fonts.gstatic.com/s/cousine/v30/d6lKkaiiRdih4SpP_SEvyQ.ttf",
+    "sha256": "8dd6a17f13b7077a373d397003b33d29706610bc3ff798682991e53b3175a2b9"
+  },
+  {
+    "family": "Cousine",
+    "variant": "BoldItalic",
+    "weight": 700,
+    "style": "italic",
+    "file": "Cousine-BoldItalic.ttf",
+    "licenseSpdx": "Apache-2.0",
+    "sourceUrl": "https://fonts.gstatic.com/s/cousine/v30/d6lPkaiiRdih4SpP_SEXdTvM1w.ttf",
+    "sha256": "1cef1d4a1ff37aaff3ca5007b5c97e313fc722156ced17eaa0b8fd0dc092e98c"
+  },
+  {
+    "family": "Inconsolata",
+    "variant": "Regular",
+    "weight": 400,
+    "style": "normal",
+    "file": "Inconsolata-Regular.ttf",
+    "licenseSpdx": "OFL-1.1",
+    "sourceUrl": "https://fonts.gstatic.com/s/inconsolata/v37/QldgNThLqRwH-OJ1UHjlKENVzkWGVkL3GZQmAwLYxYWI2qfdm7Lpp4U8aRo.ttf",
+    "sha256": "a3101dfafb0f3b82ad95023cd08ed6e5b998f7b374633b940177af5f69e75432"
+  },
+  {
+    "family": "Inconsolata",
+    "variant": "Bold",
+    "weight": 700,
+    "style": "normal",
+    "file": "Inconsolata-Bold.ttf",
+    "licenseSpdx": "OFL-1.1",
+    "sourceUrl": "https://fonts.gstatic.com/s/inconsolata/v37/QldgNThLqRwH-OJ1UHjlKENVzkWGVkL3GZQmAwLYxYWI2qfdm7Lpp2I7aRo.ttf",
+    "sha256": "df9e1e36922056fc67ad3a768c294c405df0263234454affb26823e9a6ac2f30"
+  },
+  {
+    "family": "DejaVuSans",
+    "variant": "Regular",
+    "weight": 400,
+    "style": "normal",
+    "file": "DejaVuSans-Regular.ttf",
+    "licenseSpdx": "DejaVu",
+    "sourceUrl": "https://github.com/dejavu-fonts/dejavu-fonts/releases/download/version_2_37/dejavu-fonts-ttf-2.37.zip",
+    "sha256": "7da195a74c55bef988d0d48f9508bd5d849425c1770dba5d7bfc6ce9ed848954"
+  },
+  {
+    "family": "DejaVuSans",
+    "variant": "Bold",
+    "weight": 700,
+    "style": "normal",
+    "file": "DejaVuSans-Bold.ttf",
+    "licenseSpdx": "DejaVu",
+    "sourceUrl": "https://github.com/dejavu-fonts/dejavu-fonts/releases/download/version_2_37/dejavu-fonts-ttf-2.37.zip",
+    "sha256": "e6476c1b80502924294eed40894c5b18e06c181444ca953e5334262df9c27724"
+  },
+  {
+    "family": "DejaVuSans",
+    "variant": "Italic",
+    "weight": 400,
+    "style": "italic",
+    "file": "DejaVuSans-Italic.ttf",
+    "licenseSpdx": "DejaVu",
+    "sourceUrl": "https://github.com/dejavu-fonts/dejavu-fonts/releases/download/version_2_37/dejavu-fonts-ttf-2.37.zip",
+    "sha256": "4af75fa16ee6d3ad43e1ecec41862c24954af26a55c6bb1ebb27bd486a50f5f4"
+  },
+  {
+    "family": "DejaVuSans",
+    "variant": "BoldItalic",
+    "weight": 700,
+    "style": "italic",
+    "file": "DejaVuSans-BoldItalic.ttf",
+    "licenseSpdx": "DejaVu",
+    "sourceUrl": "https://github.com/dejavu-fonts/dejavu-fonts/releases/download/version_2_37/dejavu-fonts-ttf-2.37.zip",
+    "sha256": "eb436dca0c2594b73d8b603b892e374fdfd8d885d25ffb4f18df4c4c0b49e50f"
+  }
+]
