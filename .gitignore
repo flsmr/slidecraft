@@ -30,3 +30,21 @@ dist/
 # Environment
 .env
 .env.local
+
+# Source PPTX templates (large binaries, kept in the deck repo's resources/)
+IUG_PPT_Master_Update_EN_V01.pptx
+temp.pptx
+~$*.pptx
+
+# Worktrees + agent transcripts
+.claude/
+
+# Transient render outputs
+validation-output/
+validation-output-generated/
+
+# Old / abandoned working dirs
+rebuild-proof/
+rebuild-test/
+pptx-reference-images/
+pptx-reference-manifest.json
