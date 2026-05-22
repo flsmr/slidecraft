@@ -9,6 +9,9 @@ from .emit import emit_deck, emit_layouts, emit_theme
 from .fonts import strip_weight_suffix
 from .fonts.substitute import SUBSTITUTE_TABLE
 from .parse import parse
+from .pictures.derivatives import apply_derivative
+from .pictures.extract import extract_pictures
+from .pictures.manifest import write_manifest
 
 # Substitute names that need a space inserted for the Google Fonts URL.
 # e.g. our local file uses "DejaVuSans" but Google Fonts lists "DejaVu Sans".
@@ -95,6 +98,40 @@ def convert(
         sans_families=sans_families,
         alias_font_faces=alias_font_faces or None,
     )
+
+    # Layer 2 (P6): extract picture assets and apply pre-bake derivatives
+    # (crop / duotone / soft_edge). The deterministic derivative_filename
+    # contract means emit_layouts can emit URLs without waiting on Pillow,
+    # but the files do need to exist before Slidev serves them — so this
+    # block runs before emit_layouts/emit_deck. extract_pictures is a no-op
+    # for decks without any media, so the cost is negligible on text-only PPTX.
+    manifest = extract_pictures(pptx_path, theme_dir)
+    assets_dir = theme_dir / "public" / "assets"
+    derivative_warnings: list[str] = []
+    for slide in presentation.slides:
+        for pic in slide.pictures:
+            if not pic.asset_ref:
+                continue
+            for d in (pic.effects or {}).get("derivatives_needed", []) or []:
+                op = d.get("op")
+                params = d.get("params", {})
+                if not op:
+                    continue
+                try:
+                    apply_derivative(assets_dir, pic.asset_ref, op, params, manifest)
+                except (FileNotFoundError, ValueError) as exc:
+                    derivative_warnings.append(
+                        f"slide{slide.index}: derivative {op!r} on "
+                        f"{pic.asset_ref!r} skipped — {exc}"
+                    )
+            # Per-picture parse_effects warnings (unsupported color space, etc.)
+            for w in (pic.effects or {}).get("warnings", []) or []:
+                derivative_warnings.append(f"slide{slide.index}: {w}")
+    # Re-persist manifest after derivative entries have been merged in.
+    if manifest:
+        write_manifest(manifest, assets_dir / "manifest.json")
+    warnings.extend(derivative_warnings)
+
     emit_layouts(presentation, theme_dir)
 
     theme_rel = os.path.relpath(theme_dir.resolve(), deck_dir.resolve()).replace("\\", "/")
