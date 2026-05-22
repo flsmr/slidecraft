@@ -1,10 +1,11 @@
-# Placeholder Background Fill Investigation — slideLayout8.xml
+# Placeholder Background Fill Investigation
 
 ## Findings
 
 ### Which placeholders carry fills?
 
-Slide 1 uses `slideLayout8.xml`.  The layout's `<p:spTree>` has five `<p:ph>` shapes:
+In the test template's slide 1 layout, the layout's `<p:spTree>` has five
+`<p:ph>` shapes with the following fill patterns:
 
 | idx | hasCustomPrompt | spPr fill in layout | Slide-level spPr |
 |-----|----------------|---------------------|------------------|
@@ -15,7 +16,8 @@ Slide 1 uses `slideLayout8.xml`.  The layout's `<p:spTree>` has five `<p:ph>` sh
 | 26  | 1              | `<a:solidFill><a:schemeClr val="bg1"/>` (`#FFFFFF`) | xfrm only |
 
 Color resolution: `bg2 → lt2 → C2C2C8` (light gray), `bg1 → lt1 → FFFFFF` (white), via
-`clrMap bg1="lt1" bg2="lt2"` on `slideMaster1` and `theme1.xml lt2 = C2C2C8`.
+`clrMap bg1="lt1" bg2="lt2"` on the slide master and the theme's
+`<a:clrScheme>` (with `lt2 = C2C2C8`).
 
 ### Root cause
 
@@ -39,15 +41,15 @@ layout placeholder's `<p:spPr>` fill.
 `<a:noFill>` on the slide still terminates the cascade (it is an explicit "no fill" directive,
 not a missing one), ensuring authors can override layout fills intentionally.
 
-### Result on IUG_PPT_Master slide 1 after fix
+### Result on the test template's slide 1 after fix
 
 ```
-idx=12  fill=NoFill        (layout ph has no fill either — correct, text only)
-idx=19  fill=SolidFill(#FFFFFF)   (bg1 white from layout)
-idx=20  fill=SolidFill(#C2C2C8)  (bg2 light gray from layout — was transparent)
-idx=25  fill=SolidFill(#FFFFFF)   (bg1 white from layout — was transparent)
-idx=26  fill=SolidFill(#FFFFFF)   (bg1 white from layout — was transparent)
+idx=12  fill=NoFill                (layout ph has no fill either — correct, text only)
+idx=19  fill=SolidFill(#FFFFFF)    (bg1 white from layout)
+idx=20  fill=SolidFill(#C2C2C8)    (bg2 light gray from layout — was transparent)
+idx=25  fill=SolidFill(#FFFFFF)    (bg1 white from layout — was transparent)
+idx=26  fill=SolidFill(#FFFFFF)    (bg1 white from layout — was transparent)
 ```
 
-The faint gray/white bounding boxes visible in the PPT screenshots should now render
-correctly in the Slidev output.
+The faint gray/white bounding boxes that PowerPoint draws for these placeholders
+now render correctly in the Slidev output.
