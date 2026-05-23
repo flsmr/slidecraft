@@ -518,26 +518,27 @@ def _emit_layout_vue(slide: Slide, canvas_width: int, canvas_height: int) -> str
             size_pct   = para.bullet_size_pct    if para.bullet_size_pct    is not None else def_p.bullet_size_pct
             autonum    = para.bullet_autonum_type if para.bullet_autonum_type is not None else def_p.bullet_autonum_type
             # marL / indent for marker positioning (PPT hanging-indent idiom).
-            # Minimal-CSS approach: trust the browser's defaults for list
-            # geometry (markers inside the placeholder via browser's default
-            # ol/ul padding-left ~40px; wrapped lines align at the text
-            # content edge — the "hanging" PPT effect). The earlier attempt
-            # at PPT's marL/indent → padding-left/text-indent acrobatics
-            # produced markers OUTSIDE the placeholder box, mismatched marker
-            # sizes, and inconsistent sub-level indentation across templates.
-            # Keep only the marker GLYPH (content/color/font) from PPT —
-            # everything positional flows through browser defaults.
+            # Slidev's UnoCSS bundle injects a CSS reset that effectively
+            # sets ``ul, ol { margin: 0; padding: 0; list-style: none }``
+            # globally. Without undoing this inside our scoped layout, the
+            # ul/ol containers have NO padding for markers to live in —
+            # they hang outside the placeholder edge (the symptom the user
+            # showed: bullets to the left of the placeholder's "black bar").
             #
-            # ::marker font-size deliberately omitted: PPT's buSzPct is
-            # "marker size as % of surrounding text"; browsers default to
-            # 100% (matches text), which is what most templates intend.
-            # The IU template's `120%` was visually a touch large but
-            # tolerable; emitting `font-size: 120%` was causing user-
-            # perceived marker-size mismatch on Vorlage. Leave it to
-            # browser default.
+            # So we restore: a sensible padding-left (40 px ≈ browser
+            # default), ``list-style: revert`` so the user-agent's native
+            # marker rendering kicks back in for our markers, and a
+            # neutralised margin so the ul/ol doesn't push down beyond
+            # PPT's text-frame top.
             chain_tag = "ul" if kind == "char" else "ol"
             chain = " ".join([chain_tag] * (lvl + 1))
             base_sel = f".slidev-layout .ph-{ph.idx} :deep({chain} > li)"
+            container_sel = f".slidev-layout .ph-{ph.idx} :deep({chain})"
+            lines.append(f"{container_sel} {{")
+            lines.append("  padding-left: 40px;")
+            lines.append("  margin: 0;")
+            lines.append("  list-style: revert;")
+            lines.append("}")
 
             if kind == "char":
                 marker_props: list[str] = []

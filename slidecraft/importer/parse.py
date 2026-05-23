@@ -211,6 +211,7 @@ def _parse_text_frame(
     clr_map: Optional[dict[str, str]] = None,
     layout_tx_body: Optional[etree._Element] = None,
     master_tx_body: Optional[etree._Element] = None,
+    per_level_defaults: Optional[dict[int, tuple[Run, Paragraph]]] = None,
 ) -> TextFrame:
     """Parse <p:txBody> into a TextFrame, diffing each run/paragraph against the defaults.
 
@@ -278,7 +279,10 @@ def _parse_text_frame(
     paragraphs: list[Paragraph] = []
     for p_el in tx_body.findall(_x("a:p")):
         paragraphs.extend(
-            _parse_paragraph(p_el, default_run, default_para, theme_el, clr_map)
+            _parse_paragraph(
+                p_el, default_run, default_para, theme_el, clr_map,
+                per_level_defaults=per_level_defaults,
+            )
         )
 
     return TextFrame(
@@ -290,12 +294,19 @@ def _parse_text_frame(
     )
 
 
+_RUN_BACKFILL_FIELDS = (
+    "font_size_pt", "bold", "italic", "underline", "strike",
+    "color", "font_family", "cap",
+)
+
+
 def _parse_paragraph(
     p_el: etree._Element,
     default_run: Run,
     default_para: Paragraph,
     theme_el: Optional[etree._Element] = None,
     clr_map: Optional[dict[str, str]] = None,
+    per_level_defaults: Optional[dict[int, tuple[Run, Paragraph]]] = None,
 ) -> list[Paragraph]:
     """Parse one ``<a:p>`` into one OR MORE :class:`Paragraph` objects.
 
@@ -332,8 +343,28 @@ def _parse_paragraph(
     # marker which the emit layer renders as <br/>.
     segments: list[list[Run]] = [[]]   # at least one segment
 
+    # Per-level cascade backfill. When the paragraph's level > 0 AND we
+    # have per-level resolved defaults, any RUN field the slide didn't set
+    # explicitly is backfilled with the level-N default value BEFORE the
+    # diff against the placeholder's level-0 default. This makes diff_run
+    # surface deviations like `font_size_pt=20` for lvl=3 runs (master's
+    # lvl4pPr.defRPr.sz), even when the slide-level <a:rPr> omits sz.
+    #
+    # Without this, lvl=N paragraphs inherited the placeholder wrapper's
+    # level-0 font-size, producing the visible "sub-level bullets render
+    # at the SAME large size as level-0" symptom on tmp2 slide 10.
+    level_run: Optional[Run] = None
+    if level > 0 and per_level_defaults is not None:
+        entry = per_level_defaults.get(level)
+        if entry is not None:
+            level_run = entry[0]
+
     def _make_diffed_run(text: str, rpr_el: Optional[etree._Element]) -> Run:
         run_props = _extract_rpr(rpr_el, theme_el, clr_map)
+        if level_run is not None:
+            for f in _RUN_BACKFILL_FIELDS:
+                if getattr(run_props, f) is None:
+                    setattr(run_props, f, getattr(level_run, f))
         run_props.text = text
         diffed_run = diff_run(run_props, default_run)
         diffed_run.text = text
@@ -1102,6 +1133,31 @@ def parse(pptx_path: Path) -> Presentation:
             # Opacity (not commonly set on placeholders, default 1.0)
             opacity = 1.0
 
+            # Per-level cascade resolution (RC2). Resolve defaults for
+            # every list-indent level 0..8 so that paragraphs at lvl=N can
+            # inherit master's lvl(N+1)pPr defRPr (font_size, font_family,
+            # bold, etc.) when their slide-level <a:rPr> doesn't override.
+            # Without this, tmp2 slide 10's lvl=3 sub-bullets rendered at
+            # the placeholder's level-0 font-size (32pt) instead of
+            # master's lvl4pPr 20pt — visibly LARGER than the level-0
+            # bullets they were nested under.
+            per_level_defaults: dict[int, tuple[Run, Paragraph]] = {}
+            for lvl_n in range(9):
+                if lvl_n == 0:
+                    per_level_defaults[0] = (default_run, default_para)
+                else:
+                    lvl_run, lvl_para = resolve_placeholder(
+                        slide_sp=sp_el,
+                        layout_ph=layout_sp,
+                        master_ph=master_sp,
+                        master_tx_styles=master_tx_styles,
+                        theme_el=theme_el,
+                        ph_type=effective_ph_type,
+                        level=lvl_n,
+                        clr_map=clr_map,
+                    )
+                    per_level_defaults[lvl_n] = (lvl_run, lvl_para)
+
             # TextFrame — with prompt-fallback for empty slide-level content
             text_frame = None
             is_prompt_fallback = False
@@ -1117,7 +1173,8 @@ def parse(pptx_path: Path) -> Presentation:
                     layout_tx_body = layout_sp.find(_x("p:txBody"))
                     if layout_tx_body is not None and not _txbody_is_empty(layout_tx_body):
                         text_frame = _parse_text_frame(
-                            layout_tx_body, default_run, default_para, theme_el, clr_map
+                            layout_tx_body, default_run, default_para, theme_el, clr_map,
+                            per_level_defaults=per_level_defaults,
                         )
                         is_prompt_fallback = True
                 if text_frame is None:
@@ -1131,6 +1188,7 @@ def parse(pptx_path: Path) -> Presentation:
                         tx_body, default_run, default_para, theme_el, clr_map,
                         layout_tx_body=layout_tx_body,
                         master_tx_body=master_tx_body,
+                        per_level_defaults=per_level_defaults,
                     )
                 # Collect typefaces from actual runs
                 if text_frame is not None:
