@@ -822,6 +822,92 @@ def _parse_picture_placeholder(
     )
 
 
+def _parse_inherited_text_placeholder(
+    src_sp: etree._Element,
+    ph_type: Optional[str],
+    idx: Optional[int],
+    master,
+    master_tx_styles,
+    theme_el,
+    clr_map,
+    typefaces: set[str],
+) -> Optional[Placeholder]:
+    """Parse a layout-only or master-only TEXT placeholder for a slide.
+
+    Used when the slide itself doesn't declare a placeholder with this idx
+    but the layout or master does (most commonly: footer / date /
+    slidenum / body where the slide is "blank" and inherits from upstream).
+
+    Geometry, fill, txBody all resolve against the source shape ONLY (no
+    cross-cascade — there's no slide-level override to merge). Default-run
+    / default-para still flow through the full cascade so font / color /
+    bullet styling come from the master's <p:txStyles>.
+
+    Returns ``None`` if the source shape's bbox is degenerate.
+    """
+    # Geometry
+    x_px, y_px, w_px, h_px, rot_deg = _get_sp_position(src_sp)
+    if w_px == 0 or h_px == 0:
+        # If the layout shape has no own geometry, try master's matching shape.
+        if master is not None and ph_type is not None:
+            master_sp = _find_master_sp(master, ph_type, idx or -1)
+            if master_sp is not None:
+                x_px, y_px, w_px, h_px, rot_deg = _get_sp_position(master_sp)
+    if w_px == 0 or h_px == 0:
+        return None
+
+    # Defaults via full cascade. slide_sp=src_sp because there's no real
+    # slide-level shape; treat the inherited shape as the leaf of the chain.
+    # ph_type defaults to "body" when the placeholder element omits @type
+    # (mirrors the slide-level normalisation in parse()).
+    effective_ph_type = ph_type if ph_type is not None else "body"
+    default_run, default_para = resolve_placeholder(
+        slide_sp=src_sp,
+        layout_ph=None,
+        master_ph=None,
+        master_tx_styles=master_tx_styles,
+        theme_el=theme_el,
+        ph_type=effective_ph_type,
+        level=0,
+        clr_map=clr_map,
+    )
+    if default_run.font_family:
+        typefaces.add(default_run.font_family)
+
+    fill = _resolve_fill(src_sp, theme_el, clr_map, layout_sp=None)
+    if fill is None:
+        fill = NoFill()
+
+    # Text frame from the inherited shape's txBody.
+    tx_body = src_sp.find(_x("p:txBody"))
+    text_frame = None
+    if tx_body is not None and not _txbody_is_empty(tx_body):
+        text_frame = _parse_text_frame(
+            tx_body, default_run, default_para, theme_el, clr_map,
+        )
+        if text_frame is not None:
+            for para in text_frame.paragraphs:
+                for run in para.runs:
+                    if run.font_family:
+                        typefaces.add(run.font_family)
+
+    return Placeholder(
+        idx=idx if idx is not None else -1,
+        type=ph_type,
+        x_px=x_px,
+        y_px=y_px,
+        width_px=w_px,
+        height_px=h_px,
+        rotation_deg=rot_deg,
+        fill=fill,
+        opacity=1.0,
+        text_frame=text_frame,
+        default_run_props=default_run,
+        default_para_props=default_para,
+        is_prompt_fallback=False,
+    )
+
+
 def _parse_layout_only_picture_placeholder(
     layout_sp: etree._Element,
     layout_part,
@@ -1128,6 +1214,106 @@ def parse(pptx_path: Path) -> Presentation:
                 )
                 if inherited_free is not None:
                     pictures.append(inherited_free)
+
+            # Surface layout-only TEXT placeholders. OOXML: a layout-level
+            # <p:sp> with <p:ph> renders on every slide using that layout
+            # unless the slide redeclares the same idx. Vorlage_Foliensatz
+            # slide 5 (and many others) doesn't redeclare body / title /
+            # footer placeholders that the layout carries — those simply
+            # inherit. Without this pass, those slides come out near-empty.
+            #
+            # Dedup by (type, idx). The slide can use a different idx for
+            # the same conceptual placeholder (IU template's footer is
+            # idx=11 on the slide but idx=3 on the master); a per-type
+            # set catches those so we don't double-add. Singleton types
+            # (title / ctrTitle / dt / ftr / sldNum) are unique per slide
+            # — any presence on slide counts as "already declared".
+            _SINGLETON_PH_TYPES = frozenset({
+                "title", "ctrTitle", "dt", "ftr", "sldNum",
+            })
+            slide_ph_types = {p.type for p in placeholders if p.type is not None}
+
+            for lsp in layout_sp_tree.findall(_x("p:sp")):
+                lidx = _ph_idx(lsp)
+                lph_type = _ph_type(lsp)
+                if lph_type == "pic":
+                    continue
+                if lidx in slide_ph_idxes:
+                    continue
+                # Singleton types: skip if slide has any placeholder of this type.
+                if lph_type in _SINGLETON_PH_TYPES and lph_type in slide_ph_types:
+                    continue
+                if lidx is None and lph_type is None:
+                    continue
+                if lph_type not in _TEXT_PH_TYPES and lph_type is not None:
+                    continue
+                inherited_ph = _parse_inherited_text_placeholder(
+                    lsp, lph_type, lidx, master,
+                    master_tx_styles, theme_el, clr_map, typefaces,
+                )
+                if inherited_ph is not None:
+                    placeholders.append(inherited_ph)
+                    if lidx is not None:
+                        slide_ph_idxes.add(lidx)
+                    if lph_type is not None:
+                        slide_ph_types.add(lph_type)
+
+        # Surface master-only TEXT placeholders.
+        #
+        # OOXML's master placeholders have two different roles:
+        #
+        #   - **Styling templates** for title / body / ctrTitle / subTitle:
+        #     the master shape sets default fonts, colors, indent etc. for
+        #     EVERY slide using this master. It is NOT a rendered shape on
+        #     its own — the resolved-defaults flow through the cascade and
+        #     get baked into the slide's actual placeholders. Adding the
+        #     master title or body as a separate rendered placeholder would
+        #     double-emit (tmp1 slide 5 originally surfaced ph-1 as an
+        #     extra body block over the slide's own body).
+        #
+        #   - **Rendered shapes** for ftr / dt / sldNum: these ARE actual
+        #     visible placeholders. PPT renders them on every slide unless
+        #     the slide explicitly suppresses via <p:hf/> or replaces them
+        #     at the layout/slide level. Vorlage's master defines the
+        #     footer at (44.18, 660); without this pass slides like 5 never
+        #     get a footer in the output.
+        #
+        # So we only walk master for {ftr, dt, sldNum}. Skip title / body /
+        # ctrTitle / subTitle even when missing — those types resolve via
+        # the cascade for whichever slide/layout body placeholder uses them.
+        _MASTER_RENDERED_PH_TYPES = frozenset({"ftr", "dt", "sldNum"})
+        slide_ph_types_for_master = {p.type for p in placeholders if p.type is not None}
+
+        slide_show_master_attr = slide._element.get("showMasterSp")
+        layout_show_master_attr = (
+            layout._element.get("showMasterSp")
+            if layout._element is not None else None
+        )
+        if slide_show_master_attr != "0" and layout_show_master_attr != "0":
+            master_sp_tree_node = None
+            m_csld = master._element.find(_x("p:cSld"))
+            if m_csld is not None:
+                master_sp_tree_node = m_csld.find(_x("p:spTree"))
+            if master_sp_tree_node is not None:
+                for msp in master_sp_tree_node.findall(_x("p:sp")):
+                    midx = _ph_idx(msp)
+                    mph_type = _ph_type(msp)
+                    if mph_type not in _MASTER_RENDERED_PH_TYPES:
+                        continue
+                    if midx in slide_ph_idxes:
+                        continue
+                    if mph_type in slide_ph_types_for_master:
+                        continue
+                    inherited_ph = _parse_inherited_text_placeholder(
+                        msp, mph_type, midx, master,
+                        master_tx_styles, theme_el, clr_map, typefaces,
+                    )
+                    if inherited_ph is not None:
+                        placeholders.append(inherited_ph)
+                        if midx is not None:
+                            slide_ph_idxes.add(midx)
+                        if mph_type is not None:
+                            slide_ph_types_for_master.add(mph_type)
 
         # Master-level inheritance. OOXML: master shapes render under every
         # slide unless the slide or its layout sets showMasterSp="0". The IU
