@@ -518,59 +518,28 @@ def _emit_layout_vue(slide: Slide, canvas_width: int, canvas_height: int) -> str
             size_pct   = para.bullet_size_pct    if para.bullet_size_pct    is not None else def_p.bullet_size_pct
             autonum    = para.bullet_autonum_type if para.bullet_autonum_type is not None else def_p.bullet_autonum_type
             # marL / indent for marker positioning (PPT hanging-indent idiom).
-            mar_l_pt   = para.margin_left_pt     if para.margin_left_pt     is not None else def_p.margin_left_pt
-            indent_pt  = para.indent_pt          if para.indent_pt          is not None else def_p.indent_pt
-
-            # The bullet selectors target markdown-rendered <ul>/<ol>/<li>
-            # *inside* the slot — that content belongs to the parent
-            # component, not the layout, so Vue's <style scoped> never
-            # reaches it without :deep(). Without :deep() the rule compiles
-            # to .slidev-layout[data-v-XXX] .ph-N[data-v-XXX] ul > li::marker,
-            # which the slot DOM doesn't match (no data-v-XXX attribute).
+            # Minimal-CSS approach: trust the browser's defaults for list
+            # geometry (markers inside the placeholder via browser's default
+            # ol/ul padding-left ~40px; wrapped lines align at the text
+            # content edge — the "hanging" PPT effect). The earlier attempt
+            # at PPT's marL/indent → padding-left/text-indent acrobatics
+            # produced markers OUTSIDE the placeholder box, mismatched marker
+            # sizes, and inconsistent sub-level indentation across templates.
+            # Keep only the marker GLYPH (content/color/font) from PPT —
+            # everything positional flows through browser defaults.
+            #
+            # ::marker font-size deliberately omitted: PPT's buSzPct is
+            # "marker size as % of surrounding text"; browsers default to
+            # 100% (matches text), which is what most templates intend.
+            # The IU template's `120%` was visually a touch large but
+            # tolerable; emitting `font-size: 120%` was causing user-
+            # perceived marker-size mismatch on Vorlage. Leave it to
+            # browser default.
             chain_tag = "ul" if kind == "char" else "ol"
             chain = " ".join([chain_tag] * (lvl + 1))
             base_sel = f".slidev-layout .ph-{ph.idx} :deep({chain} > li)"
-            # PPT's hanging-bullet idiom: marL=N + indent=-N. Visually that
-            # means:
-            #   - bullet marker at x=0 (left edge of the text frame)
-            #   - paragraph text body starts at x=N pt and subsequent
-            #     wrapped lines align at x=N pt too
-            #
-            # CSS equivalent (one block, applied to each <li>):
-            #   padding-left: marL    → text base offset by marL
-            #   text-indent: indent   → first line (where marker sits)
-            #                            shifted by indent (negative pulls
-            #                            it back to x=0)
-            # The container <ul>/<ol> resets browser defaults so the offsets
-            # above are the ONLY horizontal positioning — otherwise the
-            # browser-default ~40px padding stacks with ours and bullets
-            # sit outside the placeholder.
-            container_sel = f".slidev-layout .ph-{ph.idx} :deep({chain})"
-            lines.append(f"{container_sel} {{")
-            lines.append("  padding-left: 0;")
-            lines.append("  margin: 0;")
-            lines.append("  list-style-position: outside;")
-            lines.append("}")
-
-            li_props: list[str] = []
-            if mar_l_pt is not None and mar_l_pt > 0:
-                li_props.append(
-                    f"  padding-left: {mar_l_pt * 96 / 72:.4g}px;"
-                )
-            if indent_pt is not None and indent_pt != 0:
-                li_props.append(
-                    f"  text-indent: {indent_pt * 96 / 72:.4g}px;"
-                )
-            if li_props:
-                lines.append(f"{base_sel} {{")
-                lines.extend(li_props)
-                lines.append("}")
 
             if kind == "char":
-                # Build a CSS ::marker rule. The marker `content` includes the
-                # bullet char + a non-breaking space so it doesn't collapse
-                # against the text. CSS list-style-type is reset to disc as a
-                # graceful fallback when ::marker isn't honoured.
                 marker_props: list[str] = []
                 if char:
                     esc = char.replace("\\", "\\\\").replace('"', '\\"')
@@ -579,30 +548,26 @@ def _emit_layout_vue(slide: Slide, canvas_width: int, canvas_height: int) -> str
                     marker_props.append(f"  color: {_hex_css(color)};")
                 if font:
                     marker_props.append(f"  font-family: '{font}', sans-serif;")
-                if size_pct is not None:
-                    marker_props.append(f"  font-size: {size_pct:.4g}%;")
                 if marker_props:
                     lines.append(f"{base_sel}::marker {{")
                     lines.extend(marker_props)
                     lines.append("}")
-
-            else:  # kind == "auto-num"
+            else:  # auto-num
                 list_style = _autonum_type_to_css(autonum)
-                lines.append(f"{base_sel} {{")
                 if list_style:
+                    lines.append(f"{base_sel} {{")
                     lines.append(f"  list-style-type: {list_style};")
-                lines.append("}")
-                # ::marker for color/font/size on numbered lists.
-                marker_props = []
+                    lines.append("}")
+                # Auto-num markers: only emit color (when distinct from
+                # text). Skip font-family because PPT's buFont reference
+                # often resolves to "<Family> Bold" — a synthetic name
+                # with no @font-face declaration, so the marker would
+                # render in fallback sans-serif at a different size than
+                # the surrounding text. Auto-num numbers look fine in
+                # the inherited text font.
                 if color is not None:
-                    marker_props.append(f"  color: {_hex_css(color)};")
-                if font:
-                    marker_props.append(f"  font-family: '{font}', sans-serif;")
-                if size_pct is not None:
-                    marker_props.append(f"  font-size: {size_pct:.4g}%;")
-                if marker_props:
                     lines.append(f"{base_sel}::marker {{")
-                    lines.extend(marker_props)
+                    lines.append(f"  color: {_hex_css(color)};")
                     lines.append("}")
 
     lines.append("</style>")

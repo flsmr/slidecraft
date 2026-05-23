@@ -1258,62 +1258,26 @@ def parse(pptx_path: Path) -> Presentation:
                     if lph_type is not None:
                         slide_ph_types.add(lph_type)
 
-        # Surface master-only TEXT placeholders.
+        # Master-only TEXT placeholder inheritance INTENTIONALLY SKIPPED.
         #
-        # OOXML's master placeholders have two different roles:
+        # PPT's master placeholders for footer / date / slide-number are
+        # rendered on a slide only when `<p:hf ftr="1"/>` (etc.) opts in,
+        # OR when the layout / slide itself redeclares the placeholder.
+        # Without that opt-in, PPT does NOT show the master's content —
+        # it stays purely as a styling template / positioning hint.
         #
-        #   - **Styling templates** for title / body / ctrTitle / subTitle:
-        #     the master shape sets default fonts, colors, indent etc. for
-        #     EVERY slide using this master. It is NOT a rendered shape on
-        #     its own — the resolved-defaults flow through the cascade and
-        #     get baked into the slide's actual placeholders. Adding the
-        #     master title or body as a separate rendered placeholder would
-        #     double-emit (tmp1 slide 5 originally surfaced ph-1 as an
-        #     extra body block over the slide's own body).
+        # An earlier version of this code unconditionally inherited
+        # master ftr/dt/sldNum, which produced Quelle Text on every
+        # tmp2 slide (Vorlage master's ftr placeholder holds the literal
+        # text "Quelle Text: Autorennachname..."). That over-emitted on
+        # divider slides and also double-emitted on slides 34-58/82 which
+        # have their own slide-level Quelle.
         #
-        #   - **Rendered shapes** for ftr / dt / sldNum: these ARE actual
-        #     visible placeholders. PPT renders them on every slide unless
-        #     the slide explicitly suppresses via <p:hf/> or replaces them
-        #     at the layout/slide level. Vorlage's master defines the
-        #     footer at (44.18, 660); without this pass slides like 5 never
-        #     get a footer in the output.
-        #
-        # So we only walk master for {ftr, dt, sldNum}. Skip title / body /
-        # ctrTitle / subTitle even when missing — those types resolve via
-        # the cascade for whichever slide/layout body placeholder uses them.
-        _MASTER_RENDERED_PH_TYPES = frozenset({"ftr", "dt", "sldNum"})
-        slide_ph_types_for_master = {p.type for p in placeholders if p.type is not None}
-
-        slide_show_master_attr = slide._element.get("showMasterSp")
-        layout_show_master_attr = (
-            layout._element.get("showMasterSp")
-            if layout._element is not None else None
-        )
-        if slide_show_master_attr != "0" and layout_show_master_attr != "0":
-            master_sp_tree_node = None
-            m_csld = master._element.find(_x("p:cSld"))
-            if m_csld is not None:
-                master_sp_tree_node = m_csld.find(_x("p:spTree"))
-            if master_sp_tree_node is not None:
-                for msp in master_sp_tree_node.findall(_x("p:sp")):
-                    midx = _ph_idx(msp)
-                    mph_type = _ph_type(msp)
-                    if mph_type not in _MASTER_RENDERED_PH_TYPES:
-                        continue
-                    if midx in slide_ph_idxes:
-                        continue
-                    if mph_type in slide_ph_types_for_master:
-                        continue
-                    inherited_ph = _parse_inherited_text_placeholder(
-                        msp, mph_type, midx, master,
-                        master_tx_styles, theme_el, clr_map, typefaces,
-                    )
-                    if inherited_ph is not None:
-                        placeholders.append(inherited_ph)
-                        if midx is not None:
-                            slide_ph_idxes.add(midx)
-                        if mph_type is not None:
-                            slide_ph_types_for_master.add(mph_type)
+        # The layout walk above already inherits any layout-level
+        # placeholders the user wants visible (e.g. body, title, dt with
+        # actual content). Master content stays in its proper role as a
+        # cascade source, not a rendered shape.
+        pass
 
         # Master-level inheritance. OOXML: master shapes render under every
         # slide unless the slide or its layout sets showMasterSp="0". The IU
