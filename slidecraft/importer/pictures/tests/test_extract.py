@@ -1,6 +1,7 @@
 """Tests for slidecraft.importer.pictures.extract and manifest."""
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import os
@@ -43,6 +44,16 @@ def _make_pptx(media: dict[str, bytes]) -> bytes:
     return buf.getvalue()
 
 
+def _stored(data: bytes, ext: str) -> str:
+    """Return the expected SHA1-content-hash basename for *data* and *ext*.
+
+    Mirrors :func:`slidecraft.importer.pictures.extract._content_hash_name`
+    so tests can assert the on-disk filename without re-deriving the hash
+    from the manifest each time.
+    """
+    return f"{hashlib.sha1(data).hexdigest()}{ext}"
+
+
 # ---------------------------------------------------------------------------
 # extract_pictures — basic asset copy
 # ---------------------------------------------------------------------------
@@ -55,7 +66,7 @@ class TestExtractPictures:
 
         extract_pictures(pptx_path, tmp_path / "theme")
 
-        assert (tmp_path / "theme" / "public" / "assets" / "image1.png").exists()
+        assert (tmp_path / "theme" / "assets" / _stored(_PNG_MAGIC, ".png")).exists()
 
     def test_jpeg_file_lands_in_assets(self, tmp_path: Path):
         pptx_bytes = _make_pptx({"photo.jpg": _JPEG_MAGIC})
@@ -64,7 +75,7 @@ class TestExtractPictures:
 
         extract_pictures(pptx_path, tmp_path / "theme")
 
-        assert (tmp_path / "theme" / "public" / "assets" / "photo.jpg").exists()
+        assert (tmp_path / "theme" / "assets" / _stored(_JPEG_MAGIC, ".jpg")).exists()
 
     def test_bytes_are_identical(self, tmp_path: Path):
         pptx_bytes = _make_pptx({"image1.png": _PNG_MAGIC})
@@ -73,7 +84,7 @@ class TestExtractPictures:
 
         extract_pictures(pptx_path, tmp_path / "theme")
 
-        written = (tmp_path / "theme" / "public" / "assets" / "image1.png").read_bytes()
+        written = (tmp_path / "theme" / "assets" / _stored(_PNG_MAGIC, ".png")).read_bytes()
         assert written == _PNG_MAGIC
 
     def test_multiple_files(self, tmp_path: Path):
@@ -88,10 +99,10 @@ class TestExtractPictures:
 
         extract_pictures(pptx_path, tmp_path / "theme")
 
-        assets = tmp_path / "theme" / "public" / "assets"
-        assert (assets / "image1.png").exists()
-        assert (assets / "photo.jpg").exists()
-        assert (assets / "chart.emf").exists()
+        assets = tmp_path / "theme" / "assets"
+        assert (assets / _stored(_PNG_MAGIC, ".png")).exists()
+        assert (assets / _stored(_JPEG_MAGIC, ".jpg")).exists()
+        assert (assets / _stored(_EMF_MAGIC, ".emf")).exists()
 
     def test_no_media_returns_empty_manifest(self, tmp_path: Path):
         pptx_bytes = _make_pptx({})
@@ -110,6 +121,7 @@ class TestExtractPictures:
         manifest = extract_pictures(pptx_path, tmp_path / "theme")
 
         assert isinstance(manifest, dict)
+        # Manifest is keyed by the original PPTX name, not the stored hash.
         assert "image1.png" in manifest
 
 
@@ -131,6 +143,19 @@ class TestExtractManifestContent:
         assert entry["warnings"] == []
         assert entry["derivatives"] == {}
 
+    def test_entry_records_stored_name(self, tmp_path: Path):
+        """The SHA1-deduped on-disk basename is recorded under ``stored_name``."""
+        pptx_bytes = _make_pptx({"image1.png": _PNG_MAGIC})
+        pptx_path = tmp_path / "deck.pptx"
+        pptx_path.write_bytes(pptx_bytes)
+
+        manifest = extract_pictures(pptx_path, tmp_path / "theme")
+
+        entry = manifest["image1.png"]
+        assert entry["stored_name"] == _stored(_PNG_MAGIC, ".png")
+        # And the file at that name actually exists.
+        assert (tmp_path / "theme" / "assets" / entry["stored_name"]).exists()
+
     def test_emf_entry_low_fidelity(self, tmp_path: Path):
         pptx_bytes = _make_pptx({"chart.emf": _EMF_MAGIC})
         pptx_path = tmp_path / "deck.pptx"
@@ -150,7 +175,7 @@ class TestExtractManifestContent:
 
         extract_pictures(pptx_path, tmp_path / "theme")
 
-        manifest_path = tmp_path / "theme" / "public" / "assets" / "manifest.json"
+        manifest_path = tmp_path / "theme" / "assets" / "manifest.json"
         assert manifest_path.exists()
 
     def test_manifest_json_is_valid(self, tmp_path: Path):
@@ -160,7 +185,7 @@ class TestExtractManifestContent:
 
         extract_pictures(pptx_path, tmp_path / "theme")
 
-        manifest_path = tmp_path / "theme" / "public" / "assets" / "manifest.json"
+        manifest_path = tmp_path / "theme" / "assets" / "manifest.json"
         data = json.loads(manifest_path.read_text(encoding="utf-8"))
         assert "image1.png" in data
 
@@ -171,9 +196,57 @@ class TestExtractManifestContent:
 
         extract_pictures(pptx_path, tmp_path / "theme")
 
-        manifest_path = tmp_path / "theme" / "public" / "assets" / "manifest.json"
+        manifest_path = tmp_path / "theme" / "assets" / "manifest.json"
         raw = manifest_path.read_text(encoding="utf-8")
         assert raw.endswith("\n")
+
+
+# ---------------------------------------------------------------------------
+# SHA1 content dedup
+# ---------------------------------------------------------------------------
+
+class TestContentDedup:
+    def test_two_pptx_names_identical_bytes_share_one_file(self, tmp_path: Path):
+        """Two PPTX media entries with identical bytes collapse to one on-disk file."""
+        pptx_bytes = _make_pptx(
+            {"image1.png": _PNG_MAGIC, "image5.png": _PNG_MAGIC}
+        )
+        pptx_path = tmp_path / "deck.pptx"
+        pptx_path.write_bytes(pptx_bytes)
+
+        manifest = extract_pictures(pptx_path, tmp_path / "theme")
+
+        # Manifest still has two entries — one per original PPTX name.
+        assert "image1.png" in manifest
+        assert "image5.png" in manifest
+        # …but both point at the same stored file.
+        assert manifest["image1.png"]["stored_name"] == manifest["image5.png"]["stored_name"]
+        # …and only one file actually exists on disk.
+        assets = tmp_path / "theme" / "assets"
+        png_files = sorted(p.name for p in assets.glob("*.png"))
+        assert png_files == [_stored(_PNG_MAGIC, ".png")]
+
+    def test_different_bytes_get_different_stored_names(self, tmp_path: Path):
+        png_a = _PNG_MAGIC
+        png_b = _PNG_MAGIC + b"\xff" * 50
+        pptx_bytes = _make_pptx({"image1.png": png_a, "image2.png": png_b})
+        pptx_path = tmp_path / "deck.pptx"
+        pptx_path.write_bytes(pptx_bytes)
+
+        manifest = extract_pictures(pptx_path, tmp_path / "theme")
+
+        assert manifest["image1.png"]["stored_name"] != manifest["image2.png"]["stored_name"]
+
+    def test_stored_name_preserves_extension(self, tmp_path: Path):
+        """SHA1 dedup keeps the extension so MIME-by-ext lookups still work."""
+        pptx_bytes = _make_pptx({"weird.JPG": _JPEG_MAGIC})
+        pptx_path = tmp_path / "deck.pptx"
+        pptx_path.write_bytes(pptx_bytes)
+
+        manifest = extract_pictures(pptx_path, tmp_path / "theme")
+
+        # Extension is lowercased for filesystem portability.
+        assert manifest["weird.JPG"]["stored_name"].endswith(".jpg")
 
 
 # ---------------------------------------------------------------------------
@@ -188,7 +261,7 @@ class TestIdempotency:
         theme_dir = tmp_path / "theme"
 
         extract_pictures(pptx_path, theme_dir)
-        asset = theme_dir / "public" / "assets" / "image1.png"
+        asset = theme_dir / "assets" / _stored(_PNG_MAGIC, ".png")
         mtime_first = asset.stat().st_mtime
 
         # Second run: file should NOT be overwritten (same bytes)
@@ -197,7 +270,13 @@ class TestIdempotency:
 
         assert mtime_first == mtime_second
 
-    def test_rerun_different_bytes_overwrites(self, tmp_path: Path):
+    def test_rerun_different_bytes_writes_new_file(self, tmp_path: Path):
+        """When bytes change, the new content lands at its own SHA1-named file.
+
+        (The old file isn't actively cleaned — that's expected behaviour for a
+        content-addressed store; orphans are harmless and a future cleanup pass
+        could prune them.)
+        """
         pptx_bytes = _make_pptx({"image1.png": _PNG_MAGIC})
         pptx_path = tmp_path / "deck.pptx"
         pptx_path.write_bytes(pptx_bytes)
@@ -212,8 +291,8 @@ class TestIdempotency:
 
         extract_pictures(pptx_path, theme_dir)
 
-        written = (theme_dir / "public" / "assets" / "image1.png").read_bytes()
-        assert written == new_png
+        new_stored = (theme_dir / "assets" / _stored(new_png, ".png")).read_bytes()
+        assert new_stored == new_png
 
     def test_manifest_rewritten_on_rerun(self, tmp_path: Path):
         pptx_bytes = _make_pptx({"image1.png": _PNG_MAGIC})
@@ -228,7 +307,7 @@ class TestIdempotency:
         pptx_path.write_bytes(pptx_bytes2)
         extract_pictures(pptx_path, theme_dir)
 
-        manifest_path = theme_dir / "public" / "assets" / "manifest.json"
+        manifest_path = theme_dir / "assets" / "manifest.json"
         data = json.loads(manifest_path.read_text(encoding="utf-8"))
         assert "photo.jpg" in data
 
@@ -301,17 +380,17 @@ class TestIntegrationRealPptx:
 
     def test_assets_dir_created(self, tmp_path: Path):
         extract_pictures(_TEST_PPTX, tmp_path / "theme")
-        assets = tmp_path / "theme" / "public" / "assets"
+        assets = tmp_path / "theme" / "assets"
         assert assets.is_dir()
 
     def test_manifest_json_written(self, tmp_path: Path):
         extract_pictures(_TEST_PPTX, tmp_path / "theme")
-        manifest_path = tmp_path / "theme" / "public" / "assets" / "manifest.json"
+        manifest_path = tmp_path / "theme" / "assets" / "manifest.json"
         assert manifest_path.exists()
 
     def test_all_entries_have_required_keys(self, tmp_path: Path):
         manifest = extract_pictures(_TEST_PPTX, tmp_path / "theme")
-        required = {"source_format", "fidelity", "derivatives", "warnings"}
+        required = {"stored_name", "source_format", "fidelity", "derivatives", "warnings"}
         for name, entry in manifest.items():
             missing = required - entry.keys()
             assert not missing, f"{name} is missing keys: {missing}"

@@ -3,18 +3,25 @@
 Provides utilities to determine the SSIM threshold to use when comparing a
 rendered Slidev layout against the original PPTX slide.  The threshold is
 relaxed when any picture referenced by the layout has a ``fidelity`` of
-``"low"`` in ``deck/public/assets/manifest.json`` (e.g. an EMF or WMF that
-was converted to PNG with lossy re-encoding), and strict when all pictures are
+``"low"`` in ``theme/assets/manifest.json`` (e.g. an EMF or WMF that was
+converted to PNG with lossy re-encoding), and strict when all pictures are
 ``"exact"`` or ``"high"``.
 
 Derivative lookup:  a layout often references a *derivative* filename (a
 cropped or transformed variant, e.g.
-``image1__crop_l10000_t0_r0_b0.png``) rather than the original.  Derivatives
+``<sha1>__crop_l10000_t0_r0_b0.png``) rather than the original.  Derivatives
 are stored under each manifest entry's ``"derivatives"`` dict.  A derivative
 inherits the fidelity of the original entry it belongs to.
 
 Unknown assets (present in the layout but absent from the manifest) are
 treated as ``"low"``-fidelity defensively — worst-case assumption.
+
+Asset reference forms in the layout .vue files:
+  * ES module import (current emit):
+      ``import _asset_0 from '../assets/<sha1>.png'``
+  * CSS ``url(...)`` (e.g. inline background images): unchanged.
+  * Legacy ``src="/assets/foo.png"`` and ``url(/assets/foo.png)``: still
+    recognised so the helper keeps working against older snapshots.
 """
 from __future__ import annotations
 
@@ -23,31 +30,43 @@ import re
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
-# Regex patterns for /assets/<name> URL references in .vue files
+# Regex patterns for asset references in .vue files
 # ---------------------------------------------------------------------------
 
-# Matches: src="/assets/foo.png" or src='/assets/foo.png'
+# Matches: import _asset_0 from '../assets/foo.png'
+#       or import asset from "../assets/foo.png"
+# Captures the path segment.
+_RE_ES_IMPORT = re.compile(
+    r"""import\s+\w+\s+from\s+['"](?P<path>(?:\.{1,2}/)+assets/[^'"?#\s]+)[^'"]*['"]""",
+    re.IGNORECASE,
+)
+
+# Matches: src="/assets/foo.png" or src='/assets/foo.png'  (legacy form)
 # Captures the path segment (without query string / fragment).
 _RE_SRC_ATTR = re.compile(
     r"""src\s*=\s*['"](?P<path>/assets/[^'"?#\s]+)[^'"]*['"]""",
     re.IGNORECASE,
 )
 
-# Matches: url(/assets/foo.png) or url('/assets/foo.png') or url("/assets/foo.png")
+# Matches: url(/assets/foo.png), url('/assets/foo.png'), url("/assets/foo.png")
+#       also relative forms like url(../assets/foo.png)
 # Captures the path segment (without query string / fragment).
 _RE_CSS_URL = re.compile(
-    r"""url\(\s*['"]?(?P<path>/assets/[^'")?#\s]+)[^'")]*['"]?\s*\)""",
+    r"""url\(\s*['"]?(?P<path>(?:/|(?:\.{1,2}/)+)assets/[^'")?#\s]+)[^'")]*['"]?\s*\)""",
     re.IGNORECASE,
 )
 
 
 def collect_asset_refs_from_layout(layout_vue_path: Path) -> list[str]:
-    """Scan a layoutN.vue file for ``/assets/<name>`` URL references.
+    """Scan a layoutN.vue file for asset references.
 
     Returns a sorted, unique list of bare basenames (no leading path, no query
-    string, no fragment).  Both HTML attribute form
-    (``src="/assets/foo.png"``) and CSS form
-    (``url(/assets/bar.jpg)``) are recognised.
+    string, no fragment). Three reference forms are recognised:
+
+      1. ES module imports (current emit):
+         ``import _asset_0 from '../assets/foo.png'``
+      2. Legacy site-root HTML attributes: ``src="/assets/foo.png"``
+      3. CSS ``url(...)`` (both site-root and relative forms)
 
     Args:
         layout_vue_path: Absolute path to the ``layoutN.vue`` file to scan.
@@ -66,13 +85,14 @@ def collect_asset_refs_from_layout(layout_vue_path: Path) -> list[str]:
 
     basenames: set[str] = set()
 
+    for match in _RE_ES_IMPORT.finditer(text):
+        basenames.add(Path(match.group("path")).name)
+
     for match in _RE_SRC_ATTR.finditer(text):
-        path = match.group("path")
-        basenames.add(Path(path).name)
+        basenames.add(Path(match.group("path")).name)
 
     for match in _RE_CSS_URL.finditer(text):
-        path = match.group("path")
-        basenames.add(Path(path).name)
+        basenames.add(Path(match.group("path")).name)
 
     return sorted(basenames)
 

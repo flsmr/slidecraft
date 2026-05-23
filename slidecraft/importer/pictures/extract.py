@@ -1,20 +1,27 @@
-"""Extract media assets from a PPTX zip into the Slidev deck's public/assets/.
+"""Extract media assets from a PPTX zip into a content-hashed asset directory.
 
-Copies every file found under ``ppt/media/`` in the PPTX zip byte-for-byte into
-``output_dir/public/assets/``, then classifies each image and writes a manifest.
+Copies every file found under ``ppt/media/`` in the PPTX zip into
+``output_dir/assets/`` under a SHA1-content-hash filename (``<sha1>.<ext>``),
+then classifies each image and writes a manifest.
 
-The caller passes the *deck* directory: Slidev's Vite dev server only exposes
-the deck's ``public/`` at site root. A theme's ``public/`` directory is NOT
-served by Vite — putting assets there causes ``/assets/<name>`` requests to
-fall through to the SPA index.html (returning text/html instead of the image
-bytes). Assets therefore live with the deck.
+**Dedup by content.** Two PPTX media entries with identical bytes (e.g. the
+same logo embedded twice under ``image1.png`` and ``image7.png``) collapse to a
+single on-disk file. The manifest records every original PPTX name that
+resolves to that file via the ``stored_name`` field on each entry.
 
-The operation is idempotent: re-running with the same PPTX and the same
-output_dir is a no-op on bytes (files with identical content are not
-overwritten) and the manifest is always rewritten.
+**Idempotent.** Re-running with the same PPTX and the same output_dir is a
+no-op on bytes — files with identical content are not overwritten — and the
+manifest is always rewritten.
+
+**Where files land.** ``output_dir`` is intended to be the *theme* directory
+of an importer run: the theme owns its visual assets and ships them with the
+Vue layouts that ``import`` them via ES module references. Vite resolves and
+bundles these imports for any deck that consumes the theme, so the theme is
+self-contained regardless of which deck uses it.
 """
 from __future__ import annotations
 
+import hashlib
 import re
 import zipfile
 from pathlib import Path
@@ -120,37 +127,62 @@ def _patch_tiny_stroked_paths(svg_bytes: bytes) -> bytes:
     return etree.tostring(root, xml_declaration=False)
 
 
-def extract_pictures(pptx_path: Path, output_dir: Path) -> dict[str, dict]:
-    """Copy ``ppt/media/*`` from *pptx_path* to *output_dir/public/assets/*.
+def _content_hash_name(filename: str, data: bytes) -> str:
+    """Return the SHA1-based content-addressed basename for *data*.
 
-    Reads every entry whose zip path starts with ``ppt/media/`` from the PPTX
-    (which is a zip archive), copies its bytes verbatim to
-    ``output_dir/public/assets/<filename>``, classifies the image, and builds
-    a manifest dict.  The manifest is written to
-    ``output_dir/public/assets/manifest.json`` before returning.
+    The extension is taken verbatim from *filename* (lowercased) so that
+    downstream MIME-type detection by extension keeps working. The hash spans
+    the full SHA1 (40 hex chars) — collisions are vanishingly unlikely and a
+    long stable name plays well with Vite's own content-hashing on bundle
+    output.
+
+    Example::
+
+        _content_hash_name("image1.PNG", b"...") == "<sha1>.png"
+    """
+    ext = Path(filename).suffix.lower()
+    digest = hashlib.sha1(data).hexdigest()
+    return f"{digest}{ext}"
+
+
+def extract_pictures(pptx_path: Path, output_dir: Path) -> dict[str, dict]:
+    """Copy ``ppt/media/*`` from *pptx_path* to *output_dir/assets/*, deduped by content.
+
+    Each PPTX media entry is read, its bytes optionally SVG-patched (see
+    :func:`_patch_tiny_stroked_paths`), and the result is written to
+    ``output_dir/assets/<sha1>.<ext>``. Two PPTX entries with identical bytes
+    therefore share one on-disk file.
+
+    The returned manifest is keyed by the *original* PPTX basename (e.g.
+    ``"image1.png"``) so callers that hold those references — every
+    :class:`~slidecraft.importer.model.Picture` does — can look up the real
+    stored filename via the ``stored_name`` field.
 
     Idempotency: an existing asset file is only overwritten when its content
     differs from the zip entry bytes.
 
     Args:
         pptx_path:  Path to the source ``.pptx`` file.
-        output_dir: Root of the directory whose ``public/assets/`` subtree
-                    receives the bytes. For a Slidev import this MUST be the
-                    deck directory (not the theme) — see module docstring.
+        output_dir: Root of the directory whose ``assets/`` subtree receives
+                    the bytes. Intended to be the *theme* directory — see
+                    module docstring.
 
     Returns:
-        The manifest dict (also written to disk).  Keys are the original
-        filenames (e.g. ``"image1.png"``); values follow the pictures manifest
-        schema::
+        The manifest dict (also written to disk).  Keys are the original PPTX
+        filenames (e.g. ``"image1.png"``); values follow this schema::
 
             {
+                "stored_name": "<sha1>.png",   # actual file basename on disk
                 "source_format": "png",
                 "fidelity": "exact",
                 "derivatives": {},
                 "warnings": []
             }
+
+        Multiple original names may share the same ``stored_name`` when the
+        underlying bytes are identical.
     """
-    assets_dir = output_dir / "public" / "assets"
+    assets_dir = output_dir / "assets"
     assets_dir.mkdir(parents=True, exist_ok=True)
 
     manifest: dict[str, dict] = {}
@@ -172,13 +204,17 @@ def extract_pictures(pptx_path: Path, output_dir: Path) -> dict[str, dict]:
             # tiny bbox with fill="none" and rely on the stroke overlapping
             # itself to look filled. Browsers render that as an outline,
             # not the filled blob PowerPoint draws — so we set fill=stroke
-            # on those paths so the visual matches.
+            # on those paths so the visual matches. The patch runs BEFORE
+            # hashing so the stored file's SHA1 matches its on-disk bytes.
             if filename.lower().endswith(".svg"):
                 data = _patch_tiny_stroked_paths(data)
 
-            dest = assets_dir / filename
+            stored_name = _content_hash_name(filename, data)
+            dest = assets_dir / stored_name
 
-            # Idempotency: skip write when bytes are identical
+            # Idempotency: skip write when bytes are identical.
+            # Two original PPTX names with the same SHA1 also land here
+            # (second iteration sees dest already correct).
             if dest.exists() and dest.read_bytes() == data:
                 pass
             else:
@@ -186,6 +222,7 @@ def extract_pictures(pptx_path: Path, output_dir: Path) -> dict[str, dict]:
 
             source_format, fidelity, warnings = classify(filename, data)
             manifest[filename] = {
+                "stored_name": stored_name,
                 "source_format": source_format,
                 "fidelity": fidelity,
                 "derivatives": {},

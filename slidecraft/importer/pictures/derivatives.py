@@ -207,6 +207,8 @@ def apply_derivative(
     op: str,
     params: dict,
     manifest: dict,
+    *,
+    target_entry: dict | None = None,
 ) -> str:
     """Apply *op* to ``asset_dir/original_name`` and write the derived file.
 
@@ -218,10 +220,22 @@ def apply_derivative(
         asset_dir:     Directory that contains *original_name* and where the
                        derived file will be written.
         original_name: Basename of the source image (must exist in *asset_dir*).
+                       After the SHA1-dedup change in
+                       :mod:`~slidecraft.importer.pictures.extract`, this is
+                       typically the *stored name* (``<sha1>.<ext>``), not the
+                       PPTX-internal name.
         op:            One of ``"crop"``, ``"duotone"``, ``"soft_edge"``.
         params:        Op-specific parameters (see module docstring for shapes).
         manifest:      Live manifest dict keyed by image basename.  Updated in
                        place; caller is responsible for persisting to disk.
+        target_entry:  Optional manifest entry dict to attach the derivative
+                       record to.  When ``None`` (default), the derivative
+                       attaches to ``manifest[original_name]`` — the historical
+                       behaviour.  When provided, the derivative attaches to
+                       *target_entry* instead, leaving ``manifest[original_name]``
+                       untouched.  Used by callers that pass the *stored* name
+                       as *original_name* but want the derivative recorded
+                       under the original PPTX-name entry.
 
     Returns:
         Basename of the derived file (relative to *asset_dir*).
@@ -248,7 +262,8 @@ def apply_derivative(
         derived_img.save(dest_path)
 
     # Ensure manifest entry regardless of whether we wrote the file
-    manifest.setdefault(original_name, {}).setdefault("derivatives", {})[derived_name] = {
+    entry = target_entry if target_entry is not None else manifest.setdefault(original_name, {})
+    entry.setdefault("derivatives", {})[derived_name] = {
         "op": op,
         "params": params,
     }

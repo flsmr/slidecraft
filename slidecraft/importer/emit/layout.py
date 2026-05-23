@@ -297,15 +297,20 @@ def _placeholder_style(ph: Placeholder, frame_anchor: str = "t") -> str:
 # Picture helpers (P6)
 # ---------------------------------------------------------------------------
 
-def _resolve_asset_url(asset_ref: str, effects: dict) -> str:
-    """Compute the final ``/assets/...`` URL after the derivative chain.
+def _resolve_asset_name(asset_ref: str, effects: dict) -> str:
+    """Compute the final asset basename after the derivative chain.
 
     PPT effects that require pre-baked image work (crop / duotone / soft_edge)
     produce ``derivatives_needed`` entries on the effects dict. Their
     filenames are deterministic via
     :func:`pictures.derivatives.derivative_filename`, so emit can predict the
-    final URL without running Pillow — the actual file write happens later in
-    the build pipeline (convert.py orchestrates the work-order list).
+    final basename without running Pillow — the actual file write happens
+    later in the build pipeline (convert.py orchestrates the work-order list).
+
+    Returns the bare basename (e.g. ``"<sha1>__crop_l10000_t0_r0_b0.png"``);
+    the caller wires it into a Vite-resolvable ES module import path so the
+    asset URL is determined by Vite at build/dev time rather than being a
+    hard-coded site-root path.
     """
     name = asset_ref
     for d in effects.get("derivatives_needed", []) or []:
@@ -315,7 +320,7 @@ def _resolve_asset_url(asset_ref: str, effects: dict) -> str:
             # Skip a malformed work order rather than break emit; warnings
             # for unsupported ops live in effects.warnings already.
             continue
-    return f"/assets/{name}"
+    return name
 
 
 def _picture_wrapper_style(pic: Picture) -> str:
@@ -372,21 +377,58 @@ def _picture_wrapper_style(pic: Picture) -> str:
     return ";".join(parts)
 
 
-def _picture_img_tag(pic: Picture) -> str:
+def _picture_img_tag(pic: Picture, asset_var_map: dict[str, str]) -> str:
     """Emit the inner ``<img>`` element for a Picture, or empty string if no asset.
 
     The ``<img>`` always fills the wrapper (object-fit: fill mirrors PPT's
     default stretch behaviour). Alt text is HTML-escaped on quotes only —
     other characters are safe inside an attribute value.
+
+    The ``src`` attribute is bound (``:src="_asset_N"``) to a JavaScript
+    identifier imported via ``<script setup>`` at the top of the layout file.
+    *asset_var_map* maps the resolved asset basename (post-derivative chain)
+    to its imported variable name. The map is built once per layout by
+    :func:`_emit_layout_vue` and threaded into this function so emit can
+    swap concrete URLs for the corresponding bindings.
     """
     if not pic.asset_ref:
         return ""
     alt = (pic.alt_text or "").replace('"', "&quot;")
-    url = _resolve_asset_url(pic.asset_ref, pic.effects or {})
+    final = _resolve_asset_name(pic.asset_ref, pic.effects or {})
+    var = asset_var_map.get(final)
+    if var is None:
+        # Defensive: caller should have interned every asset_ref via
+        # _collect_layout_assets, but if a derivative chain mismatch slips
+        # through, fall back to a relative-path expression so the layout
+        # still compiles. Vite will resolve the path at build time.
+        var = f"'../assets/{final}'"
     return (
-        f'<img src="{url}" alt="{alt}" '
+        f'<img :src="{var}" alt="{alt}" '
         f'style="width:100%;height:100%;object-fit:fill;display:block;"/>'
     )
+
+
+def _collect_layout_assets(slide: Slide) -> dict[str, str]:
+    """Return ``{stored_asset_basename: js_identifier}`` for every picture in *slide*.
+
+    Walks every :class:`~slidecraft.importer.model.Picture` on the slide,
+    resolves its post-derivative basename via :func:`_resolve_asset_name`, and
+    assigns each unique basename a stable JavaScript identifier
+    (``_asset_0``, ``_asset_1``, …) in first-encounter order. Order is
+    insertion-stable so the emitted ``<script setup>`` import list is
+    deterministic across runs of the same input.
+
+    Picture-typed placeholders without a bound image (``asset_ref is None``)
+    are skipped — they emit an empty slot, not an ``<img>``.
+    """
+    asset_var_map: dict[str, str] = {}
+    for pic in slide.pictures:
+        if not pic.asset_ref:
+            continue
+        final = _resolve_asset_name(pic.asset_ref, pic.effects or {})
+        if final not in asset_var_map:
+            asset_var_map[final] = f"_asset_{len(asset_var_map)}"
+    return asset_var_map
 
 
 # ---------------------------------------------------------------------------
@@ -398,6 +440,22 @@ _INDENT = "  "
 
 def _emit_layout_vue(slide: Slide, canvas_width: int, canvas_height: int) -> str:
     lines: list[str] = []
+
+    # Collect every picture asset this slide will reference (post-derivatives),
+    # assign each a stable JS identifier, and emit a <script setup> block that
+    # ES-imports them from ../assets/. Doing this here — instead of letting
+    # the markdown reference deck-root /assets/ URLs — keeps the theme
+    # self-contained: Vite resolves and bundles these imports for any deck
+    # that consumes the theme, so the asset files travel WITH the theme.
+    asset_var_map = _collect_layout_assets(slide)
+    if asset_var_map:
+        lines.append("<script setup>")
+        # Insertion order is preserved (Python dicts since 3.7) and the
+        # numeric suffix on the variable name makes the order self-evident.
+        for stored_name, var in asset_var_map.items():
+            lines.append(f"import {var} from '../assets/{stored_name}'")
+        lines.append("</script>")
+        lines.append("")
 
     lines.append("<template>")
     lines.append(f'{_INDENT}<div class="slidev-layout">')
@@ -424,7 +482,7 @@ def _emit_layout_vue(slide: Slide, canvas_width: int, canvas_height: int) -> str
     # supplying their own ::ph_<idx>:: block.
     for pic in slide.pictures:
         style = _picture_wrapper_style(pic)
-        img_tag = _picture_img_tag(pic)
+        img_tag = _picture_img_tag(pic, asset_var_map)
         if pic.is_placeholder and pic.ph_idx is not None:
             lines.append(
                 f'{_INDENT * 3}<div class="ph-{pic.ph_idx}" style="{style}">'

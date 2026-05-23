@@ -106,26 +106,47 @@ def convert(
     # block runs before emit_layouts/emit_deck. extract_pictures is a no-op
     # for decks without any media, so the cost is negligible on text-only PPTX.
     #
-    # Assets land under the *deck* (not the theme): Slidev's Vite dev server
-    # only serves the deck's public/ at site root. See pictures/extract.py.
-    manifest = extract_pictures(pptx_path, deck_dir)
-    assets_dir = deck_dir / "public" / "assets"
+    # Assets land under the *theme* (theme/assets/): the theme owns its
+    # visual assets and ships them with the Vue layouts that import them via
+    # ES module references. Vite resolves those imports for any deck that
+    # consumes the theme, so the theme is self-contained regardless of which
+    # deck uses it. See pictures/extract.py.
+    manifest = extract_pictures(pptx_path, theme_dir)
+    assets_dir = theme_dir / "assets"
     derivative_warnings: list[str] = []
     for slide in presentation.slides:
         for pic in slide.pictures:
             if not pic.asset_ref:
                 continue
+            # Remap from PPTX-internal name (e.g. "image1.png") to the
+            # SHA1-deduped stored name (e.g. "abc….png"). The manifest entry
+            # holds both, plus the derivatives dict we want to populate.
+            original_ref = pic.asset_ref
+            entry = manifest.get(original_ref)
+            if entry is None:
+                # PPTX picture references missing media — parse should have
+                # logged this; skip silently here rather than crash emit.
+                continue
+            stored = entry["stored_name"]
+            pic.asset_ref = stored
             for d in (pic.effects or {}).get("derivatives_needed", []) or []:
                 op = d.get("op")
                 params = d.get("params", {})
                 if not op:
                     continue
                 try:
-                    apply_derivative(assets_dir, pic.asset_ref, op, params, manifest)
+                    # Pass `target_entry=entry` so the derivative is recorded
+                    # under the original PPTX-name entry (which holds the
+                    # fidelity that verify_helper reads), not under a new
+                    # top-level entry keyed by the stored name.
+                    apply_derivative(
+                        assets_dir, stored, op, params, manifest,
+                        target_entry=entry,
+                    )
                 except (FileNotFoundError, ValueError) as exc:
                     derivative_warnings.append(
                         f"slide{slide.index}: derivative {op!r} on "
-                        f"{pic.asset_ref!r} skipped — {exc}"
+                        f"{original_ref!r} skipped — {exc}"
                     )
             # Per-picture parse_effects warnings (unsupported color space, etc.)
             for w in (pic.effects or {}).get("warnings", []) or []:
