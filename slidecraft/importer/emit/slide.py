@@ -460,14 +460,44 @@ def _emit_html_list(
                 grouped[-1] = ("run", devs, grouped[-1][2] + run.text)
             else:
                 grouped.append(("run", devs, run.text))
+
+        # Hoist common font-size to the <li> so ::marker inherits it.
+        # Without this, the auto-num/char marker uses the <li>'s
+        # font-size (inherited from the placeholder wrapper = level-0
+        # default), while the text inside is wrapped in <span style=
+        # "font-size:Npx"> at the per-run / per-level deviation —
+        # marker LARGER than text. Visible on tmp2 slide 1 where the
+        # "1." "2." numbers were noticeably bigger than the list text.
+        run_fontsizes: set = set()
+        for kind, devs, _text in grouped:
+            if kind != "run" or not devs:
+                continue
+            run_fontsizes.add(devs.get("font_size_pt"))
+        li_style = ""
+        hoist_fs: float | None = None
+        # All non-br runs share a single font-size deviation → hoist.
+        if (
+            run_fontsizes
+            and len(run_fontsizes) == 1
+            and None not in run_fontsizes
+        ):
+            hoist_fs = next(iter(run_fontsizes))
+            li_style = f' style="font-size:{hoist_fs:.4g}pt"'
+
         run_pieces: list[str] = []
         for k, devs, text in grouped:
             if k == "br":
                 run_pieces.append("<br/>")
             else:
+                # If we hoisted font-size to the <li>, drop it from per-run
+                # spans (otherwise we double-emit identical font-size).
+                # The span's other deviations (color, weight, family, etc.)
+                # still flow through.
+                if hoist_fs is not None and devs and "font_size_pt" in devs:
+                    devs = {k: v for k, v in devs.items() if k != "font_size_pt"}
                 run_pieces.append(_emit_run_html(text, devs or {}))
         inner = "".join(run_pieces)
-        pieces.append(f"<li>{inner}</li>")
+        pieces.append(f"<li{li_style}>{inner}</li>")
     # Close any remaining open levels.
     while current_level >= 0:
         pieces.append(f"</{tag}>")
