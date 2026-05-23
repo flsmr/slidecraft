@@ -448,10 +448,22 @@ def _emit_html_list(
     eff_bullet = paragraphs[0].bullet or default_para.bullet
     tag = "ol" if eff_bullet == "auto-num" else "ul"
 
+    # OOXML's `lvl` attribute is a STYLE-CLASS selector (which lvlNpPr
+    # template applies for font/marker), NOT visual nesting depth — PPT
+    # renders every <a:p> flat, with visual indent coming from marL/indent.
+    # HTML/markdown have no flat-with-style equivalent, so we use <ul>
+    # nesting for indent.  But starting nesting from level 0 when the
+    # author placed a solo paragraph at lvl=3 produces four <ul> wrappers
+    # and a huge left margin, which doesn't match what PPT shows (a single
+    # bullet, lightly indented).  Normalize each block to start at depth 0
+    # by subtracting the minimum level seen — gaps between non-adjacent
+    # levels are preserved.
+    base_level = min(p.level for p in paragraphs)
+
     pieces: list[str] = []
     current_level = -1
     for para in paragraphs:
-        target = para.level
+        target = para.level - base_level
         # Descend: open inner <ul>/<ol> blocks until we reach target.
         while current_level < target:
             current_level += 1

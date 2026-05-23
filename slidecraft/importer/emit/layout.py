@@ -497,6 +497,19 @@ def _emit_layout_vue(slide: Slide, canvas_width: int, canvas_height: int) -> str
     lines.append("  margin: 0;")
     lines.append("  list-style: revert;")
     lines.append("}")
+    # Override the browser default disc/circle/square (per-level <ul>
+    # nesting) with the literal "-" the markdown author typed.  When you
+    # write `- item` in slides.md the dash is markdown SYNTAX, not the
+    # rendered glyph — the glyph comes from list-style-type.  Most
+    # markdown previews use disc; Slidev decks driven by PPT templates
+    # often want a plain dash everywhere.  This rule sets the marker
+    # content to "- " for every nesting level of every <ul>.  PPT-driven
+    # bullets still win because their `.ph-N :deep(ul > li)::marker`
+    # selectors are more specific.  Ordered lists (`<ol>`) keep their
+    # native decimal markers.
+    lines.append(".slidev-layout .slide-root :deep(ul > li)::marker {")
+    lines.append('  content: "-\\00a0";')
+    lines.append("}")
 
     # Bullet styling per placeholder — ::marker CSS faithful to PPT.
     #
