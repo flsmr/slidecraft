@@ -304,7 +304,12 @@ class TestPictureEmission:
         pres = _make_pres([slide])
         content = _emit_and_read(tmp_path, pres)
         assert 'class="pic-42"' in content
-        assert 'src="/assets/image1.png"' in content
+        # ES-module import for the asset + Vue-bound :src in the <img>.
+        # The theme owns its assets and ships them as ../assets/<name>
+        # relative to the layout file; Vite resolves the import for any
+        # deck that consumes the theme.
+        assert "import _asset_0 from '../assets/image1.png'" in content
+        assert ':src="_asset_0"' in content
         assert "left:100px" in content
         assert "width:300px" in content
         # Free picture: no slot.
@@ -329,7 +334,9 @@ class TestPictureEmission:
         assert 'class="ph-3"' in content
         assert 'class="pic-99"' not in content
         # Slot named ph_<idx> with default <img> as fallback content.
-        assert '<slot name="ph_3"><img src="/assets/layout_default.png"' in content
+        # The default <img> uses an ES-import binding (theme-owned asset).
+        assert "import _asset_0 from '../assets/layout_default.png'" in content
+        assert '<slot name="ph_3"><img :src="_asset_0"' in content
 
     def test_picture_placeholder_without_bound_image_emits_empty_slot(self, tmp_path):
         pic = _make_pic(asset_ref=None, is_placeholder=True, ph_idx=5)
@@ -448,7 +455,9 @@ class TestPictureEmission:
         )
         slide = Slide(index=1, placeholders=[], pictures=[pic])
         content = _emit_and_read(tmp_path, _make_pres([slide]))
-        assert 'src="/assets/photo__crop_l10000_t0_r5000_b0.png"' in content
+        # The derived (post-crop) filename is what's imported and bound.
+        assert "import _asset_0 from '../assets/photo__crop_l10000_t0_r5000_b0.png'" in content
+        assert ':src="_asset_0"' in content
 
     def test_derivative_chain_composes_multiple_ops(self, tmp_path):
         """Crop then duotone produces a chained derived filename."""
