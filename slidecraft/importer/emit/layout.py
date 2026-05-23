@@ -517,6 +517,9 @@ def _emit_layout_vue(slide: Slide, canvas_width: int, canvas_height: int) -> str
             font       = para.bullet_font        if para.bullet_font        is not None else def_p.bullet_font
             size_pct   = para.bullet_size_pct    if para.bullet_size_pct    is not None else def_p.bullet_size_pct
             autonum    = para.bullet_autonum_type if para.bullet_autonum_type is not None else def_p.bullet_autonum_type
+            # marL / indent for marker positioning (PPT hanging-indent idiom).
+            mar_l_pt   = para.margin_left_pt     if para.margin_left_pt     is not None else def_p.margin_left_pt
+            indent_pt  = para.indent_pt          if para.indent_pt          is not None else def_p.indent_pt
 
             # The bullet selectors target markdown-rendered <ul>/<ol>/<li>
             # *inside* the slot — that content belongs to the parent
@@ -524,8 +527,44 @@ def _emit_layout_vue(slide: Slide, canvas_width: int, canvas_height: int) -> str
             # reaches it without :deep(). Without :deep() the rule compiles
             # to .slidev-layout[data-v-XXX] .ph-N[data-v-XXX] ul > li::marker,
             # which the slot DOM doesn't match (no data-v-XXX attribute).
-            chain = " ".join(["ul" if kind == "char" else "ol"] * (lvl + 1))
+            chain_tag = "ul" if kind == "char" else "ol"
+            chain = " ".join([chain_tag] * (lvl + 1))
             base_sel = f".slidev-layout .ph-{ph.idx} :deep({chain} > li)"
+            # PPT's hanging-bullet idiom: marL=N + indent=-N. Visually that
+            # means:
+            #   - bullet marker at x=0 (left edge of the text frame)
+            #   - paragraph text body starts at x=N pt and subsequent
+            #     wrapped lines align at x=N pt too
+            #
+            # CSS equivalent (one block, applied to each <li>):
+            #   padding-left: marL    → text base offset by marL
+            #   text-indent: indent   → first line (where marker sits)
+            #                            shifted by indent (negative pulls
+            #                            it back to x=0)
+            # The container <ul>/<ol> resets browser defaults so the offsets
+            # above are the ONLY horizontal positioning — otherwise the
+            # browser-default ~40px padding stacks with ours and bullets
+            # sit outside the placeholder.
+            container_sel = f".slidev-layout .ph-{ph.idx} :deep({chain})"
+            lines.append(f"{container_sel} {{")
+            lines.append("  padding-left: 0;")
+            lines.append("  margin: 0;")
+            lines.append("  list-style-position: outside;")
+            lines.append("}")
+
+            li_props: list[str] = []
+            if mar_l_pt is not None and mar_l_pt > 0:
+                li_props.append(
+                    f"  padding-left: {mar_l_pt * 96 / 72:.4g}px;"
+                )
+            if indent_pt is not None and indent_pt != 0:
+                li_props.append(
+                    f"  text-indent: {indent_pt * 96 / 72:.4g}px;"
+                )
+            if li_props:
+                lines.append(f"{base_sel} {{")
+                lines.extend(li_props)
+                lines.append("}")
 
             if kind == "char":
                 # Build a CSS ::marker rule. The marker `content` includes the
