@@ -210,23 +210,30 @@ def _parse_text_frame(
     theme_el: Optional[etree._Element] = None,
     clr_map: Optional[dict[str, str]] = None,
     layout_tx_body: Optional[etree._Element] = None,
+    master_tx_body: Optional[etree._Element] = None,
 ) -> TextFrame:
     """Parse <p:txBody> into a TextFrame, diffing each run/paragraph against the defaults.
 
     bodyPr attributes (anchor, insets, rotation, autofit) cascade slide → layout
-    per OOXML semantics: a missing or unset attribute on the slide-level bodyPr
-    inherits from the layout's bodyPr. Hardcoded OOXML defaults apply only when
-    neither slide nor layout sets the attribute.
+    → master per OOXML semantics: a missing or unset attribute on a lower-priority
+    bodyPr inherits from the next level up. The IU template's date/footer
+    placeholders rely on the master cascade (slide has empty <a:bodyPr/>, layout
+    doesn't redeclare the placeholder, master sets lIns=tIns=rIns=bIns=0).
+    Hardcoded OOXML defaults apply only when none of slide/layout/master set
+    the attribute.
     """
-    # Collect slide- and layout-level bodyPr (either may be None or empty).
+    # Collect bodyPr from each cascade level (any may be None).
     slide_body_pr = tx_body.find(_x("a:bodyPr"))
     layout_body_pr = (
         layout_tx_body.find(_x("a:bodyPr")) if layout_tx_body is not None else None
     )
+    master_body_pr = (
+        master_tx_body.find(_x("a:bodyPr")) if master_tx_body is not None else None
+    )
 
     def _attr_cascade(name: str) -> Optional[str]:
-        """Return the first non-None occurrence of bodyPr@name across slide → layout."""
-        for src in (slide_body_pr, layout_body_pr):
+        """Return the first non-None occurrence of bodyPr@name across slide → layout → master."""
+        for src in (slide_body_pr, layout_body_pr, master_body_pr):
             if src is not None:
                 v = src.get(name)
                 if v is not None:
@@ -234,8 +241,8 @@ def _parse_text_frame(
         return None
 
     def _child_cascade(local_name: str) -> Optional[etree._Element]:
-        """Return the first child element with the given local name across slide → layout."""
-        for src in (slide_body_pr, layout_body_pr):
+        """Return the first child element with the given local name across slide → layout → master."""
+        for src in (slide_body_pr, layout_body_pr, master_body_pr):
             if src is not None:
                 el = src.find(_x(f"a:{local_name}"))
                 if el is not None:
@@ -265,11 +272,14 @@ def _parse_text_frame(
         fs_str = norm_auto.get("fontScale", "100000")
         autofit_font_scale = int(fs_str) / 100000.0
 
-    # Parse paragraphs
+    # Parse paragraphs.  Each <a:p> may expand into multiple Paragraphs if it
+    # contains a hard line break (\r\n or \n) embedded inside an <a:t> — PPT
+    # treats those as paragraph breaks (new bullet), not soft line breaks.
     paragraphs: list[Paragraph] = []
     for p_el in tx_body.findall(_x("a:p")):
-        para = _parse_paragraph(p_el, default_run, default_para, theme_el, clr_map)
-        paragraphs.append(para)
+        paragraphs.extend(
+            _parse_paragraph(p_el, default_run, default_para, theme_el, clr_map)
+        )
 
     return TextFrame(
         paragraphs=paragraphs,
@@ -286,10 +296,24 @@ def _parse_paragraph(
     default_para: Paragraph,
     theme_el: Optional[etree._Element] = None,
     clr_map: Optional[dict[str, str]] = None,
-) -> Paragraph:
-    """Parse a single <a:p> element, returning a Paragraph with diffed properties."""
+) -> list[Paragraph]:
+    """Parse one ``<a:p>`` into one OR MORE :class:`Paragraph` objects.
+
+    A single PPT paragraph may expand into multiple model Paragraphs when
+    a hard line break (``\\r\\n`` / ``\\n`` / ``\\r``) appears INSIDE one
+    of its ``<a:t>`` runs. PowerPoint treats such embedded breaks as
+    paragraph separators (each segment becomes a NEW bullet when the
+    paragraph is bulleted) — see the IU template's slide 5 body, where
+    a single ``<a:p>`` ends one run with ``"...17 pt.\\r\\n"`` followed
+    by the next run starting "Um …" and PowerPoint renders that as two
+    bullets. This is distinct from the soft-break ``<a:br/>`` element,
+    which stays within a paragraph.
+
+    All produced Paragraphs share the same pPr / level / diff defaults
+    (cascaded from the input ``<a:p>``).
+    """
     ppr_el = p_el.find(_x("a:pPr"))
-    para_props = _extract_ppr(ppr_el)
+    para_props = _extract_ppr(ppr_el, theme_el, clr_map)
 
     # Level (indent level, 0-based)
     level = 0
@@ -297,53 +321,78 @@ def _parse_paragraph(
         lvl_str = ppr_el.get("lvl", "0")
         level = int(lvl_str)
 
-    # Build diffed paragraph (only emit fields that differ from default)
-    diffed = diff_para(para_props, default_para)
-    diffed.level = level
+    # Build the diff'd paragraph TEMPLATE — we deep-clone this per split.
+    diffed_template = diff_para(para_props, default_para)
+    diffed_template.level = level
 
-    # Parse runs
-    runs: list[Run] = []
-    for r_el in p_el.findall(_x("a:r")):
-        t_el = r_el.find(_x("a:t"))
-        text = t_el.text or "" if t_el is not None else ""
-        rpr_el = r_el.find(_x("a:rPr"))
-        run_props = _extract_rpr(rpr_el)
+    # Walk the <a:p>'s direct children in document order, accumulating runs
+    # into the CURRENT paragraph segment. A ``\\r\\n`` inside an <a:t>
+    # closes the current segment and opens a new one (paragraph break);
+    # ``<a:br/>`` stays within the current segment as a Run(text="\\n")
+    # marker which the emit layer renders as <br/>.
+    segments: list[list[Run]] = [[]]   # at least one segment
+
+    def _make_diffed_run(text: str, rpr_el: Optional[etree._Element]) -> Run:
+        run_props = _extract_rpr(rpr_el, theme_el, clr_map)
         run_props.text = text
         diffed_run = diff_run(run_props, default_run)
         diffed_run.text = text
-        runs.append(diffed_run)
+        return diffed_run
 
-    # Handle line breaks <a:br/> and field runs <a:fld/> — emit in document order
-    # <a:fld> elements (date, slide number, footer) contain <a:t> with their
-    # auto-populated text; we emit the field value as a regular run.
-    runs_ordered: list[Run] = []
+    def _add_text_with_paragraph_breaks(
+        text: str,
+        rpr_el: Optional[etree._Element],
+    ) -> None:
+        """Split *text* on universal newlines; each break closes the current
+        paragraph segment and opens a new one carrying the SAME pPr."""
+        # Normalise CRLF / CR → LF so we can split on a single delimiter.
+        normalised = text.replace("\r\n", "\n").replace("\r", "\n")
+        parts = normalised.split("\n")
+        for i, part in enumerate(parts):
+            if i > 0:
+                # Close current segment, open a new one.
+                segments.append([])
+            # Always emit a run (even empty) so explicit rPr stays attached.
+            segments[-1].append(_make_diffed_run(part, rpr_el))
+
     for child in p_el:
         tag = etree.QName(child.tag).localname
         if tag == "r":
             t_el = child.find(_x("a:t"))
             text = t_el.text or "" if t_el is not None else ""
             rpr_el = child.find(_x("a:rPr"))
-            run_props = _extract_rpr(rpr_el, theme_el, clr_map)
-            run_props.text = text
-            diffed_run = diff_run(run_props, default_run)
-            diffed_run.text = text
-            runs_ordered.append(diffed_run)
+            _add_text_with_paragraph_breaks(text, rpr_el)
         elif tag == "fld":
             # Field element: <a:fld type="slidenum"|"datetime1"|…>
-            # Extract the current field value from <a:t>, and run props from <a:rPr>.
             t_el = child.find(_x("a:t"))
             text = t_el.text or "" if t_el is not None else ""
             rpr_el = child.find(_x("a:rPr"))
-            run_props = _extract_rpr(rpr_el, theme_el, clr_map)
-            run_props.text = text
-            diffed_run = diff_run(run_props, default_run)
-            diffed_run.text = text
-            runs_ordered.append(diffed_run)
+            _add_text_with_paragraph_breaks(text, rpr_el)
         elif tag == "br":
-            runs_ordered.append(Run(text="\n"))
+            # Soft line break — stays inside the current paragraph segment.
+            segments[-1].append(Run(text="\n"))
 
-    diffed.runs = runs_ordered if runs_ordered else runs
-    return diffed
+    # Materialise one Paragraph per segment, all sharing the template's pPr.
+    out: list[Paragraph] = []
+    for seg in segments:
+        p = Paragraph(
+            runs=seg,
+            align=diffed_template.align,
+            line_spacing_pct=diffed_template.line_spacing_pct,
+            space_before_pt=diffed_template.space_before_pt,
+            space_after_pt=diffed_template.space_after_pt,
+            indent_pt=diffed_template.indent_pt,
+            margin_left_pt=diffed_template.margin_left_pt,
+            bullet=diffed_template.bullet,
+            bullet_char=diffed_template.bullet_char,
+            bullet_color=diffed_template.bullet_color,
+            bullet_font=diffed_template.bullet_font,
+            bullet_size_pct=diffed_template.bullet_size_pct,
+            bullet_autonum_type=diffed_template.bullet_autonum_type,
+            level=diffed_template.level,
+        )
+        out.append(p)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -489,30 +538,53 @@ def _get_theme_el(master) -> Optional[etree._Element]:
 # Picture helpers (P4)
 # ---------------------------------------------------------------------------
 
+# Microsoft Office's SVG-blip extension URI (drawingML 2016).
+_SVG_BLIP_EXT_URI = "{96DAC541-7B7A-43D3-8B79-37D633B846F1}"
+_ASVG_NS = "http://schemas.microsoft.com/office/drawing/2016/SVG/main"
+
+
 def _resolve_blip_asset_ref(blip_fill_el: Optional[etree._Element], part) -> Optional[str]:
     """Resolve a ``<a:blipFill>``'s embedded image to a media basename.
 
-    Reads ``<a:blip r:embed="rIdN"/>`` from *blip_fill_el* and follows the
-    relationship on *part* to find the target media partname. Returns the
-    basename only (e.g. ``"image1.png"``) so it matches what
+    Reads ``<a:blip>`` from *blip_fill_el* and follows the relationship on
+    *part* to find the target media partname. Returns the basename only
+    (e.g. ``"image1.png"``) so it matches what
     :func:`pictures.extract.extract_pictures` writes to
     ``deck/public/assets/``.
 
-    Returns ``None`` if *blip_fill_el* is missing the ``<a:blip>`` child, the
-    ``r:embed`` attribute is absent, the rId is unknown, or the target is
-    not an image relationship.
+    **SVG preference:** PowerPoint stores SVG icons as a PNG rasterization
+    referenced by the standard ``r:embed`` attribute, *plus* an SVG original
+    referenced from an ``<a:extLst><a:ext uri="{96DAC...}"><asvg:svgBlip
+    r:embed="..."/>`` extension. When that extension is present we follow
+    the SVG rId — vector graphics scale cleanly to slide canvas; the PNG
+    fallback's resolution is fixed (often 96 DPI) so it looks pixelated on
+    a 1280 / 1920-px slide.
+
+    Returns ``None`` if no usable image relationship is found.
     """
     if blip_fill_el is None:
         return None
     blip = blip_fill_el.find(_x("a:blip"))
     if blip is None:
         return None
-    r_embed = blip.get(_x("r:embed"))
-    if r_embed is None:
+
+    # Prefer the SVG override (asvg:svgBlip) when present.
+    ext_lst = blip.find(_x("a:extLst"))
+    svg_rid: Optional[str] = None
+    if ext_lst is not None:
+        for ext in ext_lst.findall(_x("a:ext")):
+            if ext.get("uri") == _SVG_BLIP_EXT_URI:
+                svg_blip = ext.find(f"{{{_ASVG_NS}}}svgBlip")
+                if svg_blip is not None:
+                    svg_rid = svg_blip.get(_x("r:embed"))
+                    break
+
+    rid = svg_rid or blip.get(_x("r:embed"))
+    if rid is None:
         # `r:link` (linked external image) is out of scope — we only handle embedded.
         return None
     try:
-        rel = part.rels[r_embed]
+        rel = part.rels[rid]
     except KeyError:
         return None
     if "image" not in rel.reltype:
@@ -900,6 +972,19 @@ def parse(pptx_path: Path) -> Presentation:
             layout_sp = _find_layout_sp(layout, idx)
             master_sp = _find_master_sp(master, ph_type, idx)
 
+            # OOXML default: when <p:ph> omits the @type attribute (common for
+            # "content" placeholders), the placeholder defaults to body
+            # semantics. Without this normalisation, _txstyles_defaults falls
+            # through to <p:otherStyle> and the master's <p:bodyStyle> bullet
+            # character + indent never apply. Slide 10's content placeholder
+            # (<p:ph idx="1"/>) hit this bug — body text rendered without the
+            # "-" bullet marker the master defines.
+            # Non-placeholder text shapes (in shapes/parse.py) still pass
+            # ph_type=None explicitly to mean "use otherStyle" — that path is
+            # unaffected because this normalisation only runs in the
+            # placeholder loop.
+            effective_ph_type = ph_type if ph_type is not None else "body"
+
             # Resolve defaults (cascade level 1–5)
             default_run, default_para = resolve_placeholder(
                 slide_sp=sp_el,
@@ -907,7 +992,7 @@ def parse(pptx_path: Path) -> Presentation:
                 master_ph=master_sp,
                 master_tx_styles=master_tx_styles,
                 theme_el=theme_el,
-                ph_type=ph_type,
+                ph_type=effective_ph_type,
                 level=0,
                 clr_map=clr_map,
             )
@@ -953,9 +1038,13 @@ def parse(pptx_path: Path) -> Presentation:
                     layout_tx_body = (
                         layout_sp.find(_x("p:txBody")) if layout_sp is not None else None
                     )
+                    master_tx_body = (
+                        master_sp.find(_x("p:txBody")) if master_sp is not None else None
+                    )
                     text_frame = _parse_text_frame(
                         tx_body, default_run, default_para, theme_el, clr_map,
                         layout_tx_body=layout_tx_body,
+                        master_tx_body=master_tx_body,
                     )
                 # Collect typefaces from actual runs
                 if text_frame is not None:
@@ -1099,6 +1188,28 @@ def parse(pptx_path: Path) -> Presentation:
             theme_el,
             clr_map,
         )
+
+        # Layer 4 — tables (<p:graphicFrame> / <a:tbl>) on the slide. Lazy
+        # import to break the parse-shapes import cycle (tables.parse pulls
+        # the same private helpers from this module).
+        from slidecraft.importer.tables.parse import walk_tables
+        tables = walk_tables(
+            slide.part,
+            master_tx_styles,
+            theme_el,
+            clr_map,
+        )
+        # Surface typefaces from cell content so fonts.css carries them.
+        for tbl in tables:
+            for row in tbl.cells:
+                for cell in row:
+                    if cell.default_run.font_family:
+                        typefaces.add(cell.default_run.font_family)
+                    if cell.text_frame is not None:
+                        for para in cell.text_frame.paragraphs:
+                            for run in para.runs:
+                                if run.font_family:
+                                    typefaces.add(run.font_family)
         # Surface typefaces used by these shapes so fonts.css carries them.
         for ts in text_shapes:
             if ts.default_run.font_family:
@@ -1115,6 +1226,7 @@ def parse(pptx_path: Path) -> Presentation:
             background_fill=bg_fill,
             pictures=pictures,
             text_shapes=text_shapes,
+            tables=tables,
         ))
 
     return Presentation(

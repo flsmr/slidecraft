@@ -219,7 +219,7 @@ The layout `.vue` carries every placeholder's *resolved default* formatting (fon
 | Paragraph deviation from placeholder default pPr | Emission |
 |---|---|
 | None | Plain text. Paragraphs separated by blank lines. |
-| Bulleted (`buChar` / `buAutoNum`) | Markdown `- text` (unordered) or `1. text` (ordered). Bullet *styling* (glyph, color, indent per-level) is encoded in the layout's CSS, not the slide. |
+| Bulleted (`buChar` / `buAutoNum`) | Markdown `- text` (unordered) or `1. text` (ordered). Bullet *styling* (glyph, color, font, size, indent per-level) is encoded in the layout's CSS via `::marker`, not the slide. See *Bullet styling* below. |
 | Alignment, line-spacing, indent, space-before/after that differs from default | Wrap entire paragraph in `<p style="…">…</p>` carrying only the deviating properties. |
 
 **Nesting rule:** When a paragraph is wrapped in a block-level HTML element (`<p style="…">…</p>`) for paragraph-level reasons, the runs *inside* are emitted as HTML (`<span style="…">`, `<u>`, `<strong>`, `<em>`) — **never** markdown markers. Confirmed by spike against Slidev 52.15.2: this is the CommonMark rule (markdown-it does not process markdown spans inside HTML blocks like `<p>`/`<div>`), not a Slidev quirk.
@@ -232,9 +232,75 @@ This is **bold** and <span style="color:#f00">red</span> in the same line.
 
 The block-HTML restriction only triggers when the whole paragraph is `<p>`-wrapped.
 
-**Soft line break inside a paragraph** (`<a:br/>`) → `<br/>`.
+**Soft line break inside a paragraph** (`<a:br/>`) → `<br/>`. Linebreak characters embedded *inside* `<a:t>` text (`\r\n`, `\n`) are normalised and split into the same `<br/>`-marker runs — PPT 365 sometimes stores multi-line single-runs this way (e.g. the IU thank-you slide's address block).
 
 In practice the typical slot is plain text or markdown with the occasional emphasis. HTML only surfaces where PPT genuinely has properties markdown can't express.
+
+## Bullet styling
+
+PPT bullets live in **three places**, none of which is the theme:
+
+1. **Slide master** (`<p:txStyles>`) — canonical location. Per-level bullets in `<p:titleStyle>` / `<p:bodyStyle>` / `<p:otherStyle>`, each defining `<a:lvl1pPr>`…`<a:lvl9pPr>`.
+2. **Slide layout** — per-placeholder overrides via `<a:lstStyle>/<a:lvlNpPr>`.
+3. **Slide-level paragraph** — per-paragraph override via `<a:pPr>`.
+
+The theme part (`ppt/theme/theme1.xml`) carries only color/font/format **primitives** — bullets reference into the theme (e.g. `<a:buClr><a:schemeClr val="accent6"/></a:buClr>`) but the bullet definition itself lives in the master.
+
+### Cascade resolution (parse-time)
+
+Per OOXML, bullet styling resolves through the same chain as run/paragraph defaults:
+
+```
+theme defaults
+└─ master <p:txStyles>{title,body,other}Style/<a:lvlNpPr>      ← per-level bullets
+   └─ master placeholder <p:txBody>/<a:lstStyle>/<a:lvlNpPr>
+      └─ layout placeholder <p:txBody>/<a:lstStyle>/<a:lvlNpPr>
+         └─ slide-level paragraph <a:pPr>                      ← highest
+```
+
+`inheritance._extract_ppr` reads five bullet-related elements at each level:
+
+| OOXML | `Paragraph` field |
+|---|---|
+| `<a:buChar @char>` | `bullet="char"`, `bullet_char="X"` |
+| `<a:buAutoNum @type>` | `bullet="auto-num"`, `bullet_autonum_type="arabicPeriod"`/etc. |
+| `<a:buNone/>` | `bullet="none"` |
+| `<a:buClr>` (wraps `<a:srgbClr>`/`<a:schemeClr>`/`<a:sysClr>`) | `bullet_color: RGB` — scheme references resolve through theme + clrMap, including `<a:tint>` / `<a:shade>` / `<a:lumMod>` etc. modifiers |
+| `<a:buFont @typeface>` | `bullet_font: str` — IU master uses `Symbol` (for `-` glyph) and `Arial` (for `▪` glyph) |
+| `<a:buSzPct @val>` | `bullet_size_pct: float` — 100 = same size as surrounding text |
+
+### Emission
+
+`emit/layout.py` walks the resolved paragraphs per placeholder and produces one CSS `::marker` rule per `(placeholder, level)` combination. Markdown content in `slides.md` is **unchanged** — author still writes `- item` / `1. item`. The visual bullet comes entirely from the layout's scoped CSS.
+
+For a placeholder whose level-0 default is `<a:buChar char="-"/>` + `<a:buClr><a:schemeClr val="accent6"/>` + `<a:buFont typeface="Symbol"/>` + `<a:buSzPct val="120000"/>`:
+
+```css
+.slidev-layout .ph-16 ul > li::marker {
+  content: "-\00a0";              /* buChar + non-breaking space */
+  color: #AAAEB0;                 /* accent6 resolved */
+  font-family: 'Symbol', sans-serif;
+  font-size: 120%;
+}
+```
+
+For numbered lists (`<a:buAutoNum type="arabicPeriod"/>`):
+
+```css
+.slidev-layout .ph-3 ol > li {
+  list-style-type: decimal;
+}
+.slidev-layout .ph-3 ol > li::marker {
+  color: #1D1D1F;
+  font-family: 'Source Sans Pro', sans-serif;
+}
+```
+
+OOXML `buAutoNum @type` maps to CSS `list-style-type` per a fixed table in `emit/layout.py::_AUTONUM_TO_LIST_STYLE` — covers arabic/alpha/roman with period/paren variants. Exotic forms (`arabicDbPlain`, `circleNumWdBlackPlain`, etc.) fall back to `decimal`.
+
+### Per-level
+
+The cascade resolves `Placeholder.default_para_props` for level 0. Per-paragraph overrides can change any level individually via `<a:pPr lvl="N">`. For each `(placeholder, level)` pair actually USED in the slide, we emit a separate `::marker` rule with the matching CSS selector (`ul > li::marker`, `ul ul > li::marker`, …). Levels 1+ with no per-paragraph override use the placeholder's level-0 defaults — sufficient for the IU template, where all 5 body levels share the same `-` / Symbol / accent6 / 120 % styling.
 
 ## Property mapping (PPT → CSS / HTML)
 
@@ -256,7 +322,10 @@ In practice the typical slot is plain text or markdown with the occasional empha
 | `a:pPr/@indent` | `text-indent` |  |
 | `a:pPr/lnSpc` | `line-height` | pct → unitless, points → px |
 | `a:pPr/spcBef` `spcAft` | `margin-top` / `margin-bottom` on `<p>` |  |
-| `a:pPr/buChar` `buAutoNum` | Markdown `- ` / `1. ` in slides.md; bullet *styling* baked into layout CSS using **pure nesting selectors** — depth-1 = PPT lvl 0, depth-2 = PPT lvl 1, etc. (`.ph-5 ul li`, `.ph-5 ul ul li`, `.ph-5 ul ul ul li`, …) | see Text content emission policy |
+| `a:pPr/buChar` `buAutoNum` `buNone` | Markdown `- ` / `1. ` / no marker in slides.md; bullet *styling* baked into layout CSS via `::marker` (see *Bullet styling*). |
+| `a:pPr/buClr/<srgbClr|schemeClr>` | `::marker { color: … }` — `schemeClr` resolved through theme + clrMap, including `<a:tint>` / `<a:shade>` / `<a:lumMod>` / `<a:lumOff>` / `<a:satMod>` modifiers. |
+| `a:pPr/buFont @typeface` | `::marker { font-family: … }` — the IU master uses `Symbol` for `-` bullets, `Arial` for `▪` bullets. |
+| `a:pPr/buSzPct @val` | `::marker { font-size: P% }` — relative to surrounding text size. PPT stores `120000` = 120 %. |
 | `a:r/rPr @b` | `font-weight: 700` |  |
 | `a:r/rPr @i` | `font-style: italic` |  |
 | `a:r/rPr @u` | `text-decoration: underline` |  |

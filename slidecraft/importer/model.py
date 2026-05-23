@@ -18,11 +18,12 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, Optional, Union
 
 if TYPE_CHECKING:
-    # Avoid circular import — shapes.model depends on this file's primitives
-    # (RGB, Run, Paragraph, Fill, TextFrame), so it can't be imported at
-    # module-load time. TextShape only appears as a type annotation on
-    # Slide.text_shapes; runtime stores the list opaquely.
+    # Avoid circular import — shapes.model / tables.model depend on this
+    # file's primitives (RGB, Run, Paragraph, Fill, TextFrame), so they
+    # can't be imported at module-load time. The dataclasses only appear
+    # as type annotations on Slide; runtime stores the lists opaquely.
     from slidecraft.importer.shapes.model import TextShape
+    from slidecraft.importer.tables.model import Table
 
 
 @dataclass(frozen=True)
@@ -89,6 +90,14 @@ class Paragraph:
     margin_left_pt: Optional[float] = None        # hanging margin
     bullet: Optional[Literal["none", "char", "auto-num"]] = None
     bullet_char: Optional[str] = None
+    # Bullet styling — extracted from the cascade so emit can render the
+    # marker faithfully via CSS ::marker. None on any field means "inherit".
+    bullet_color: Optional[RGB] = None            # from <a:buClr> (scheme-resolved)
+    bullet_font: Optional[str] = None             # from <a:buFont @typeface>
+    bullet_size_pct: Optional[float] = None       # from <a:buSzPct @val>; 100 = same as text
+    # OOXML auto-num type (e.g. "arabicPeriod", "romanLcParenR"); only set
+    # when bullet == "auto-num". Maps to a CSS list-style-type at emit time.
+    bullet_autonum_type: Optional[str] = None
     level: int = 0                                # 0–8 (PPT lvl)
 
 
@@ -173,6 +182,8 @@ class Slide:
     # See slidecraft/importer/shapes/ for the TextShape model and the
     # walk_text_shapes() / render_text_shape_host() pipeline.
     text_shapes: list["TextShape"] = field(default_factory=list)
+    # Layer 4 — tables (<p:graphicFrame>/<a:tbl>). See importer/tables/.
+    tables: list["Table"] = field(default_factory=list)
 
 
 @dataclass

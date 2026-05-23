@@ -138,19 +138,157 @@ def _resolve_font_ref(ref: str, theme_el: Optional[etree._Element]) -> Optional[
     return None
 
 
+# ---------------------------------------------------------------------------
+# Color modifiers (tint / shade / lumMod / lumOff / satMod / alpha)
+# ---------------------------------------------------------------------------
+
+def _rgb_to_hsl(r: int, g: int, b: int) -> tuple[float, float, float]:
+    """sRGB 0-255 → HSL with components in 0..1."""
+    rf, gf, bf = r / 255.0, g / 255.0, b / 255.0
+    mx = max(rf, gf, bf)
+    mn = min(rf, gf, bf)
+    l = (mx + mn) / 2.0
+    if mx == mn:
+        return (0.0, 0.0, l)
+    d = mx - mn
+    s = d / (2.0 - mx - mn) if l > 0.5 else d / (mx + mn)
+    if mx == rf:
+        h = (gf - bf) / d + (6.0 if gf < bf else 0.0)
+    elif mx == gf:
+        h = (bf - rf) / d + 2.0
+    else:
+        h = (rf - gf) / d + 4.0
+    return (h / 6.0, s, l)
+
+
+def _hsl_to_rgb(h: float, s: float, l: float) -> tuple[int, int, int]:
+    """HSL 0..1 → sRGB 0-255."""
+    def _f(p: float, q: float, t: float) -> float:
+        if t < 0.0:
+            t += 1.0
+        if t > 1.0:
+            t -= 1.0
+        if t < 1.0 / 6.0:
+            return p + (q - p) * 6.0 * t
+        if t < 0.5:
+            return q
+        if t < 2.0 / 3.0:
+            return p + (q - p) * (2.0 / 3.0 - t) * 6.0
+        return p
+    if s == 0.0:
+        v = l
+        return (round(v * 255), round(v * 255), round(v * 255))
+    q = l * (1.0 + s) if l < 0.5 else l + s - l * s
+    p = 2.0 * l - q
+    r = _f(p, q, h + 1.0 / 3.0)
+    g = _f(p, q, h)
+    b = _f(p, q, h - 1.0 / 3.0)
+    return (
+        max(0, min(255, round(r * 255))),
+        max(0, min(255, round(g * 255))),
+        max(0, min(255, round(b * 255))),
+    )
+
+
+def _apply_color_modifiers(rgb: RGB, container: etree._Element) -> RGB:
+    """Apply OOXML color modifier child elements (tint/shade/lumMod/lumOff/satMod).
+
+    *container* is the ``<a:srgbClr>`` / ``<a:schemeClr>`` / ``<a:sysClr>``
+    element. The modifiers are its child elements with the ``val`` attribute
+    in 1/100 000ths (so ``val="40000"`` = 40 %).
+
+    Order of application matches PowerPoint's resolved render: lumMod and
+    lumOff act together on the luminance channel; satMod scales saturation;
+    tint mixes with white; shade mixes with black. Alpha rides separately
+    via the existing srgbClr/schemeClr fast paths and is preserved.
+    """
+    r, g, b, alpha = rgb.r, rgb.g, rgb.b, rgb.alpha
+
+    lum_mod_el = container.find(_x("a:lumMod"))
+    lum_off_el = container.find(_x("a:lumOff"))
+    sat_mod_el = container.find(_x("a:satMod"))
+    tint_el = container.find(_x("a:tint"))
+    shade_el = container.find(_x("a:shade"))
+
+    needs_hsl = (
+        lum_mod_el is not None
+        or lum_off_el is not None
+        or sat_mod_el is not None
+    )
+
+    if needs_hsl:
+        h, s, l = _rgb_to_hsl(r, g, b)
+        if sat_mod_el is not None:
+            try:
+                s = max(0.0, min(1.0, s * int(sat_mod_el.get("val", "100000")) / 100000.0))
+            except ValueError:
+                pass
+        if lum_mod_el is not None:
+            try:
+                l = l * int(lum_mod_el.get("val", "100000")) / 100000.0
+            except ValueError:
+                pass
+        if lum_off_el is not None:
+            try:
+                l = l + int(lum_off_el.get("val", "0")) / 100000.0
+            except ValueError:
+                pass
+        l = max(0.0, min(1.0, l))
+        r, g, b = _hsl_to_rgb(h, s, l)
+
+    if tint_el is not None:
+        # Mix toward white. PPT: tint=0 → unchanged; tint=100000 → also
+        # unchanged (per ECMA-376 it's the *amount of tint to APPLY*, where
+        # 0 means full original and higher values blend more white in).
+        try:
+            tint = int(tint_el.get("val", "0")) / 100000.0
+        except ValueError:
+            tint = 0.0
+        # Per Microsoft's openxml-doc clarification, the formula used by
+        # PowerPoint is: L' = L + (1 - L) * (1 - tint).  So tint=20000 (0.2)
+        # gives L' = L + 0.8 * (1 - L), a strong lightening.
+        h, s, l = _rgb_to_hsl(r, g, b)
+        l = l + (1.0 - l) * (1.0 - tint)
+        l = max(0.0, min(1.0, l))
+        r, g, b = _hsl_to_rgb(h, s, l)
+
+    if shade_el is not None:
+        # Mix toward black. Same per-MS clarification: L' = L * shade.
+        try:
+            shade = int(shade_el.get("val", "100000")) / 100000.0
+        except ValueError:
+            shade = 1.0
+        h, s, l = _rgb_to_hsl(r, g, b)
+        l = l * shade
+        l = max(0.0, min(1.0, l))
+        r, g, b = _hsl_to_rgb(h, s, l)
+
+    return RGB(r, g, b, alpha)
+
+
 def _parse_color(
     solid_fill_el: Optional[etree._Element],
     theme_el: Optional[etree._Element] = None,
     clr_map: Optional[dict[str, str]] = None,
 ) -> Optional[RGB]:
-    """Parse <a:solidFill> → RGB. Supports srgbClr, schemeClr (via theme+clrMap), and sysClr."""
+    """Parse <a:solidFill> → RGB.
+
+    Supports srgbClr, schemeClr (via theme + clrMap), and sysClr.  Honours
+    ``<a:tint>`` / ``<a:shade>`` / ``<a:lumMod>`` / ``<a:lumOff>`` /
+    ``<a:satMod>`` modifier children (used heavily by PPT's table styles
+    for banded rows and conditional formatting), plus the existing
+    ``<a:alpha>`` per-channel alpha.
+    """
     if solid_fill_el is None:
         return None
     srgb = solid_fill_el.find(_x("a:srgbClr"))
     if srgb is not None:
         alpha_el = srgb.find(_x("a:alpha"))
         alpha = int(alpha_el.get("val", "100000")) / 100000.0 if alpha_el is not None else 1.0
-        return _hex_to_rgb(srgb.get("val", ""), alpha)
+        rgb = _hex_to_rgb(srgb.get("val", ""), alpha)
+        if rgb is None:
+            return None
+        return _apply_color_modifiers(rgb, srgb)
     scheme = solid_fill_el.find(_x("a:schemeClr"))
     if scheme is not None:
         rgb = _resolve_scheme_color(scheme.get("val", ""), theme_el, clr_map)
@@ -159,11 +297,14 @@ def _parse_color(
             if alpha_el is not None:
                 alpha = int(alpha_el.get("val", "100000")) / 100000.0
                 rgb = RGB(rgb.r, rgb.g, rgb.b, alpha)
-            return rgb
+            return _apply_color_modifiers(rgb, scheme)
     sysclr = solid_fill_el.find(_x("a:sysClr"))
     if sysclr is not None:
         last = sysclr.get("lastClr") or _SYS_COLOR_FALLBACK.get(sysclr.get("val", ""), "")
-        return _hex_to_rgb(last)
+        rgb = _hex_to_rgb(last)
+        if rgb is None:
+            return None
+        return _apply_color_modifiers(rgb, sysclr)
     return None
 
 
@@ -224,8 +365,17 @@ def _extract_rpr(
     return run
 
 
-def _extract_ppr(ppr_el: Optional[etree._Element]) -> Paragraph:
-    """Extract explicit paragraph properties from an <a:pPr> element into a Paragraph."""
+def _extract_ppr(
+    ppr_el: Optional[etree._Element],
+    theme_el: Optional[etree._Element] = None,
+    clr_map: Optional[dict[str, str]] = None,
+) -> Paragraph:
+    """Extract explicit paragraph properties from an <a:pPr> element into a Paragraph.
+
+    ``theme_el`` / ``clr_map`` are only used when ``<a:buClr>`` carries a
+    ``<a:schemeClr>`` that must be resolved through the theme; they're
+    optional so legacy callers (where bullet color was discarded) still work.
+    """
     para = Paragraph(runs=[])
     if ppr_el is None:
         return para
@@ -274,7 +424,7 @@ def _extract_ppr(ppr_el: Optional[etree._Element]) -> Paragraph:
         if spc_pts is not None:
             para.space_after_pt = int(spc_pts.get("val", "0")) / 100.0
 
-    # Bullet
+    # Bullet kind
     bu_none = ppr_el.find(_x("a:buNone"))
     bu_char = ppr_el.find(_x("a:buChar"))
     bu_auto = ppr_el.find(_x("a:buAutoNum"))
@@ -285,6 +435,43 @@ def _extract_ppr(ppr_el: Optional[etree._Element]) -> Paragraph:
         para.bullet_char = bu_char.get("char")
     elif bu_auto is not None:
         para.bullet = "auto-num"
+        para.bullet_autonum_type = bu_auto.get("type")  # arabicPeriod, romanLcParenR, ...
+
+    # Bullet styling — <a:buClr>, <a:buFont>, <a:buSzPct>.  These are
+    # independent of the bullet KIND element above (a numbered list still
+    # carries a color/font/size). The IU master sets all three for char
+    # bullets: char="-" in Symbol font, schemeClr accent6, size 120%.
+    bu_clr = ppr_el.find(_x("a:buClr"))
+    if bu_clr is not None:
+        # <a:buClr> wraps a single color child (srgbClr/schemeClr/sysClr).
+        # _parse_color accepts the wrapper element directly.
+        rgb = _parse_color(bu_clr, theme_el, clr_map)
+        if rgb is not None:
+            para.bullet_color = rgb
+
+    bu_font = ppr_el.find(_x("a:buFont"))
+    if bu_font is not None:
+        tf = bu_font.get("typeface")
+        if tf:
+            # +mj-lt / +mn-lt theme refs are rare on bullets but resolve
+            # them anyway to keep the model uniform.
+            if tf.startswith("+"):
+                resolved = _resolve_font_ref(tf, theme_el)
+                if resolved:
+                    para.bullet_font = resolved
+            else:
+                para.bullet_font = tf
+
+    bu_sz_pct = ppr_el.find(_x("a:buSzPct"))
+    if bu_sz_pct is not None:
+        val_str = bu_sz_pct.get("val")
+        if val_str is not None:
+            try:
+                # OOXML stores percentages in 1000ths-of-a-percent.  Sanity:
+                # 120000 → 120 (% of surrounding text).
+                para.bullet_size_pct = int(val_str) / 1000.0
+            except ValueError:
+                pass
 
     return para
 
@@ -320,6 +507,10 @@ def _merge_para(base: Paragraph, override: Paragraph) -> Paragraph:
         margin_left_pt=override.margin_left_pt if override.margin_left_pt is not None else base.margin_left_pt,
         bullet=override.bullet if override.bullet is not None else base.bullet,
         bullet_char=override.bullet_char if override.bullet_char is not None else base.bullet_char,
+        bullet_color=override.bullet_color if override.bullet_color is not None else base.bullet_color,
+        bullet_font=override.bullet_font if override.bullet_font is not None else base.bullet_font,
+        bullet_size_pct=override.bullet_size_pct if override.bullet_size_pct is not None else base.bullet_size_pct,
+        bullet_autonum_type=override.bullet_autonum_type if override.bullet_autonum_type is not None else base.bullet_autonum_type,
         level=base.level,
     )
 
@@ -365,7 +556,7 @@ def _txstyles_defaults(
     if lvl_el is None:
         return Run(text=""), Paragraph(runs=[])
 
-    ppr = _extract_ppr(lvl_el)
+    ppr = _extract_ppr(lvl_el, theme_el, clr_map)
 
     # Default rPr inside the lvlXpPr
     def_rpr = lvl_el.find(_x("a:defRPr"))
@@ -489,7 +680,7 @@ def _apply_sp_defaults(
         if lvl_el is None and level != 0:
             lvl_el = lst_style.find(_x("a:lvl1pPr"))
         if lvl_el is not None:
-            ppr_override = _extract_ppr(lvl_el)
+            ppr_override = _extract_ppr(lvl_el, theme_el, clr_map)
             base_para = _merge_para(base_para, ppr_override)
             def_rpr = lvl_el.find(_x("a:defRPr"))
             if def_rpr is not None:
@@ -500,7 +691,7 @@ def _apply_sp_defaults(
     if first_p is not None:
         ppr_el = first_p.find(_x("a:pPr"))
         if ppr_el is not None:
-            ppr_override = _extract_ppr(ppr_el)
+            ppr_override = _extract_ppr(ppr_el, theme_el, clr_map)
             base_para = _merge_para(base_para, ppr_override)
 
         first_r = first_p.find(_x("a:r"))
