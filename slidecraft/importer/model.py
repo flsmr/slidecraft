@@ -115,6 +115,12 @@ class Placeholder:
     # (slide-level txBody was empty).  Emit layer may style this differently (e.g. lighter
     # opacity or italic) in future; for v1 it is rendered as normal text.
     is_prompt_fallback: bool = False
+    # CSS clip-path value for the placeholder wrapper, set when the shape's
+    # geometry is a custGeom or a non-rect prstGeom (cascade: slide → layout →
+    # master). ``None`` for plain rectangles. The wrapper's text content and
+    # background are both clipped to this path. Set by parse.py via
+    # pictures.geometry.cust_geom_to_clip_path / preset_to_css.
+    clip_path: Optional[str] = None
 
 
 @dataclass
