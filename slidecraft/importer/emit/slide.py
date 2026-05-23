@@ -304,51 +304,175 @@ def emit_slot_body(
     """Return the markdown/HTML body for a slot, given paragraphs + defaults.
 
     Public helper — shapes.emit calls this directly to render TextShape slot
-    content. Empty paragraphs are filtered. Bullet paragraphs are joined
-    without blank lines; non-bullet paragraphs separated by one blank line.
+    content.  Bullet paragraphs are joined without blank lines; non-bullet
+    paragraphs are separated by one blank line.
+
+    Empty paragraphs (``<a:p>`` carrying only ``<a:endParaRPr>``, no runs)
+    are treated as **intentional vertical spacers** — kept in the output
+    as blank markdown lines so paragraph breaks become visible — EXCEPT:
+      - leading and trailing empties are stripped (PPT's habit of
+        terminating a txBody with an endParaRPr-only paragraph);
+      - runs of two or more consecutive empties collapse to one.
+    This restores the missing blank lines in tmp2 slide 31 (bibliography)
+    and recovers the swallowed plain paragraph between two lists on
+    tmp2 slide 7's right column.
     """
-    rendered_paras: list[str] = []
-    for para in paragraphs:
-        # Skip paragraphs whose runs together have no actual text content.
-        # Without this we emit useless `- ` lines and empty `<p style="...">`
-        # wrappers for paragraphs that exist only to override formatting on
-        # blank lines in the PPT source.
-        has_text = any(
+    def _has_text(para: Paragraph) -> bool:
+        return any(
             run.text and run.text != "\n" and run.text.strip()
             for run in para.runs
         )
-        if not has_text:
-            continue
-        rendered_paras.append(
-            _emit_paragraph(
-                para,
-                default_run=default_run,
-                default_para=default_para,
-            )
-        )
 
-    # Join consecutive bullet paragraphs directly (one newline),
-    # separate non-bullet paragraphs with a blank line.
-    lines: list[str] = []
-    for i, rp in enumerate(rendered_paras):
-        is_bullet = rp.lstrip().startswith("- ") or rp.lstrip().startswith("1. ")
-        prev_is_bullet = (
-            i > 0
-            and (
-                rendered_paras[i - 1].lstrip().startswith("- ")
-                or rendered_paras[i - 1].lstrip().startswith("1. ")
-            )
-        )
+    _NON_MD_FIELDS = frozenset({"color", "font_size_pt", "font_family"})
 
-        if i == 0:
-            lines.append(rp)
-        elif is_bullet and prev_is_bullet:
-            lines.append(rp)
+    def _has_non_markdownable_runs(para: Paragraph) -> bool:
+        """True if any run in *para* carries a deviation markdown can't express.
+
+        Per-run color / font-size / font-family ARE expressible inline as
+        ``<span style="...">``, but only outside an indented code block.
+        When such a run lives at a list-indent depth that markdown-it
+        interprets as a code block (≥4 spaces), the ``<span>`` becomes
+        literal text. Treat such lists as candidates for HTML emission.
+        """
+        for run in para.runs:
+            if run.text == "\n":
+                continue
+            devs = _run_deviations(run, default_run)
+            if any(k in devs for k in _NON_MD_FIELDS):
+                return True
+        return False
+
+    # Classify each paragraph.
+    classified: list[tuple[str, Paragraph]] = []
+    for p in paragraphs:
+        if not _has_text(p):
+            classified.append(("blank", p))
         else:
-            lines.append("")
-            lines.append(rp)
+            eff_bullet = p.bullet or default_para.bullet
+            kind = "bullet" if eff_bullet in ("char", "auto-num") else "plain"
+            classified.append((kind, p))
 
-    return "\n".join(lines)
+    # Trim leading + trailing blanks; collapse consecutive blanks to one.
+    while classified and classified[0][0] == "blank":
+        classified.pop(0)
+    while classified and classified[-1][0] == "blank":
+        classified.pop()
+    collapsed: list[tuple[str, Paragraph]] = []
+    for kind, p in classified:
+        if kind == "blank" and collapsed and collapsed[-1][0] == "blank":
+            continue
+        collapsed.append((kind, p))
+
+    # Walk collapsed, grouping consecutive bullets into "list blocks".
+    # Each block emits as either flat markdown (`- foo`) or nested HTML
+    # `<ul><li>...</li>...</ul>`. Decision rule:
+    #
+    #   - any para.level >= 1, OR
+    #   - any run carries a non-markdownable deviation
+    #     → HTML emission (sidesteps markdown's ≥4-space-indent =
+    #       code-block trap which turns inline <span> into literal)
+    #   - else → markdown (tmp1's case — flat level-0 char bullets)
+    out_lines: list[str] = []
+    i = 0
+    while i < len(collapsed):
+        kind, para = collapsed[i]
+        if kind == "bullet":
+            block_paras: list[Paragraph] = []
+            while i < len(collapsed) and collapsed[i][0] == "bullet":
+                block_paras.append(collapsed[i][1])
+                i += 1
+            needs_html = any(
+                p.level >= 1 or _has_non_markdownable_runs(p) for p in block_paras
+            )
+            if out_lines:
+                out_lines.append("")  # blank line before block
+            if needs_html:
+                out_lines.append(_emit_html_list(block_paras, default_run, default_para))
+            else:
+                for p in block_paras:
+                    out_lines.append(
+                        _emit_paragraph(
+                            p,
+                            default_run=default_run,
+                            default_para=default_para,
+                        )
+                    )
+        elif kind == "plain":
+            if out_lines:
+                out_lines.append("")
+            out_lines.append(
+                _emit_paragraph(
+                    para,
+                    default_run=default_run,
+                    default_para=default_para,
+                )
+            )
+            i += 1
+        else:  # blank
+            if out_lines:
+                out_lines.append("")
+            i += 1
+
+    return "\n".join(out_lines)
+
+
+def _emit_html_list(
+    paragraphs: list[Paragraph],
+    default_run: Run,
+    default_para: Paragraph,
+) -> str:
+    """Render a contiguous list block as nested ``<ul>`` / ``<ol>`` HTML.
+
+    Used when a block contains paragraphs at level ≥ 1 or any
+    non-markdownable per-run style.  The DOM structure mirrors what
+    markdown-it produces for a properly-nested markdown list, so the
+    existing ``::marker`` CSS in the generated layout (which targets
+    ``ul > li::marker`` for level 0, ``ul ul > li::marker`` for level 1,
+    etc.) lights up automatically without any per-class selector changes.
+
+    Mixed bullet kinds within one block are not common; the first
+    paragraph's bullet kind determines the outer tag for the whole block.
+    """
+    eff_bullet = paragraphs[0].bullet or default_para.bullet
+    tag = "ol" if eff_bullet == "auto-num" else "ul"
+
+    pieces: list[str] = []
+    current_level = -1
+    for para in paragraphs:
+        target = para.level
+        # Descend: open inner <ul>/<ol> blocks until we reach target.
+        while current_level < target:
+            current_level += 1
+            pieces.append(f"<{tag}>")
+        # Ascend: close inner blocks until current matches target.
+        while current_level > target:
+            pieces.append(f"</{tag}>")
+            current_level -= 1
+        # Render runs as inline HTML (mirrors _emit_paragraph's run-merge
+        # logic but always in html mode).
+        grouped: list[tuple[str, dict | None, str]] = []
+        for run in para.runs:
+            if run.text == "\n":
+                grouped.append(("br", None, ""))
+                continue
+            devs = _run_deviations(run, default_run)
+            if grouped and grouped[-1][0] == "run" and grouped[-1][1] == devs:
+                grouped[-1] = ("run", devs, grouped[-1][2] + run.text)
+            else:
+                grouped.append(("run", devs, run.text))
+        run_pieces: list[str] = []
+        for k, devs, text in grouped:
+            if k == "br":
+                run_pieces.append("<br/>")
+            else:
+                run_pieces.append(_emit_run_html(text, devs or {}))
+        inner = "".join(run_pieces)
+        pieces.append(f"<li>{inner}</li>")
+    # Close any remaining open levels.
+    while current_level >= 0:
+        pieces.append(f"</{tag}>")
+        current_level -= 1
+    return "".join(pieces)
 
 
 def _emit_slot_content(ph: Placeholder) -> str:
