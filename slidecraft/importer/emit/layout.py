@@ -477,6 +477,27 @@ def _emit_layout_vue(slide: Slide, canvas_width: int, canvas_height: int) -> str
     lines.append(f"  overflow: hidden;")
     lines.append(f"}}")
 
+    # Baseline list rendering. Slidev's UnoCSS preflight does the equivalent
+    # of `ul, ol { list-style: none; padding: 0; margin: 0 }` globally,
+    # which hides markers on every author-written markdown list (e.g. a
+    # user manually adding `- item` inside a `::ph_N::` block in
+    # slides.md). The per-placeholder bullet CSS we emit below only fires
+    # for slots whose PPT model carries bulleted paragraphs — bullets
+    # written purely by the deck author get no restore-rule, so their
+    # markers are missing.
+    # This slide-root-scoped rule restores native list rendering for ANY
+    # ul/ol inside the slide content (via :deep() to reach slot content).
+    # The per-placeholder rules below still win where they apply because
+    # they target a more specific selector (.ph-N vs .slide-root).
+    lines.append(
+        ".slidev-layout .slide-root :deep(ul), "
+        ".slidev-layout .slide-root :deep(ol) {"
+    )
+    lines.append("  padding-left: 40px;")
+    lines.append("  margin: 0;")
+    lines.append("  list-style: revert;")
+    lines.append("}")
+
     # Bullet styling per placeholder — ::marker CSS faithful to PPT.
     #
     # PPT stores bullets in three forms:
