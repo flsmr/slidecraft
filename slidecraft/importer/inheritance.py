@@ -707,8 +707,14 @@ def _apply_sp_defaults(
     if lst_style is not None:
         lvl_tag = _x(f"a:lvl{level + 1}pPr")
         lvl_el = lst_style.find(lvl_tag)
-        if lvl_el is None and level != 0:
-            lvl_el = lst_style.find(_x("a:lvl1pPr"))
+        # DELIBERATELY no fallback to lvl1pPr here.  Each level is
+        # independent in OOXML: if a layout/slide placeholder's lstStyle
+        # only declares lvl1pPr, that affects level-0 paragraphs ONLY.
+        # Level-N paragraphs continue to use master's lvl(N+1)pPr from the
+        # earlier cascade pass.  An earlier version fell back to lvl1pPr
+        # for missing levels, which made layout 17's lvl1pPr (sz=3200)
+        # override master bodyStyle's lvl4pPr (sz=2000) for tmp2 slide 10
+        # sub-bullets — they rendered at 32pt instead of 20pt.
         if lvl_el is not None:
             ppr_override = _extract_ppr(lvl_el, theme_el, clr_map)
             base_para = _merge_para(base_para, ppr_override)
