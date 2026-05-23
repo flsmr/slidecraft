@@ -283,7 +283,7 @@ class TestCustGeomCommands:
         )
         result = cust_geom_to_clip_path(el, 200, 100)
         # Coords scaled: (0,0) → (0,0); (100,0) → (200,0); (100,100) → (200,100)
-        assert result == 'path("M 0 0 L 200 0 L 200 100 Z")'
+        assert result == "path('M 0 0 L 200 0 L 200 100 Z')"
 
     def test_cubic_bezier(self):
         el = _cust_geom(
@@ -326,7 +326,7 @@ class TestCustGeomCommands:
         )
         result = cust_geom_to_clip_path(el, 100, 100)
         # arcTo absent from output; moveTo + lnTo + close present.
-        assert result == 'path("M 0 0 L 100 100 Z")'
+        assert result == "path('M 0 0 L 100 100 Z')"
 
     def test_multiple_paths_concatenate(self):
         el = etree.fromstring(
@@ -345,7 +345,7 @@ class TestCustGeomCommands:
         )
         result = cust_geom_to_clip_path(el, 100, 100)
         # Two subpaths, each with their own M ... Z, space-joined.
-        assert result == 'path("M 0 0 L 50 0 Z M 50 50 L 100 100 Z")'
+        assert result == "path('M 0 0 L 50 0 Z M 50 50 L 100 100 Z')"
 
 
 class TestCustGeomCoordinateMapping:

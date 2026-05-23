@@ -331,4 +331,6 @@ def cust_geom_to_clip_path(
         return None
 
     # Multiple <a:path> blocks concatenate (each carries its own M).
-    return f'path("{" ".join(segments)}")'
+    # Single-quote the path so the value is safe to drop into an HTML
+    # double-quoted style attribute without escaping. CSS accepts both.
+    return f"path('{' '.join(segments)}')"
