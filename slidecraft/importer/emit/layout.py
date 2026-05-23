@@ -499,33 +499,46 @@ def _emit_layout_vue(slide: Slide, canvas_width: int, canvas_height: int) -> str
     # inline (e.g. `<p style="margin-top:6pt">` from <a:spcBef>). That made
     # tmp2 slide 7 (Feynman method) render with visibly wider gaps between
     # paragraphs than the PPT shows. Resetting all <p> margins to 0 inside
-    # the placeholder scope means the inline `margin-top:6pt` we emit IS
-    # the total gap, matching PPT exactly.
+    # the placeholder + text-shape scope means the inline `margin-top:6pt`
+    # we emit IS the total gap, matching PPT exactly.
     for ph in slide.placeholders:
         if ph.text_frame is None:
             continue
         lines.append(
             f".slidev-layout .ph-{ph.idx} :deep(p) {{ margin: 0; }}"
         )
-
-    for ph in slide.placeholders:
-        if ph.text_frame is None:
+    for shape in slide.text_shapes:
+        if shape.text_frame is None:
             continue
+        lines.append(
+            f".slidev-layout .txt-{shape.shape_id} :deep(p) {{ margin: 0; }}"
+        )
 
-        # Group present paragraphs by level → (eff_bullet_kind, source_para)
-        # so we know which CSS to emit. The source paragraph lets us pick
-        # per-para overrides over the placeholder-default bullet props.
-        levels_seen: dict[int, tuple[str, "object"]] = {}
-        for para in ph.text_frame.paragraphs:
-            eff_bullet = para.bullet or ph.default_para_props.bullet
-            if eff_bullet in ("char", "auto-num") and para.level not in levels_seen:
-                levels_seen[para.level] = (eff_bullet, para)
+    def _emit_bullet_css(
+        css_class: str,
+        paragraphs,
+        def_p,
+    ) -> None:
+        """Emit per-(level, kind) bullet CSS for one slot (placeholder or
+        text shape).  Pushes lines into the enclosing `lines` list."""
+        # Group present paragraphs by (level, kind) → source_para so we
+        # know which CSS to emit. Key on BOTH level AND kind because a
+        # placeholder can mix char and auto-num bullets at the same level
+        # (Vorlage slide 7 ph_14 has auto-num lvl=0 paragraphs AND char
+        # lvl=0 URLs in the same slot — keying by level alone made the
+        # second kind silently inherit no marker CSS).
+        levels_seen: dict[tuple[int, str], "object"] = {}
+        for para in paragraphs:
+            eff_bullet = para.bullet or def_p.bullet
+            if eff_bullet in ("char", "auto-num"):
+                key = (para.level, eff_bullet)
+                if key not in levels_seen:
+                    levels_seen[key] = para
 
         if not levels_seen:
-            continue
+            return
 
-        def_p = ph.default_para_props
-        for lvl, (kind, para) in sorted(levels_seen.items()):
+        for (lvl, kind), para in sorted(levels_seen.items()):
             # Effective bullet props — per-paragraph override wins, else default.
             char       = para.bullet_char        if para.bullet_char        is not None else def_p.bullet_char
             color      = para.bullet_color       if para.bullet_color       is not None else def_p.bullet_color
@@ -547,8 +560,8 @@ def _emit_layout_vue(slide: Slide, canvas_width: int, canvas_height: int) -> str
             # PPT's text-frame top.
             chain_tag = "ul" if kind == "char" else "ol"
             chain = " ".join([chain_tag] * (lvl + 1))
-            base_sel = f".slidev-layout .ph-{ph.idx} :deep({chain} > li)"
-            container_sel = f".slidev-layout .ph-{ph.idx} :deep({chain})"
+            base_sel = f".slidev-layout {css_class} :deep({chain} > li)"
+            container_sel = f".slidev-layout {css_class} :deep({chain})"
             lines.append(f"{container_sel} {{")
             lines.append("  padding-left: 40px;")
             lines.append("  margin: 0;")
@@ -585,6 +598,28 @@ def _emit_layout_vue(slide: Slide, canvas_width: int, canvas_height: int) -> str
                     lines.append(f"{base_sel}::marker {{")
                     lines.append(f"  color: {_hex_css(color)};")
                     lines.append("}")
+
+    # Invoke the helper for placeholders…
+    for ph in slide.placeholders:
+        if ph.text_frame is None:
+            continue
+        _emit_bullet_css(
+            f".ph-{ph.idx}",
+            ph.text_frame.paragraphs,
+            ph.default_para_props,
+        )
+    # …and for text shapes. Layout-source lists like Vorlage layout 6's
+    # "Wer bist Du?" Textfeld 1 had their <ul><li> emitted but no marker
+    # CSS to undo Slidev's `list-style: none` reset, so markers were
+    # invisible (user complaint: "slide 13 missed to identify the list").
+    for shape in slide.text_shapes:
+        if shape.text_frame is None:
+            continue
+        _emit_bullet_css(
+            f".txt-{shape.shape_id}",
+            shape.text_frame.paragraphs,
+            shape.default_para,
+        )
 
     lines.append("</style>")
     lines.append("")
