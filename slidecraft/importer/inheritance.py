@@ -436,6 +436,20 @@ def _extract_ppr(
     elif bu_auto is not None:
         para.bullet = "auto-num"
         para.bullet_autonum_type = bu_auto.get("type")  # arabicPeriod, romanLcParenR, ...
+    elif mar_l == "0" and indent == "0":
+        # Implicit buNone: when a paragraph EXPLICITLY sets both marL=0 and
+        # indent=0 with no explicit bullet kind, PowerPoint renders no
+        # marker — the would-be hanging indent has zero space, so the
+        # bullet glyph would overlap the text exactly. Other PPT-clone
+        # tools treat this idiom as bullet suppression too. tmp2 slide 8's
+        # introductory sentence relies on this (no <a:buNone/> declared,
+        # but author set marL="0" indent="0" to opt out).
+        #
+        # Only apply this when there's no explicit bullet on THIS element
+        # (an inherited bullet kind still wins via the cascade merge —
+        # the cascade-resolved value will pick whichever level had a real
+        # bu* element).
+        para.bullet = "none"
 
     # Bullet styling — <a:buClr>, <a:buFont>, <a:buSzPct>.  These are
     # independent of the bullet KIND element above (a numbered list still
@@ -668,7 +682,23 @@ def _apply_sp_defaults(
     theme_el: Optional[etree._Element] = None,
     clr_map: Optional[dict[str, str]] = None,
 ) -> tuple[Run, Paragraph]:
-    """Apply the txBody-level lstStyle / bodyPr defaults from a <p:sp> element."""
+    """Apply the txBody-level lstStyle defaults from a <p:sp> element.
+
+    Per ECMA-376 §19.3.1.49, the per-level defaults for a placeholder live
+    in ``<p:txBody>/<a:lstStyle>/<a:lvlNpPr>``. The first ``<a:p>``'s pPr /
+    first run's rPr / endParaRPr are PARAGRAPH CONTENT, not defaults — but
+    a previous version of this code merged them in here. That bug
+    explains:
+
+      - slide 9 (all-bold): first run b="1" → leaked to default_run →
+        every run in the placeholder rendered bold
+      - slides 12/14 (titles as bullets): master's first-`<a:p>` carried
+        an `<a:pPr>` with `<a:buChar/>` that leaked
+      - slide 41 ph_13 (text 1.333 px): endParaRPr sz="100" (= 1 pt)
+        leaked into default_run.font_size_pt
+
+    Only `<a:lstStyle>/<a:lvlNpPr>` blocks contribute to defaults here.
+    """
     tx_body = sp_el.find(_x("p:txBody"))
     if tx_body is None:
         return base_run, base_para
@@ -686,27 +716,6 @@ def _apply_sp_defaults(
             if def_rpr is not None:
                 rpr_override = _extract_rpr(def_rpr, theme_el, clr_map)
                 base_run = _merge_run(base_run, rpr_override)
-
-    first_p = tx_body.find(_x("a:p"))
-    if first_p is not None:
-        ppr_el = first_p.find(_x("a:pPr"))
-        if ppr_el is not None:
-            ppr_override = _extract_ppr(ppr_el, theme_el, clr_map)
-            base_para = _merge_para(base_para, ppr_override)
-
-        first_r = first_p.find(_x("a:r"))
-        if first_r is not None:
-            rpr_el = first_r.find(_x("a:rPr"))
-            if rpr_el is not None:
-                rpr_override = _extract_rpr(rpr_el, theme_el, clr_map)
-                base_run = _merge_run(base_run, rpr_override)
-
-        def_rpr_p = first_p.find(_x("a:endParaRPr"))
-        if def_rpr_p is None:
-            def_rpr_p = first_p.find(_x("a:defRPr"))
-        if def_rpr_p is not None:
-            rpr_override = _extract_rpr(def_rpr_p, theme_el, clr_map)
-            base_run = _merge_run(base_run, rpr_override)
 
     return base_run, base_para
 

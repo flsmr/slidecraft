@@ -198,16 +198,25 @@ def render_table(table: Table) -> str:
     leading or trailing newline is added; the caller controls indentation.
     """
     # Outer wrapper.
+    #
+    # Row heights use `minmax(<h>px, max-content)` so each row can GROW to
+    # fit overflowing content. PPT tables behave the same way: the row
+    # height attribute is a MINIMUM; cells expand the row when their text
+    # is too tall. Without minmax, our cells overflowed the fixed pixel
+    # height and content was clipped (slide 4 of tmp2). Columns stay fixed
+    # because PPT column widths ARE fixed (text wraps within them).
     wrapper_parts: list[str] = [
         "position:absolute",
         f"left:{_fmt(table.x_px)}px",
         f"top:{_fmt(table.y_px)}px",
         f"width:{_fmt(table.width_px)}px",
-        f"height:{_fmt(table.height_px)}px",
+        # height stays as a minimum via min-height; the grid rows can grow.
+        f"min-height:{_fmt(table.height_px)}px",
         "display:grid",
         # Explicit columns (no fr/auto — match PPT pixel widths).
         f"grid-template-columns:{' '.join(f'{_fmt(w)}px' for w in table.col_widths_px)}",
-        f"grid-template-rows:{' '.join(f'{_fmt(h)}px' for h in table.row_heights_px)}",
+        # minmax(min, max-content) → row's at least PPT's height, can grow.
+        f"grid-template-rows:{' '.join(f'minmax({_fmt(h)}px, max-content)' for h in table.row_heights_px)}",
     ]
     if table.rotation_deg != 0.0:
         wrapper_parts.append(f"transform:rotate({_fmt(table.rotation_deg)}deg)")

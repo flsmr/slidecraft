@@ -242,10 +242,22 @@ def _build_wrapper_style(shape: TextShape, *, use_svg_chrome: bool = False) -> s
     if shape.opacity != 1.0:
         parts.append(f"opacity:{_fmt(shape.opacity)}")
 
-    # Vertical anchor via flex
+    # Vertical anchor via flex.  flex-direction:column is required so that
+    # multi-paragraph text shapes stack VERTICALLY (each <p> as its own
+    # row) rather than laying out horizontally as flex items. Without it,
+    # slides 26 / 32 of tmp2 rendered their multi-paragraph disclaimer
+    # text shapes as side-by-side columns. The placeholder host
+    # (emit/layout.py) and table cells (tables/emit.py) already use this
+    # pattern; this brings text shapes in line.
+    #
+    # With flex-direction:column, the anchor maps to `justify-content`
+    # (main axis = vertical), not `align-items` (cross axis = horizontal,
+    # which stays at the default `stretch` so paragraphs fill cell width
+    # and their per-para text-align centers within that width).
     anchor = shape.text_frame.anchor if shape.text_frame else "t"
     parts.append("display:flex")
-    parts.append(f"align-items:{_ANCHOR_ALIGN.get(anchor, 'flex-start')}")
+    parts.append("flex-direction:column")
+    parts.append(f"justify-content:{_ANCHOR_ALIGN.get(anchor, 'flex-start')}")
 
     # bodyPr insets → padding (insets are stored l, t, r, b; CSS order is t r b l)
     if shape.text_frame is not None:
