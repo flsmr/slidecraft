@@ -20,6 +20,7 @@ from ..model import (
 )
 from ..pictures.derivatives import derivative_filename
 from ..pictures.geometry import preset_to_css
+from ..shapes.emit import render_text_shape_host
 
 # ---------------------------------------------------------------------------
 # Fill → CSS helpers
@@ -70,9 +71,12 @@ _ANCHOR_ALIGN = {"t": "flex-start", "ctr": "center", "b": "flex-end"}
 _ALIGN_MAP = {"l": "left", "ctr": "center", "r": "right", "just": "justify"}
 
 
-def _run_props_css(ph: Placeholder) -> list[str]:
-    """Return CSS declarations for the placeholder's default run properties."""
-    rp = ph.default_run_props
+def _run_to_css(rp) -> list[str]:
+    """Return CSS declarations for a :class:`Run`'s explicit properties.
+
+    Pure function of the Run — no Placeholder context. Used by both
+    placeholder host rendering and TextShape host rendering.
+    """
     parts: list[str] = []
 
     # Strip weight suffix from font-family so we reference the base family
@@ -123,19 +127,34 @@ def _run_props_css(ph: Placeholder) -> list[str]:
     return parts
 
 
-def _para_props_css(ph: Placeholder) -> list[str]:
-    """Return CSS declarations for the placeholder's default paragraph properties."""
-    pp = ph.default_para_props
+def _para_to_css(pp, *, spc_var_prefix: str = "ph") -> list[str]:
+    """Return CSS declarations for a :class:`Paragraph`'s explicit properties.
+
+    Pure function of the Paragraph. The ``spc_var_prefix`` controls the
+    CSS-variable namespace used for space-before / space-after (default
+    ``--ph-spc-*`` for placeholder hosts; pass ``"txt"`` for TextShape hosts
+    to keep selectors distinct).
+    """
     parts: list[str] = []
     if pp.align:
         parts.append(f"text-align: {_ALIGN_MAP.get(pp.align, 'left')}")
     if pp.line_spacing_pct is not None:
         parts.append(f"line-height: {pp.line_spacing_pct / 100:.4g}")
     if pp.space_before_pt is not None:
-        parts.append(f"--ph-spc-before: {pp.space_before_pt:.4g}pt")
+        parts.append(f"--{spc_var_prefix}-spc-before: {pp.space_before_pt:.4g}pt")
     if pp.space_after_pt is not None:
-        parts.append(f"--ph-spc-after: {pp.space_after_pt:.4g}pt")
+        parts.append(f"--{spc_var_prefix}-spc-after: {pp.space_after_pt:.4g}pt")
     return parts
+
+
+def _run_props_css(ph: Placeholder) -> list[str]:
+    """Thin wrapper: CSS declarations for a placeholder's default run."""
+    return _run_to_css(ph.default_run_props)
+
+
+def _para_props_css(ph: Placeholder) -> list[str]:
+    """Thin wrapper: CSS declarations for a placeholder's default paragraph."""
+    return _para_to_css(ph.default_para_props)
 
 
 # ---------------------------------------------------------------------------
@@ -168,11 +187,40 @@ def _placeholder_style(ph: Placeholder, frame_anchor: str = "t") -> str:
     # TextFrame insets → padding (l, t, r, b → CSS order t r b l)
     tf = ph.text_frame
     if tf is not None:
-        l_ins, t_ins, r_ins, b_ins = tf.insets_pt
-        # Convert pt → px
-        def pt2px(v: float) -> str:
-            return f"{v * 96 / 72:.4g}px"
-        padding = f"{pt2px(t_ins)} {pt2px(r_ins)} {pt2px(b_ins)} {pt2px(l_ins)}"
+        l_ins_pt, t_ins_pt, r_ins_pt, b_ins_pt = tf.insets_pt
+        # pt → px
+        pt_to_px = 96.0 / 72.0
+        t_px = t_ins_pt * pt_to_px
+        b_px = b_ins_pt * pt_to_px
+        l_px = l_ins_pt * pt_to_px
+        r_px = r_ins_pt * pt_to_px
+
+        # PPT-fidelity inset clamping. When tIns + bIns exceeds the element
+        # height (the chip on IU's title page sets tIns=52.91px on a 43.74px
+        # box, with anchor="b"), PPT keeps the anchored side's inset and
+        # discards the opposite. CSS without clamping gives the inner box
+        # negative height and pushes text outside the element. Match PPT:
+        if t_px + b_px > ph.height_px:
+            if frame_anchor == "b":
+                # bottom-anchored: respect bIns, zero out tIns.
+                t_px = max(0.0, ph.height_px - b_px)
+            elif frame_anchor == "ctr":
+                # center-anchored: split available height equally.
+                each = max(0.0, ph.height_px / 2)
+                t_px = min(t_px, each)
+                b_px = min(b_px, each)
+            else:
+                # top-anchored (default): respect tIns, zero out bIns.
+                b_px = max(0.0, ph.height_px - t_px)
+        # Same logic for horizontal insets (rare in practice but harmless).
+        if l_px + r_px > ph.width_px:
+            each = max(0.0, ph.width_px / 2)
+            l_px = min(l_px, each)
+            r_px = min(r_px, each)
+
+        def fmt(v: float) -> str:
+            return f"{v:.4g}px"
+        padding = f"{fmt(t_px)} {fmt(r_px)} {fmt(b_px)} {fmt(l_px)}"
         parts.append(f"padding:{padding}")
 
         if tf.rotation_deg != 0.0:
@@ -308,6 +356,14 @@ def _emit_layout_vue(slide: Slide, canvas_width: int, canvas_height: int) -> str
     lines.append(f'{_INDENT}<div class="slidev-layout">')
     lines.append(f'{_INDENT * 2}<div class="slide-root">')
 
+    # Layout 3 background decoration: layout/master non-placeholder shapes
+    # render BEHIND placeholders and pictures. Slide-source text shapes are
+    # foreground content and emit after placeholders/pictures (see below).
+    # This mirrors PPT z-order: layout/master spTree below slide spTree.
+    for shape in slide.text_shapes:
+        if shape.source in ("layout", "master"):
+            lines.append(f"{_INDENT * 3}{render_text_shape_host(shape)}")
+
     for ph in slide.placeholders:
         anchor = ph.text_frame.anchor if ph.text_frame else "t"
         style = _placeholder_style(ph, frame_anchor=anchor)
@@ -341,6 +397,14 @@ def _emit_layout_vue(slide: Slide, canvas_width: int, canvas_height: int) -> str
             if img_tag:
                 lines.append(f"{_INDENT * 4}{img_tag}")
             lines.append(f"{_INDENT * 3}</div>")
+
+    # Slide-source text shapes are foreground — emit after placeholders and
+    # pictures so they sit on top (matches the IU template's slide 6/7/8
+    # "Source" footers). Layout/master-source shapes were already emitted
+    # above as background decoration.
+    for shape in slide.text_shapes:
+        if shape.source == "slide":
+            lines.append(f"{_INDENT * 3}{render_text_shape_host(shape)}")
 
     lines.append(f"{_INDENT * 2}</div>")
     lines.append(f"{_INDENT}</div>")

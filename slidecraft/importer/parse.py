@@ -47,6 +47,8 @@ from slidecraft.importer.inheritance import (
 )
 from slidecraft.importer.pictures.effects import parse_effects
 from slidecraft.importer.pictures.geometry import cust_geom_to_clip_path, preset_to_css
+# walk_text_shapes is imported lazily inside parse() — shapes.parse imports
+# private helpers from THIS module, so a top-level import would deadlock.
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -809,6 +811,10 @@ def parse(pptx_path: Path) -> Presentation:
 
     Only text-bearing placeholders are extracted (v1 scope).
     """
+    # Lazy import to break circular dependency: shapes.parse depends on
+    # private helpers defined later in this module.
+    from slidecraft.importer.shapes.parse import walk_text_shapes
+
     prs = pptx.Presentation(str(pptx_path))
 
     # Canvas dimensions
@@ -1078,15 +1084,37 @@ def parse(pptx_path: Path) -> Presentation:
 
         # Stable document order across both <p:pic> shapes and <p:ph type="pic">
         # placeholders (which arrive from four sources: slide-level <p:pic>,
-        # slide-level <p:sp type="pic">, layout-inherited shapes, and
+        # slide-level <p:sp type="pic">, slide layout-inherited shapes, and
         # master-inherited <p:pic> shapes).
         pictures.sort(key=lambda p: p.order_index)
+
+        # Layer 3 — non-placeholder text-bearing shapes from slide, layout,
+        # and master spTrees. walk_text_shapes() honours showMasterSp on both
+        # the slide and the layout, filters empty / zero-size shapes, and
+        # resolves text defaults via inheritance.resolve_placeholder() with
+        # ph_type=None (→ master <a:otherStyle>).
+        text_shapes = walk_text_shapes(
+            slide.part,
+            master_tx_styles,
+            theme_el,
+            clr_map,
+        )
+        # Surface typefaces used by these shapes so fonts.css carries them.
+        for ts in text_shapes:
+            if ts.default_run.font_family:
+                typefaces.add(ts.default_run.font_family)
+            if ts.text_frame is not None:
+                for para in ts.text_frame.paragraphs:
+                    for run in para.runs:
+                        if run.font_family:
+                            typefaces.add(run.font_family)
 
         slides.append(Slide(
             index=slide_idx,
             placeholders=placeholders,
             background_fill=bg_fill,
             pictures=pictures,
+            text_shapes=text_shapes,
         ))
 
     return Presentation(
