@@ -827,7 +827,7 @@ class TestShapeClipPath:
             f'</a:custGeom></p:spPr>'
         )
         result = _shape_clip_path(sp_pr, 200, 100)
-        assert result == 'path("M 0 0 L 200 0 L 200 100 Z")'
+        assert result == "path('M 0 0 L 200 0 L 200 100 Z')"
 
     def test_custgeom_wins_when_both_present(self):
         """Pathological case: prstGeom + custGeom on same shape. Freeform wins."""

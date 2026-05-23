@@ -497,11 +497,15 @@ class TestPlaceholderClipPath:
     """Placeholders with a clip-path (from prstGeom / custGeom) emit it inline (P10)."""
 
     def test_clip_path_in_wrapper_style(self, tmp_path):
-        ph = _make_ph(idx=9, clip_path='path("M 0 0 L 100 0 L 100 50 Z")')
+        # Single-quoted path() so the value is safe inside the double-quoted
+        # style attribute. CSS accepts both quote styles inside path().
+        ph = _make_ph(idx=9, clip_path="path('M 0 0 L 100 0 L 100 50 Z')")
         slide = Slide(index=1, placeholders=[ph])
         pres = _make_pres([slide])
         content = _emit_and_read(tmp_path, pres)
-        assert 'clip-path:path("M 0 0 L 100 0 L 100 50 Z")' in content
+        assert "clip-path:path('M 0 0 L 100 0 L 100 50 Z')" in content
+        # And the broken-attribute pattern (double-quote inside style="…") is absent.
+        assert 'clip-path:path("' not in content
 
     def test_no_clip_path_when_none(self, tmp_path):
         ph = _make_ph(idx=9, clip_path=None)
