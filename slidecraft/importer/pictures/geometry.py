@@ -268,6 +268,28 @@ def cust_geom_to_clip_path(
         A CSS ``path("M ... Z")`` string, or ``None`` if the element is
         empty / malformed.
     """
+    raw = cust_geom_to_svg_path(cust_geom_el, width_px, height_px)
+    if raw is None:
+        return None
+    # Single-quote the path so the value is safe to drop into an HTML
+    # double-quoted style attribute without escaping. CSS accepts both.
+    return f"path('{raw}')"
+
+
+def cust_geom_to_svg_path(
+    cust_geom_el,
+    width_px: float,
+    height_px: float,
+) -> str | None:
+    """Return the bare SVG path data (``M ... Z`` string) for a ``<a:custGeom>``.
+
+    Same translation as :func:`cust_geom_to_clip_path` but without the CSS
+    ``path('…')`` wrapper — suitable for direct use as the ``d=""`` attribute
+    on an SVG ``<path>`` element, or for any other context that needs the
+    path payload alone.
+
+    Returns ``None`` when the element is missing or empty.
+    """
     if cust_geom_el is None:
         return None
 
@@ -331,6 +353,103 @@ def cust_geom_to_clip_path(
         return None
 
     # Multiple <a:path> blocks concatenate (each carries its own M).
-    # Single-quote the path so the value is safe to drop into an HTML
-    # double-quoted style attribute without escaping. CSS accepts both.
-    return f"path('{' '.join(segments)}')"
+    return " ".join(segments)
+
+
+# ---------------------------------------------------------------------------
+# prstGeom → SVG path data
+# ---------------------------------------------------------------------------
+
+def _polygon_to_svg_path(
+    pts_pct: list[tuple[float, float]],
+    width_px: float,
+    height_px: float,
+) -> str:
+    """Build an SVG path ``M x1 y1 L x2 y2 ... Z`` from percentage vertices."""
+    abs_pts = [(x / 100.0 * width_px, y / 100.0 * height_px) for x, y in pts_pct]
+    head = f"M {abs_pts[0][0]:.4g} {abs_pts[0][1]:.4g}"
+    rest = " ".join(f"L {x:.4g} {y:.4g}" for x, y in abs_pts[1:])
+    return f"{head} {rest} Z" if rest else f"{head} Z"
+
+
+def preset_to_svg_path(
+    preset_name: str,
+    width_px: float,
+    height_px: float,
+    av_lst: dict[str, int] | None = None,
+) -> str | None:
+    """Return SVG ``d=""`` path data for a ``<a:prstGeom prst="...">`` preset.
+
+    Complement to :func:`preset_to_css` for shapes that need to be *drawn*
+    (with fill + stroke) rather than *clipped*. Currently covers the same
+    polygonal presets ``preset_to_css`` handles, plus ``rect`` and ``line``.
+
+    Returns ``None`` for ``ellipse`` / ``roundRect`` because those are better
+    rendered with ``<rect rx="…">`` / ``<ellipse>`` rather than a path —
+    callers should fall back to those primitives instead.
+    """
+    av = av_lst or {}
+
+    if preset_name == "rect":
+        return f"M 0 0 L {width_px:.4g} 0 L {width_px:.4g} {height_px:.4g} L 0 {height_px:.4g} Z"
+
+    if preset_name == "line":
+        # PPT lines render as a thin diagonal; <a:xfrm flipH/V> elsewhere flips.
+        # Without those we draw from top-left to bottom-right.
+        return f"M 0 0 L {width_px:.4g} {height_px:.4g}"
+
+    if preset_name == "triangle":
+        return _polygon_to_svg_path(
+            [(50.0, 0.0), (100.0, 100.0), (0.0, 100.0)],
+            width_px, height_px,
+        )
+
+    if preset_name == "rtTriangle":
+        # Right triangle with the right angle at the bottom-left corner.
+        return _polygon_to_svg_path(
+            [(0.0, 0.0), (0.0, 100.0), (100.0, 100.0)],
+            width_px, height_px,
+        )
+
+    if preset_name == "parallelogram":
+        adj = av.get("adj", 25000)
+        offset = (adj / 100_000.0) * 100.0
+        return _polygon_to_svg_path(
+            [(offset, 0.0), (100.0, 0.0), (100.0 - offset, 100.0), (0.0, 100.0)],
+            width_px, height_px,
+        )
+
+    if preset_name == "trapezoid":
+        adj = av.get("adj", 25000)
+        inset = (adj / 100_000.0) * 100.0
+        return _polygon_to_svg_path(
+            [(inset, 0.0), (100.0 - inset, 0.0), (100.0, 100.0), (0.0, 100.0)],
+            width_px, height_px,
+        )
+
+    if preset_name == "diamond":
+        return _polygon_to_svg_path(
+            [(50.0, 0.0), (100.0, 50.0), (50.0, 100.0), (0.0, 50.0)],
+            width_px, height_px,
+        )
+
+    if preset_name == "pentagon":
+        return _polygon_to_svg_path(
+            _regular_polygon_points(5, start_deg=-90.0),
+            width_px, height_px,
+        )
+
+    if preset_name == "hexagon":
+        return _polygon_to_svg_path(
+            _regular_polygon_points(6, start_deg=0.0),
+            width_px, height_px,
+        )
+
+    if preset_name == "star5":
+        return _polygon_to_svg_path(
+            _star5_points(),
+            width_px, height_px,
+        )
+
+    # ellipse / roundRect intentionally return None — see docstring.
+    return None

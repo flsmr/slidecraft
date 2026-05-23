@@ -15,7 +15,14 @@ fields that differ from the default.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal, Optional, Union
+from typing import TYPE_CHECKING, Literal, Optional, Union
+
+if TYPE_CHECKING:
+    # Avoid circular import — shapes.model depends on this file's primitives
+    # (RGB, Run, Paragraph, Fill, TextFrame), so it can't be imported at
+    # module-load time. TextShape only appears as a type annotation on
+    # Slide.text_shapes; runtime stores the list opaquely.
+    from slidecraft.importer.shapes.model import TextShape
 
 
 @dataclass(frozen=True)
@@ -162,6 +169,10 @@ class Slide:
     placeholders: list[Placeholder]
     background_fill: Fill = field(default_factory=NoFill)
     pictures: list[Picture] = field(default_factory=list)
+    # Layer 3 — non-placeholder text-bearing shapes (slide/layout/master).
+    # See slidecraft/importer/shapes/ for the TextShape model and the
+    # walk_text_shapes() / render_text_shape_host() pipeline.
+    text_shapes: list["TextShape"] = field(default_factory=list)
 
 
 @dataclass

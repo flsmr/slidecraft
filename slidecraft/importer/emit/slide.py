@@ -18,6 +18,7 @@ from ..model import (
     Slide,
     SolidFill,
 )
+from ..shapes.emit import render_text_shape_slot_content
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -198,9 +199,24 @@ def _para_style(deviations: dict) -> str:
     return ";".join(parts)
 
 
-def _emit_paragraph(para: Paragraph, ph: Placeholder, use_html: bool = False) -> str:
-    """Emit a single paragraph.  use_html forces HTML-inside-block mode."""
-    default_run = ph.default_run_props
+def _emit_paragraph(
+    para: Paragraph,
+    ph: Optional[Placeholder] = None,
+    use_html: bool = False,
+    *,
+    default_run: Optional[Run] = None,
+    default_para: Optional[Paragraph] = None,
+) -> str:
+    """Emit a single paragraph.  use_html forces HTML-inside-block mode.
+
+    Either pass ``ph`` (preferred for placeholder content) and the defaults
+    are taken from it, or pass ``default_run`` + ``default_para`` directly
+    (used by TextShape emission via shapes.emit).
+    """
+    if default_run is None:
+        default_run = ph.default_run_props if ph is not None else Run(text="")
+    if default_para is None:
+        default_para = ph.default_para_props if ph is not None else Paragraph(runs=[])
 
     def emit_runs(html_mode: bool) -> str:
         # Merge adjacent runs with identical deviation sets so we emit one
@@ -227,7 +243,6 @@ def _emit_paragraph(para: Paragraph, ph: Placeholder, use_html: bool = False) ->
                 pieces.append(_emit_run_markdown(text, devs or {}))
         return "".join(pieces)
 
-    default_para = ph.default_para_props
     eff_bullet = para.bullet or default_para.bullet
     para_devs = _para_deviations(para, default_para)
 
@@ -260,13 +275,19 @@ def _emit_paragraph(para: Paragraph, ph: Placeholder, use_html: bool = False) ->
 # Placeholder slot content
 # ---------------------------------------------------------------------------
 
-def _emit_slot_content(ph: Placeholder) -> str:
-    """Return the markdown/HTML content for a single named slot."""
-    if ph.text_frame is None or not ph.text_frame.paragraphs:
-        return ""
+def emit_slot_body(
+    paragraphs: list[Paragraph],
+    default_run: Run,
+    default_para: Paragraph,
+) -> str:
+    """Return the markdown/HTML body for a slot, given paragraphs + defaults.
 
+    Public helper — shapes.emit calls this directly to render TextShape slot
+    content. Empty paragraphs are filtered. Bullet paragraphs are joined
+    without blank lines; non-bullet paragraphs separated by one blank line.
+    """
     rendered_paras: list[str] = []
-    for para in ph.text_frame.paragraphs:
+    for para in paragraphs:
         # Skip paragraphs whose runs together have no actual text content.
         # Without this we emit useless `- ` lines and empty `<p style="...">`
         # wrappers for paragraphs that exist only to override formatting on
@@ -277,7 +298,13 @@ def _emit_slot_content(ph: Placeholder) -> str:
         )
         if not has_text:
             continue
-        rendered_paras.append(_emit_paragraph(para, ph))
+        rendered_paras.append(
+            _emit_paragraph(
+                para,
+                default_run=default_run,
+                default_para=default_para,
+            )
+        )
 
     # Join consecutive bullet paragraphs directly (one newline),
     # separate non-bullet paragraphs with a blank line.
@@ -301,6 +328,17 @@ def _emit_slot_content(ph: Placeholder) -> str:
             lines.append(rp)
 
     return "\n".join(lines)
+
+
+def _emit_slot_content(ph: Placeholder) -> str:
+    """Return the markdown/HTML content for a placeholder slot (thin wrapper)."""
+    if ph.text_frame is None or not ph.text_frame.paragraphs:
+        return ""
+    return emit_slot_body(
+        ph.text_frame.paragraphs,
+        ph.default_run_props,
+        ph.default_para_props,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -364,6 +402,18 @@ def emit_deck(
             md_parts.append("")
             md_parts.append(f"::ph_{ph.idx}::")
             content = _emit_slot_content(ph)
+            if content:
+                md_parts.append(content)
+
+        # Layer 3 — slide-source non-placeholder text shapes surface as
+        # ::txt_<id>:: slots. Layout/master-source shapes are baked into
+        # the layout .vue and don't appear in slides.md.
+        for shape in slide.text_shapes:
+            if shape.source != "slide":
+                continue
+            md_parts.append("")
+            md_parts.append(f"::txt_{shape.shape_id}::")
+            content = render_text_shape_slot_content(shape)
             if content:
                 md_parts.append(content)
 
