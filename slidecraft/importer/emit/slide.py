@@ -289,7 +289,19 @@ def _emit_paragraph(
             inner = emit_runs(html_mode=True)
             return f'<p style="{style}">{inner}</p>'
 
-    return emit_runs(html_mode=False)
+    # Plain text path.  PPT sometimes stores intentional leading whitespace
+    # in <a:t> (e.g. tmp2 slide 12 ph_24 has "    Dozierender..." with four
+    # literal leading spaces). Markdown interprets ≥ 4 leading spaces as
+    # an indented code block — the text renders in monospace and HTML
+    # inside is escaped. To preserve PPT's visual intent without
+    # triggering code-block mode, wrap such paragraphs in a `<p>` (which
+    # markdown leaves alone) so leading whitespace stays as literal
+    # spaces in the paragraph.
+    rendered = emit_runs(html_mode=False)
+    if rendered.startswith("    ") or rendered.startswith("\t"):
+        inner = emit_runs(html_mode=True)
+        return f'<p>{inner}</p>'
+    return rendered
 
 
 # ---------------------------------------------------------------------------
