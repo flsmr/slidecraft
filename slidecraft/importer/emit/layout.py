@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Union
+from typing import Optional, Union
 
 from ..fonts import strip_weight_suffix
 from ..model import (
@@ -21,6 +21,7 @@ from ..model import (
 from ..pictures.derivatives import derivative_filename
 from ..pictures.geometry import preset_to_css
 from ..shapes.emit import render_text_shape_host
+from ..tables.emit import render_table
 
 # ---------------------------------------------------------------------------
 # Fill → CSS helpers
@@ -69,6 +70,46 @@ _ANCHOR_ALIGN = {"t": "flex-start", "ctr": "center", "b": "flex-end"}
 # ---------------------------------------------------------------------------
 
 _ALIGN_MAP = {"l": "left", "ctr": "center", "r": "right", "just": "justify"}
+
+
+# OOXML <a:buAutoNum @type> → CSS list-style-type.
+# Periods ("arabicPeriod" → "1.") map cleanly; right-paren / paren-both
+# styles need counter()-based ::marker content which is added on top of
+# the base list-style-type rule. The mapping intentionally only covers
+# the variants where CSS has a direct equivalent — exotic styles fall
+# back to "decimal" / "lower-alpha" / etc. and the marker still renders
+# with a period.
+_AUTONUM_TO_LIST_STYLE: dict[str, str] = {
+    "arabicPeriod":    "decimal",
+    "arabicParenR":    "decimal",     # 1) — period instead
+    "arabicParenBoth": "decimal",
+    "arabicPlain":     "decimal",
+    "arabicMinus":     "decimal",
+    "arabicDbPeriod":  "decimal-leading-zero",
+    "alphaUcPeriod":   "upper-alpha",
+    "alphaLcPeriod":   "lower-alpha",
+    "alphaUcParenR":   "upper-alpha",
+    "alphaLcParenR":   "lower-alpha",
+    "alphaUcParenBoth": "upper-alpha",
+    "alphaLcParenBoth": "lower-alpha",
+    "romanUcPeriod":   "upper-roman",
+    "romanLcPeriod":   "lower-roman",
+    "romanUcParenR":   "upper-roman",
+    "romanLcParenR":   "lower-roman",
+    "romanUcParenBoth": "upper-roman",
+    "romanLcParenBoth": "lower-roman",
+}
+
+
+def _autonum_type_to_css(autonum_type: Optional[str]) -> Optional[str]:
+    """Map an OOXML buAutoNum @type to a CSS list-style-type value.
+
+    Returns ``None`` when ``autonum_type`` is ``None`` (caller should fall
+    back to the browser default).
+    """
+    if autonum_type is None:
+        return None
+    return _AUTONUM_TO_LIST_STYLE.get(autonum_type, "decimal")
 
 
 def _run_to_css(rp) -> list[str]:
@@ -179,10 +220,16 @@ def _placeholder_style(ph: Placeholder, frame_anchor: str = "t") -> str:
     if ph.opacity != 1.0:
         parts.append(f"opacity:{ph.opacity:.4g}")
 
-    # Vertical anchor via flex
+    # Vertical anchor via flex.  flex-direction:column is mandatory — without
+    # it, multi-paragraph content (e.g. the thank-you slide's contact slot:
+    # "name<br/>phone" / "email") lays out HORIZONTALLY as flex items rather
+    # than stacking vertically.  With column direction, align-items still
+    # controls cross-axis (horizontal) alignment which we want as
+    # flex-start (left); justify-content takes over the vertical anchor.
     align_items = _ANCHOR_ALIGN.get(frame_anchor, "flex-start")
     parts.append("display:flex")
-    parts.append(f"align-items:{align_items}")
+    parts.append("flex-direction:column")
+    parts.append(f"justify-content:{align_items}")
 
     # TextFrame insets → padding (l, t, r, b → CSS order t r b l)
     tf = ph.text_frame
@@ -398,6 +445,14 @@ def _emit_layout_vue(slide: Slide, canvas_width: int, canvas_height: int) -> str
                 lines.append(f"{_INDENT * 4}{img_tag}")
             lines.append(f"{_INDENT * 3}</div>")
 
+    # Layer 4 — tables (<p:graphicFrame>/<a:tbl>) live on the slide only;
+    # emit between pictures and slide-source text shapes. render_table()
+    # returns a multi-line block; indent each line.
+    for table in slide.tables:
+        block = render_table(table)
+        for line in block.split("\n"):
+            lines.append(f"{_INDENT * 3}{line}")
+
     # Slide-source text shapes are foreground — emit after placeholders and
     # pictures so they sit on top (matches the IU template's slide 6/7/8
     # "Source" footers). Layout/master-source shapes were already emitted
@@ -422,37 +477,94 @@ def _emit_layout_vue(slide: Slide, canvas_width: int, canvas_height: int) -> str
     lines.append(f"  overflow: hidden;")
     lines.append(f"}}")
 
-    # Bullet styling per placeholder
+    # Bullet styling per placeholder — ::marker CSS faithful to PPT.
+    #
+    # PPT stores bullets in three forms:
+    #   1. <a:buChar char="-"/>   → character bullet ("-", "•", etc.)
+    #   2. <a:buAutoNum type="…"/> → numbered list (1., a., i., etc.)
+    #   3. <a:buNone/>            → no bullet
+    #
+    # Plus three independent style fields (any combination):
+    #   <a:buClr>     → bullet color (often a schemeClr → theme accent)
+    #   <a:buFont>    → bullet font (often "Symbol" or "Wingdings")
+    #   <a:buSzPct>   → bullet size as percentage of surrounding text
+    #
+    # The cascade resolves these from master <p:bodyStyle>/<p:titleStyle>/
+    # <p:otherStyle> down through layout lstStyle to per-paragraph pPr.
+    # We emit one ::marker rule per (placeholder, level, bullet kind) so
+    # the output uses pixel-accurate PPT bullets instead of browser defaults.
     for ph in slide.placeholders:
-        # Collect bullet levels present in this placeholder
         if ph.text_frame is None:
             continue
-        levels_with_bullets = set()
+
+        # Group present paragraphs by level → (eff_bullet_kind, source_para)
+        # so we know which CSS to emit. The source paragraph lets us pick
+        # per-para overrides over the placeholder-default bullet props.
+        levels_seen: dict[int, tuple[str, "object"]] = {}
         for para in ph.text_frame.paragraphs:
             eff_bullet = para.bullet or ph.default_para_props.bullet
-            if eff_bullet in ("char", "auto-num"):
-                levels_with_bullets.add(para.level)
+            if eff_bullet in ("char", "auto-num") and para.level not in levels_seen:
+                levels_seen[para.level] = (eff_bullet, para)
 
-        if not levels_with_bullets:
+        if not levels_seen:
             continue
 
-        # Emit bullet CSS using pure nesting selectors
-        # level 0 → ul > li, level 1 → ul ul > li, etc.
-        max_level = max(levels_with_bullets)
-        for lvl in range(max_level + 1):
-            if lvl not in levels_with_bullets:
-                continue
-            ul_chain = " ".join(["ul"] * (lvl + 1))
-            selector = f".slidev-layout .ph-{ph.idx} {ul_chain} li"
-            # Default bullet styles – override as needed
-            lines.append(f"{selector} {{")
-            if lvl == 0:
-                lines.append("  list-style-type: disc;")
-            elif lvl == 1:
-                lines.append("  list-style-type: circle;")
-            else:
-                lines.append("  list-style-type: square;")
-            lines.append("}")
+        def_p = ph.default_para_props
+        for lvl, (kind, para) in sorted(levels_seen.items()):
+            # Effective bullet props — per-paragraph override wins, else default.
+            char       = para.bullet_char        if para.bullet_char        is not None else def_p.bullet_char
+            color      = para.bullet_color       if para.bullet_color       is not None else def_p.bullet_color
+            font       = para.bullet_font        if para.bullet_font        is not None else def_p.bullet_font
+            size_pct   = para.bullet_size_pct    if para.bullet_size_pct    is not None else def_p.bullet_size_pct
+            autonum    = para.bullet_autonum_type if para.bullet_autonum_type is not None else def_p.bullet_autonum_type
+
+            # The bullet selectors target markdown-rendered <ul>/<ol>/<li>
+            # *inside* the slot — that content belongs to the parent
+            # component, not the layout, so Vue's <style scoped> never
+            # reaches it without :deep(). Without :deep() the rule compiles
+            # to .slidev-layout[data-v-XXX] .ph-N[data-v-XXX] ul > li::marker,
+            # which the slot DOM doesn't match (no data-v-XXX attribute).
+            chain = " ".join(["ul" if kind == "char" else "ol"] * (lvl + 1))
+            base_sel = f".slidev-layout .ph-{ph.idx} :deep({chain} > li)"
+
+            if kind == "char":
+                # Build a CSS ::marker rule. The marker `content` includes the
+                # bullet char + a non-breaking space so it doesn't collapse
+                # against the text. CSS list-style-type is reset to disc as a
+                # graceful fallback when ::marker isn't honoured.
+                marker_props: list[str] = []
+                if char:
+                    esc = char.replace("\\", "\\\\").replace('"', '\\"')
+                    marker_props.append(f'  content: "{esc}\\00a0";')
+                if color is not None:
+                    marker_props.append(f"  color: {_hex_css(color)};")
+                if font:
+                    marker_props.append(f"  font-family: '{font}', sans-serif;")
+                if size_pct is not None:
+                    marker_props.append(f"  font-size: {size_pct:.4g}%;")
+                if marker_props:
+                    lines.append(f"{base_sel}::marker {{")
+                    lines.extend(marker_props)
+                    lines.append("}")
+
+            else:  # kind == "auto-num"
+                list_style = _autonum_type_to_css(autonum)
+                lines.append(f"{base_sel} {{")
+                if list_style:
+                    lines.append(f"  list-style-type: {list_style};")
+                lines.append("}")
+                # ::marker for color/font/size on numbered lists.
+                marker_props = []
+                if color is not None:
+                    marker_props.append(f"  color: {_hex_css(color)};")
+                if font:
+                    marker_props.append(f"  font-family: '{font}', sans-serif;")
+                if size_pct is not None:
+                    marker_props.append(f"  font-size: {size_pct:.4g}%;")
+                if marker_props:
+                    lines.append(f"{base_sel}::marker {{")
+                    lines.extend(marker_props)
+                    lines.append("}")
 
     lines.append("</style>")
     lines.append("")

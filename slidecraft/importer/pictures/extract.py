@@ -15,6 +15,7 @@ overwritten) and the manifest is always rewritten.
 """
 from __future__ import annotations
 
+import re
 import zipfile
 from pathlib import Path
 
@@ -23,6 +24,100 @@ from .manifest import write_manifest
 
 
 _MEDIA_PREFIX = "ppt/media/"
+
+
+# ---------------------------------------------------------------------------
+# SVG post-processing — fix Microsoft icon-library tiny-stroke paths
+# ---------------------------------------------------------------------------
+
+# Microsoft's icon-library SVGs (the ones referenced via <asvg:svgBlip> on
+# pictures inserted from PPT's Insert > Icons) frequently draw a "dot" — like
+# the period of a question mark — as a path whose bounding box is much smaller
+# than its stroke width, with fill="none". PowerPoint's renderer ends up
+# painting it as a solid blob (the stroke overlaps itself); browser SVG
+# renderers paint a faint ring or nothing visible. Patch each such path so
+# its fill matches its stroke colour, which produces a filled dot in browsers
+# without changing any path that was meant to be an outline.
+
+# Regex extracting numeric pairs from path data — `M`, `L`, `C`, etc. plus
+# their numeric arguments. Handles negative numbers, decimals, scientific
+# notation. Captures one number at a time; we group into x/y pairs in code.
+_PATH_NUMBER_RE = re.compile(r"-?\d+\.?\d*(?:[eE][-+]?\d+)?")
+
+
+def _path_bbox(d_attr: str) -> tuple[float, float, float, float] | None:
+    """Return ``(min_x, min_y, max_x, max_y)`` for an SVG ``d=""`` string.
+
+    Bezier-curve control points are included in the bbox — this overestimates
+    the visual extent slightly, which is fine for the "is this path small?"
+    decision we're making here. Returns ``None`` when no numbers parse.
+    """
+    nums = [float(m) for m in _PATH_NUMBER_RE.findall(d_attr)]
+    if len(nums) < 2:
+        return None
+    # Pair numbers as (x, y).  Path data alternates coordinates; this is
+    # technically inaccurate for commands like ``A`` (arc) where some
+    # parameters are flags or radii, but Microsoft icon-library paths use
+    # only M/L/C/Z so the alternation is safe.
+    xs = nums[0::2]
+    ys = nums[1::2]
+    if not xs or not ys:
+        return None
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+def _patch_tiny_stroked_paths(svg_bytes: bytes) -> bytes:
+    """Set ``fill=stroke`` on ``<path>`` elements whose bbox < stroke width.
+
+    Returns the modified SVG bytes. If no patches are needed (or the file
+    isn't well-formed SVG), returns the input unchanged.
+    """
+    try:
+        from lxml import etree
+    except ImportError:
+        # lxml is a hard dep of the importer; this should never happen.
+        return svg_bytes
+
+    try:
+        # ``recover=True`` lets us tolerate the occasional sloppy SVG.
+        parser = etree.XMLParser(recover=True, remove_blank_text=False)
+        root = etree.fromstring(svg_bytes, parser=parser)
+    except etree.XMLSyntaxError:
+        return svg_bytes
+    if root is None:
+        return svg_bytes
+
+    # SVG namespace — most SVGs put paths inside the default SVG namespace.
+    svg_ns = "http://www.w3.org/2000/svg"
+    patched = False
+    for path_el in root.iter(f"{{{svg_ns}}}path"):
+        fill = path_el.get("fill")
+        if fill is None or fill.strip().lower() != "none":
+            continue
+        stroke = path_el.get("stroke")
+        if not stroke or stroke.strip().lower() == "none":
+            continue
+        try:
+            stroke_width = float(path_el.get("stroke-width", "1"))
+        except ValueError:
+            continue
+        d = path_el.get("d", "")
+        bbox = _path_bbox(d)
+        if bbox is None:
+            continue
+        min_x, min_y, max_x, max_y = bbox
+        width = max_x - min_x
+        height = max_y - min_y
+        # If the path's drawn extent is smaller than its stroke width on
+        # BOTH axes, the stroke covers the entire interior — the user-facing
+        # intent is a filled dot.
+        if width < stroke_width and height < stroke_width:
+            path_el.set("fill", stroke)
+            patched = True
+
+    if not patched:
+        return svg_bytes
+    return etree.tostring(root, xml_declaration=False)
 
 
 def extract_pictures(pptx_path: Path, output_dir: Path) -> dict[str, dict]:
@@ -72,6 +167,15 @@ def extract_pictures(pptx_path: Path, output_dir: Path) -> dict[str, dict]:
                 continue
 
             data = zf.read(entry.filename)
+
+            # Patch Microsoft icon-library SVGs whose "dot" paths use a
+            # tiny bbox with fill="none" and rely on the stroke overlapping
+            # itself to look filled. Browsers render that as an outline,
+            # not the filled blob PowerPoint draws — so we set fill=stroke
+            # on those paths so the visual matches.
+            if filename.lower().endswith(".svg"):
+                data = _patch_tiny_stroked_paths(data)
+
             dest = assets_dir / filename
 
             # Idempotency: skip write when bytes are identical

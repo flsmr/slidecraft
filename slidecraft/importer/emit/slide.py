@@ -18,6 +18,7 @@ from ..model import (
     Slide,
     SolidFill,
 )
+from ..fonts import strip_weight_suffix
 from ..shapes.emit import render_text_shape_slot_content
 
 # ---------------------------------------------------------------------------
@@ -64,16 +65,28 @@ def _emit_run_markdown(text: str, deviations: dict) -> str:
     non_md = dev_keys - _MARKDOWN_ONLY - {"underline"}
     if non_md:
         style_parts = []
+        # Strip weight suffix from font-family so we reference the base
+        # @font-face name (matches the _run_to_css logic in emit/layout.py).
+        # "Source Sans Pro Bold" splits to family="Source Sans Pro" +
+        # implied weight 700; without this split, browsers fall back to
+        # the default sans-serif because no @font-face named "Source Sans
+        # Pro Bold" is registered.
+        weight_from_family: int | None = None
+        if "font_family" in deviations:
+            base_family, natural = strip_weight_suffix(deviations["font_family"])
+            style_parts.append(f"font-family:'{base_family}'")
+            if natural != 400 and base_family != deviations["font_family"]:
+                weight_from_family = natural
         if "color" in deviations:
             style_parts.append(f"color:{_hex(deviations['color'])}")
         if "font_size_pt" in deviations:
             px = deviations["font_size_pt"] * 96 / 72
             style_parts.append(f"font-size:{px:.4g}px")
-        if "font_family" in deviations:
-            style_parts.append(f'font-family:"{deviations["font_family"]}"')
         # bold/italic/underline/strike inside span via additional CSS
         if deviations.get("bold"):
             style_parts.append("font-weight:700")
+        elif weight_from_family is not None:
+            style_parts.append(f"font-weight:{weight_from_family}")
         elif deviations.get("bold") is False:
             style_parts.append("font-weight:400")
         if deviations.get("italic"):
@@ -125,15 +138,23 @@ def _emit_run_html(text: str, deviations: dict) -> str:
     non_md = dev_keys - _MARKDOWN_ONLY - {"underline"}
     if non_md:
         style_parts = []
+        # Strip weight suffix from font-family — same logic as
+        # _emit_run_markdown and _run_to_css. See those for the rationale.
+        weight_from_family: int | None = None
+        if "font_family" in deviations:
+            base_family, natural = strip_weight_suffix(deviations["font_family"])
+            style_parts.append(f"font-family:'{base_family}'")
+            if natural != 400 and base_family != deviations["font_family"]:
+                weight_from_family = natural
         if "color" in deviations:
             style_parts.append(f"color:{_hex(deviations['color'])}")
         if "font_size_pt" in deviations:
             px = deviations["font_size_pt"] * 96 / 72
             style_parts.append(f"font-size:{px:.4g}px")
-        if "font_family" in deviations:
-            style_parts.append(f'font-family:"{deviations["font_family"]}"')
         if deviations.get("bold"):
             style_parts.append("font-weight:700")
+        elif weight_from_family is not None:
+            style_parts.append(f"font-weight:{weight_from_family}")
         elif deviations.get("bold") is False:
             style_parts.append("font-weight:400")
         if deviations.get("italic"):
