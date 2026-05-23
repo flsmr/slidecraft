@@ -736,7 +736,14 @@ def diff_run(run: Run, default: Run) -> Run:
 
 
 def diff_para(para: Paragraph, default: Paragraph) -> Paragraph:
-    """Return a Paragraph with only fields that differ from the default (None = same as default)."""
+    """Return a Paragraph with only fields that differ from the default (None = same as default).
+
+    Includes ALL bullet styling fields so the emitter can apply per-paragraph
+    overrides. Previously bullet_color / bullet_font / bullet_size_pct /
+    bullet_autonum_type were silently dropped here — that's why bullets on
+    tmp2 slide 1 showed no marker glyph even though the XML had
+    <a:buAutoNum type="arabicPeriod"/>.
+    """
     return Paragraph(
         runs=para.runs,
         align=para.align if para.align != default.align else None,
@@ -747,5 +754,9 @@ def diff_para(para: Paragraph, default: Paragraph) -> Paragraph:
         margin_left_pt=para.margin_left_pt if para.margin_left_pt != default.margin_left_pt else None,
         bullet=para.bullet if para.bullet != default.bullet else None,
         bullet_char=para.bullet_char if para.bullet_char != default.bullet_char else None,
+        bullet_color=para.bullet_color if para.bullet_color != default.bullet_color else None,
+        bullet_font=para.bullet_font if para.bullet_font != default.bullet_font else None,
+        bullet_size_pct=para.bullet_size_pct if para.bullet_size_pct != default.bullet_size_pct else None,
+        bullet_autonum_type=para.bullet_autonum_type if para.bullet_autonum_type != default.bullet_autonum_type else None,
         level=para.level,
     )

@@ -354,7 +354,17 @@ def _run_span_style(deviations: dict) -> str:
         px = deviations["font_size_pt"] * _PT_TO_PX
         parts.append(f"font-size:{_fmt(px)}px")
     if "font_family" in deviations:
-        parts.append(f'font-family:"{deviations["font_family"]}"')
+        # SINGLE quotes inside the double-quoted style="..." attribute
+        # (same fix already applied to emit/slide.py _emit_run_html /
+        # _emit_run_markdown). The Vue compiler errors out with
+        # "Attribute name cannot contain U+0022" when nested double
+        # quotes break the outer attribute parsing.
+        # Also strip the PPT weight suffix so the family name matches
+        # what Slidev's Google Fonts auto-import registers (mirrors the
+        # behaviour in emit/layout.py::_run_to_css).
+        from ..fonts import strip_weight_suffix
+        base_family, _ = strip_weight_suffix(deviations["font_family"])
+        parts.append(f"font-family:'{base_family}'")
     if deviations.get("bold"):
         parts.append("font-weight:700")
     elif deviations.get("bold") is False:
