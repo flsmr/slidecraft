@@ -46,6 +46,7 @@ from slidecraft.importer.inheritance import (
     resolve_placeholder,
 )
 from slidecraft.importer.pictures.effects import parse_effects
+from slidecraft.importer.pictures.geometry import cust_geom_to_clip_path, preset_to_css
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -521,6 +522,69 @@ def _resolve_blip_asset_ref(blip_fill_el: Optional[etree._Element], part) -> Opt
     return Path(str(partname)).name
 
 
+def _shape_clip_path(
+    sp_pr: Optional[etree._Element],
+    width_px: float,
+    height_px: float,
+) -> Optional[str]:
+    """Build a CSS ``clip-path`` value for *sp_pr*'s geometry, or ``None``.
+
+    Handles two PPT geometry forms on the shape's ``<p:spPr>``:
+
+      - ``<a:prstGeom prst="..."/>``: maps to a preset clip-path / border-radius
+        via :func:`pictures.geometry.preset_to_css`. ``rect`` (the default) and
+        unknown presets return ``None`` (caller's wrapper renders as a plain
+        rectangle).
+      - ``<a:custGeom>``: freeform path; converted via
+        :func:`pictures.geometry.cust_geom_to_clip_path`.
+
+    Returns the ready-to-paste CSS value (e.g. ``'polygon(...)'`` or
+    ``'path("M ... Z")'``) or ``None`` when no clipping should be applied.
+    """
+    if sp_pr is None:
+        return None
+
+    # custGeom first — if both are present (unusual but valid), the freeform
+    # path is more specific.
+    cust = sp_pr.find(_x("a:custGeom"))
+    if cust is not None and width_px > 0 and height_px > 0:
+        clip = cust_geom_to_clip_path(cust, width_px, height_px)
+        if clip:
+            return clip
+
+    prst = sp_pr.find(_x("a:prstGeom"))
+    if prst is not None:
+        name = prst.get("prst")
+        if name and name != "rect":
+            av_lst = prst.find(_x("a:avLst"))
+            avs: dict[str, int] = {}
+            if av_lst is not None:
+                for gd in av_lst.findall(_x("a:gd")):
+                    gd_name = gd.get("name")
+                    fmla = gd.get("fmla", "")
+                    if gd_name and fmla.startswith("val "):
+                        try:
+                            avs[gd_name] = int(fmla[4:])
+                        except ValueError:
+                            continue
+            geom = preset_to_css(
+                name,
+                int(width_px) if width_px else 0,
+                int(height_px) if height_px else 0,
+                avs or None,
+            )
+            if geom is not None:
+                if geom.get("clip_path"):
+                    return geom["clip_path"]
+                # border-radius is handled by the wrapper style instead of
+                # clip-path; returning None lets the emit layer skip clip-path
+                # entirely and apply border-radius via its own pathway later.
+                # For now placeholders don't propagate border-radius, so a
+                # rounded-rect placeholder still renders as a plain rect.
+                # Future work.
+    return None
+
+
 def _read_prst_geom(
     sp_pr: Optional[etree._Element],
 ) -> tuple[Optional[str], Optional[dict[str, int]]]:
@@ -894,6 +958,19 @@ def parse(pptx_path: Path) -> Presentation:
                             if run.font_family:
                                 typefaces.add(run.font_family)
 
+            # Geometry shape (prstGeom / custGeom) cascade: slide → layout
+            # → master. The drawer-shape chip on the IU title page is a
+            # <a:custGeom> on the LAYOUT placeholder; without this cascade
+            # the slide-level wrapper falls back to a plain rect.
+            clip_path: Optional[str] = None
+            for src_sp in (sp_el, layout_sp, master_sp):
+                if src_sp is None:
+                    continue
+                src_sp_pr = src_sp.find(_x("p:spPr"))
+                clip_path = _shape_clip_path(src_sp_pr, w_px, h_px)
+                if clip_path is not None:
+                    break
+
             placeholders.append(Placeholder(
                 idx=idx,
                 type=ph_type,
@@ -908,6 +985,7 @@ def parse(pptx_path: Path) -> Presentation:
                 default_run_props=default_run,
                 default_para_props=default_para,
                 is_prompt_fallback=is_prompt_fallback,
+                clip_path=clip_path,
             ))
 
         # Surface layout-only picture placeholders. OOXML: a layout-level

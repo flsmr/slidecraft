@@ -183,6 +183,13 @@ def _placeholder_style(ph: Placeholder, frame_anchor: str = "t") -> str:
             if rot_total != 0.0:
                 parts.append(f"transform:rotate({rot_total:.4g}deg)")
 
+    # Clip-path from prstGeom / custGeom cascade (e.g. drawer-shape chip on
+    # IU title page). When set, the wrapper's background and text content are
+    # both clipped to the path; padding inside the wrapper keeps text from
+    # hitting the curved edges.
+    if ph.clip_path:
+        parts.append(f"clip-path:{ph.clip_path}")
+
     # Run defaults (font, color, weight, etc.)
     parts.extend(_run_props_css(ph))
     # Para defaults (text-align, line-height)

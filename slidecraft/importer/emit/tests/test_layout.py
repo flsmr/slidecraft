@@ -38,6 +38,7 @@ def _make_ph(
     default_font: str | None = None,
     default_size_pt: float | None = None,
     paragraphs=None,
+    clip_path: str | None = None,
 ) -> Placeholder:
     tf = TextFrame(
         paragraphs=paragraphs or [],
@@ -62,6 +63,7 @@ def _make_ph(
         opacity=1.0,
         text_frame=tf,
         default_run_props=default_run,
+        clip_path=clip_path,
     )
 
 
@@ -489,3 +491,29 @@ class TestPictureEmission:
         idx_b = content.index('class="pic-20"')
         idx_c = content.index('class="pic-30"')
         assert idx_a < idx_b < idx_c
+
+
+class TestPlaceholderClipPath:
+    """Placeholders with a clip-path (from prstGeom / custGeom) emit it inline (P10)."""
+
+    def test_clip_path_in_wrapper_style(self, tmp_path):
+        ph = _make_ph(idx=9, clip_path='path("M 0 0 L 100 0 L 100 50 Z")')
+        slide = Slide(index=1, placeholders=[ph])
+        pres = _make_pres([slide])
+        content = _emit_and_read(tmp_path, pres)
+        assert 'clip-path:path("M 0 0 L 100 0 L 100 50 Z")' in content
+
+    def test_no_clip_path_when_none(self, tmp_path):
+        ph = _make_ph(idx=9, clip_path=None)
+        slide = Slide(index=1, placeholders=[ph])
+        pres = _make_pres([slide])
+        content = _emit_and_read(tmp_path, pres)
+        assert "clip-path:" not in content
+
+    def test_polygon_clip_path(self, tmp_path):
+        """clip-path value can be polygon(...) (from a prstGeom like 'triangle')."""
+        ph = _make_ph(idx=9, clip_path="polygon(50% 0%, 100% 100%, 0% 100%)")
+        slide = Slide(index=1, placeholders=[ph])
+        pres = _make_pres([slide])
+        content = _emit_and_read(tmp_path, pres)
+        assert "clip-path:polygon(50% 0%, 100% 100%, 0% 100%)" in content

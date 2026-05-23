@@ -17,6 +17,7 @@ from slidecraft.importer.parse import (
     parse,
     _read_prst_geom,
     _resolve_blip_asset_ref,
+    _shape_clip_path,
     _txbody_is_empty,
     _layout_ph_has_custom_prompt,
     _parse_paragraph,
@@ -777,3 +778,70 @@ class TestReadPrstGeom:
         name, av = _read_prst_geom(sp_pr)
         assert name == "wave"
         assert av is None
+
+
+# ---------------------------------------------------------------------------
+# Tests: _shape_clip_path — prstGeom + custGeom resolver (P10)
+# ---------------------------------------------------------------------------
+
+class TestShapeClipPath:
+    def test_returns_none_for_missing_sp_pr(self):
+        assert _shape_clip_path(None, 100, 50) is None
+
+    def test_returns_none_for_rect_prst(self):
+        sp_pr = etree.fromstring(
+            f'<p:spPr xmlns:p="{_P_NS}" xmlns:a="{_A_NS}">'
+            f'<a:prstGeom prst="rect"/></p:spPr>'
+        )
+        assert _shape_clip_path(sp_pr, 100, 50) is None
+
+    def test_returns_clip_path_for_ellipse(self):
+        # ellipse maps to border-radius (not clip-path) so _shape_clip_path
+        # returns None (border-radius is applied via a separate code path)
+        sp_pr = etree.fromstring(
+            f'<p:spPr xmlns:p="{_P_NS}" xmlns:a="{_A_NS}">'
+            f'<a:prstGeom prst="ellipse"/></p:spPr>'
+        )
+        assert _shape_clip_path(sp_pr, 100, 100) is None
+
+    def test_returns_clip_path_for_triangle(self):
+        sp_pr = etree.fromstring(
+            f'<p:spPr xmlns:p="{_P_NS}" xmlns:a="{_A_NS}">'
+            f'<a:prstGeom prst="triangle"/></p:spPr>'
+        )
+        result = _shape_clip_path(sp_pr, 100, 100)
+        assert result is not None and "polygon(" in result
+
+    def test_returns_clip_path_for_custom_geom(self):
+        sp_pr = etree.fromstring(
+            f'<p:spPr xmlns:p="{_P_NS}" xmlns:a="{_A_NS}">'
+            f'<a:custGeom>'
+            f'<a:pathLst>'
+            f'<a:path w="100" h="100">'
+            f'<a:moveTo><a:pt x="0" y="0"/></a:moveTo>'
+            f'<a:lnTo><a:pt x="100" y="0"/></a:lnTo>'
+            f'<a:lnTo><a:pt x="100" y="100"/></a:lnTo>'
+            f'<a:close/>'
+            f'</a:path>'
+            f'</a:pathLst>'
+            f'</a:custGeom></p:spPr>'
+        )
+        result = _shape_clip_path(sp_pr, 200, 100)
+        assert result == 'path("M 0 0 L 200 0 L 200 100 Z")'
+
+    def test_custgeom_wins_when_both_present(self):
+        """Pathological case: prstGeom + custGeom on same shape. Freeform wins."""
+        sp_pr = etree.fromstring(
+            f'<p:spPr xmlns:p="{_P_NS}" xmlns:a="{_A_NS}">'
+            f'<a:prstGeom prst="ellipse"/>'
+            f'<a:custGeom>'
+            f'<a:pathLst>'
+            f'<a:path w="100" h="100">'
+            f'<a:moveTo><a:pt x="0" y="0"/></a:moveTo>'
+            f'<a:close/>'
+            f'</a:path>'
+            f'</a:pathLst>'
+            f'</a:custGeom></p:spPr>'
+        )
+        result = _shape_clip_path(sp_pr, 100, 100)
+        assert result is not None and result.startswith('path(')
