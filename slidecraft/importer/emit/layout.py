@@ -493,6 +493,21 @@ def _emit_layout_vue(slide: Slide, canvas_width: int, canvas_height: int) -> str
     # <p:otherStyle> down through layout lstStyle to per-paragraph pPr.
     # We emit one ::marker rule per (placeholder, level, bullet kind) so
     # the output uses pixel-accurate PPT bullets instead of browser defaults.
+    # Reset paragraph margins inside placeholder slots. Slidev / UnoCSS
+    # don't reset <p> margin, so the browser-default ~1em (16 px) margin
+    # stacks ON TOP of any per-paragraph PPT `space_before_pt` we emit
+    # inline (e.g. `<p style="margin-top:6pt">` from <a:spcBef>). That made
+    # tmp2 slide 7 (Feynman method) render with visibly wider gaps between
+    # paragraphs than the PPT shows. Resetting all <p> margins to 0 inside
+    # the placeholder scope means the inline `margin-top:6pt` we emit IS
+    # the total gap, matching PPT exactly.
+    for ph in slide.placeholders:
+        if ph.text_frame is None:
+            continue
+        lines.append(
+            f".slidev-layout .ph-{ph.idx} :deep(p) {{ margin: 0; }}"
+        )
+
     for ph in slide.placeholders:
         if ph.text_frame is None:
             continue
