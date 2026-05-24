@@ -80,7 +80,7 @@ class TestSlidePlainText:
         pres = _make_pres([slide])
         content = _emit_and_read(tmp_path, pres)
         assert "layout: slide1" in content
-        assert "::ph_5::" in content
+        assert "::body-5::" in content
 
     def test_slide_global_theme_frontmatter(self, tmp_path):
         pres = _make_pres([])
@@ -318,7 +318,7 @@ class TestPicturePlaceholderOverrideHint:
         pic = _make_pic_ph(ph_idx=14)
         slide = Slide(index=1, placeholders=[], pictures=[pic])
         content = _emit_and_read(tmp_path, _make_pres([slide]))
-        assert "<!-- ::ph_14:: to override the picture;" in content
+        assert "<!-- ::picture-14:: to override the picture;" in content
         assert "default image lives in the theme" in content
 
     def test_hint_is_commented_not_active_slot(self, tmp_path):
@@ -328,13 +328,13 @@ class TestPicturePlaceholderOverrideHint:
         pic = _make_pic_ph(ph_idx=14)
         slide = Slide(index=1, placeholders=[], pictures=[pic])
         content = _emit_and_read(tmp_path, _make_pres([slide]))
-        # The literal ::ph_14:: only appears inside the comment, never on
-        # its own line — so Slidev sees no override and the theme default
+        # The literal ::picture-14:: only appears inside the comment, never
+        # on its own line — so Slidev sees no override and the theme default
         # renders.
         for line in content.splitlines():
-            if "::ph_14::" in line:
+            if "::picture-14::" in line:
                 assert line.lstrip().startswith("<!--"), (
-                    f"::ph_14:: appears outside an HTML comment: {line!r}"
+                    f"::picture-14:: appears outside an HTML comment: {line!r}"
                 )
 
     def test_free_picture_emits_no_hint(self, tmp_path):
@@ -348,7 +348,9 @@ class TestPicturePlaceholderOverrideHint:
         )
         slide = Slide(index=1, placeholders=[], pictures=[pic])
         content = _emit_and_read(tmp_path, _make_pres([slide]))
-        assert "::ph_" not in content
+        # No slot markers (text or picture) for a slide with only a free pic.
+        assert "::picture-" not in content
+        assert "::body-" not in content
         assert "<!--" not in content
 
     def test_unbound_picture_placeholder_still_emits_hint(self, tmp_path):
@@ -359,7 +361,7 @@ class TestPicturePlaceholderOverrideHint:
         pic = _make_pic_ph(ph_idx=5, asset_ref=None)
         slide = Slide(index=1, placeholders=[], pictures=[pic])
         content = _emit_and_read(tmp_path, _make_pres([slide]))
-        assert "<!-- ::ph_5:: to override the picture;" in content
+        assert "<!-- ::picture-5:: to override the picture;" in content
 
     def test_hint_emitted_per_picture_placeholder(self, tmp_path):
         """One commented hint per picture-placeholder slot, in slide order."""
@@ -367,6 +369,6 @@ class TestPicturePlaceholderOverrideHint:
         pic_b = _make_pic_ph(ph_idx=7)
         slide = Slide(index=1, placeholders=[], pictures=[pic_a, pic_b])
         content = _emit_and_read(tmp_path, _make_pres([slide]))
-        assert content.count("::ph_3::") == 1
-        assert content.count("::ph_7::") == 1
-        assert content.index("::ph_3::") < content.index("::ph_7::")
+        assert content.count("::picture-3::") == 1
+        assert content.count("::picture-7::") == 1
+        assert content.index("::picture-3::") < content.index("::picture-7::")

@@ -22,6 +22,7 @@ from ..pictures.derivatives import derivative_filename
 from ..pictures.geometry import preset_to_css
 from ..shapes.emit import render_text_shape_host
 from ..tables.emit import render_table
+from .naming import slot_name_for_picture, slot_name_for_placeholder
 
 # ---------------------------------------------------------------------------
 # Fill → CSS helpers
@@ -472,27 +473,29 @@ def _emit_layout_vue(slide: Slide, canvas_width: int, canvas_height: int) -> str
     for ph in slide.placeholders:
         anchor = ph.text_frame.anchor if ph.text_frame else "t"
         style = _placeholder_style(ph, frame_anchor=anchor)
-        lines.append(f'{_INDENT * 3}<div class="ph-{ph.idx}" style="{style}">')
-        lines.append(f'{_INDENT * 4}<slot name="ph_{ph.idx}" />')
+        slot = slot_name_for_placeholder(ph)
+        lines.append(f'{_INDENT * 3}<div class="{slot}" style="{style}">')
+        lines.append(f'{_INDENT * 4}<slot name="{slot}" />')
         lines.append(f"{_INDENT * 3}</div>")
 
     # Pictures (P6): free <p:pic> shapes baked fully into the layout; picture
     # placeholders emit a wrapped <slot> with the layout's default <img> as the
     # slot's default content, so slides can override per-placeholder by
-    # supplying their own ::ph_<idx>:: block.
+    # supplying their own ::picture-<idx>:: block.
     for pic in slide.pictures:
         style = _picture_wrapper_style(pic)
         img_tag = _picture_img_tag(pic, asset_var_map)
         if pic.is_placeholder and pic.ph_idx is not None:
+            slot = slot_name_for_picture(pic)
             lines.append(
-                f'{_INDENT * 3}<div class="ph-{pic.ph_idx}" style="{style}">'
+                f'{_INDENT * 3}<div class="{slot}" style="{style}">'
             )
             if img_tag:
-                lines.append(f'{_INDENT * 4}<slot name="ph_{pic.ph_idx}">{img_tag}</slot>')
+                lines.append(f'{_INDENT * 4}<slot name="{slot}">{img_tag}</slot>')
             else:
                 # Un-bound picture placeholder — empty box; slide may still
-                # override via ::ph_<idx>:: to supply its own image.
-                lines.append(f'{_INDENT * 4}<slot name="ph_{pic.ph_idx}" />')
+                # override via ::picture-<idx>:: to supply its own image.
+                lines.append(f'{_INDENT * 4}<slot name="{slot}" />')
             lines.append(f"{_INDENT * 3}</div>")
         else:
             # Free <p:pic> — baked completely; no slot, no override.
@@ -596,8 +599,9 @@ def _emit_layout_vue(slide: Slide, canvas_width: int, canvas_height: int) -> str
     for ph in slide.placeholders:
         if ph.text_frame is None:
             continue
+        slot = slot_name_for_placeholder(ph)
         lines.append(
-            f".slidev-layout .ph-{ph.idx} :deep(p) {{ margin: 0; }}"
+            f".slidev-layout .{slot} :deep(p) {{ margin: 0; }}"
         )
     for shape in slide.text_shapes:
         if shape.text_frame is None:
@@ -627,14 +631,14 @@ def _emit_layout_vue(slide: Slide, canvas_width: int, canvas_height: int) -> str
     for pic in slide.pictures:
         if not pic.is_placeholder or pic.ph_idx is None:
             continue
-        idx = pic.ph_idx
+        slot = slot_name_for_picture(pic)
         lines.append(
-            f".slidev-layout .ph-{idx} :deep(p) {{ margin: 0; }}"
+            f".slidev-layout .{slot} :deep(p) {{ margin: 0; }}"
         )
         lines.append(
-            f".slidev-layout .ph-{idx} :deep(img), "
-            f".slidev-layout .ph-{idx} :deep(svg), "
-            f".slidev-layout .ph-{idx} :deep(video) {{"
+            f".slidev-layout .{slot} :deep(img), "
+            f".slidev-layout .{slot} :deep(svg), "
+            f".slidev-layout .{slot} :deep(video) {{"
         )
         lines.append("  width: 100%;")
         lines.append("  height: 100%;")
@@ -732,7 +736,7 @@ def _emit_layout_vue(slide: Slide, canvas_width: int, canvas_height: int) -> str
         if ph.text_frame is None:
             continue
         _emit_bullet_css(
-            f".ph-{ph.idx}",
+            f".{slot_name_for_placeholder(ph)}",
             ph.text_frame.paragraphs,
             ph.default_para_props,
         )

@@ -20,6 +20,7 @@ from ..model import (
 )
 from ..fonts import strip_weight_suffix
 from ..shapes.emit import render_text_shape_slot_content
+from .naming import slot_name_for_picture, slot_name_for_placeholder
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -599,7 +600,7 @@ def emit_deck(
 
         for ph in slide.placeholders:
             md_parts.append("")
-            md_parts.append(f"::ph_{ph.idx}::")
+            md_parts.append(f"::{slot_name_for_placeholder(ph)}::")
             content = _emit_slot_content(ph)
             if content:
                 md_parts.append(content)
@@ -614,9 +615,10 @@ def emit_deck(
         for pic in slide.pictures:
             if not pic.is_placeholder or pic.ph_idx is None:
                 continue
+            slot = slot_name_for_picture(pic)
             md_parts.append("")
             md_parts.append(
-                f"<!-- ::ph_{pic.ph_idx}:: to override the picture; "
+                f"<!-- ::{slot}:: to override the picture; "
                 f"default image lives in the theme -->"
             )
 

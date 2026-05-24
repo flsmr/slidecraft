@@ -95,8 +95,8 @@ class TestLayoutOnePlaceholder:
         assert "<template>" in content
         assert 'class="slidev-layout"' in content
         assert 'class="slide-root"' in content
-        assert 'class="ph-5"' in content
-        assert 'name="ph_5"' in content
+        assert 'class="body-5"' in content
+        assert 'name="body-5"' in content
         assert "position:absolute" in content
         assert "left:120px" in content
         assert "top:80px" in content
@@ -183,7 +183,7 @@ class TestLayoutScoping:
         assert "align-items:center" in content
 
     def test_layout_bullet_css_scoped(self, tmp_path):
-        """Bullet CSS selectors must be scoped under .slidev-layout .ph-N."""
+        """Bullet CSS selectors must be scoped under .slidev-layout .<slot>."""
         bullet_para = Paragraph(
             runs=[Run(text="item")],
             bullet="char",
@@ -193,7 +193,7 @@ class TestLayoutScoping:
         slide = Slide(index=1, placeholders=[ph])
         pres = _make_pres([slide])
         content = _emit_and_read(tmp_path, pres)
-        assert ".slidev-layout .ph-6 ul li" in content
+        assert ".slidev-layout .body-6 ul li" in content
 
     def test_layout_multiple_slides(self, tmp_path):
         ph1 = _make_ph(idx=1)
@@ -312,8 +312,8 @@ class TestPictureEmission:
         assert ':src="_asset_0"' in content
         assert "left:100px" in content
         assert "width:300px" in content
-        # Free picture: no slot.
-        assert 'name="ph_' not in content or '<slot name="ph_' not in content
+        # Free picture: no slot at all.
+        assert '<slot' not in content
 
     def test_free_picture_alt_text_escaped(self, tmp_path):
         pic = _make_pic(asset_ref="img.png", alt_text='Tag "X" hits 99%')
@@ -330,21 +330,21 @@ class TestPictureEmission:
         )
         slide = Slide(index=1, placeholders=[], pictures=[pic])
         content = _emit_and_read(tmp_path, _make_pres([slide]))
-        # Wrapper uses `ph-<idx>`, not `pic-<id>`.
-        assert 'class="ph-3"' in content
+        # Wrapper uses `picture-<idx>`, not `pic-<id>` (free pics keep pic-).
+        assert 'class="picture-3"' in content
         assert 'class="pic-99"' not in content
-        # Slot named ph_<idx> with default <img> as fallback content.
+        # Slot named picture-<idx> with default <img> as fallback content.
         # The default <img> uses an ES-import binding (theme-owned asset).
         assert "import _asset_0 from '../assets/layout_default.png'" in content
-        assert '<slot name="ph_3"><img :src="_asset_0"' in content
+        assert '<slot name="picture-3"><img :src="_asset_0"' in content
 
     def test_picture_placeholder_without_bound_image_emits_empty_slot(self, tmp_path):
         pic = _make_pic(asset_ref=None, is_placeholder=True, ph_idx=5)
         slide = Slide(index=1, placeholders=[], pictures=[pic])
         content = _emit_and_read(tmp_path, _make_pres([slide]))
-        assert 'class="ph-5"' in content
+        assert 'class="picture-5"' in content
         # Empty slot — no <img> default.
-        assert '<slot name="ph_5" />' in content
+        assert '<slot name="picture-5" />' in content
         assert "<img" not in content
 
     def test_prst_geom_ellipse_applies_border_radius(self, tmp_path):
@@ -488,7 +488,7 @@ class TestPictureEmission:
         pic = _make_pic(shape_id=88)
         slide = Slide(index=1, placeholders=[ph], pictures=[pic])
         content = _emit_and_read(tmp_path, _make_pres([slide]))
-        assert content.index('class="ph-1"') < content.index('class="pic-88"')
+        assert content.index('class="body-1"') < content.index('class="pic-88"')
 
     def test_multiple_free_pictures_emit_in_list_order(self, tmp_path):
         pic_a = _make_pic(asset_ref="a.png", shape_id=10, order_index=0)
@@ -535,7 +535,7 @@ class TestPlaceholderClipPath:
 class TestPicturePlaceholderSlotErgonomics:
     """The deck author overrides a picture-placeholder slot in markdown like:
 
-        ::ph_14::
+        ::picture-14::
         ![](/my-photo.jpg)
 
     Markdown wraps that in ``<p><img></p>`` with no inline styles. The layout
@@ -553,7 +553,7 @@ class TestPicturePlaceholderSlotErgonomics:
         )
         slide = Slide(index=1, placeholders=[], pictures=[pic])
         content = _emit_and_read(tmp_path, _make_pres([slide]))
-        assert ".slidev-layout .ph-14 :deep(p) { margin: 0; }" in content
+        assert ".slidev-layout .picture-14 :deep(p) { margin: 0; }" in content
 
     def test_picture_placeholder_emits_img_stretch_rule(self, tmp_path):
         pic = _make_pic(
@@ -565,9 +565,9 @@ class TestPicturePlaceholderSlotErgonomics:
         content = _emit_and_read(tmp_path, _make_pres([slide]))
         # The selector covers img + svg + video so markdown overrides and
         # alternative content (inline SVG, embedded video) all stretch.
-        assert ".slidev-layout .ph-14 :deep(img)" in content
-        assert ".slidev-layout .ph-14 :deep(svg)" in content
-        assert ".slidev-layout .ph-14 :deep(video)" in content
+        assert ".slidev-layout .picture-14 :deep(img)" in content
+        assert ".slidev-layout .picture-14 :deep(svg)" in content
+        assert ".slidev-layout .picture-14 :deep(video)" in content
         assert "object-fit: fill;" in content
         assert "width: 100%;" in content
         assert "height: 100%;" in content
@@ -577,21 +577,21 @@ class TestPicturePlaceholderSlotErgonomics:
         pic = _make_pic(asset_ref="bg.png", shape_id=42, is_placeholder=False)
         slide = Slide(index=1, placeholders=[], pictures=[pic])
         content = _emit_and_read(tmp_path, _make_pres([slide]))
-        # Neither :deep(img) under .pic-42 (free pic class) nor under any .ph-N
-        # should exist for this slide.
+        # Neither :deep(img) under .pic-42 (free pic class) nor under any
+        # .picture-N (picture-placeholder class) should exist for this slide.
         assert ".pic-42 :deep(img)" not in content
         # Picture placeholder CSS markers should be absent entirely.
-        assert ":deep(img)" not in content or ".ph-" not in content.split(":deep(img)")[0].rsplit("}", 1)[-1]
+        assert ":deep(img)" not in content or ".picture-" not in content.split(":deep(img)")[0].rsplit("}", 1)[-1]
 
     def test_unbound_picture_placeholder_still_emits_css(self, tmp_path):
         """An empty picture-placeholder slot still gets the override CSS.
 
-        If the deck supplies an image later via ::ph_N::, the stretch rule
+        If the deck supplies an image later via ::picture-N::, the stretch rule
         needs to be already in place. We emit the CSS based on the slot
         existing, not on whether a default <img> is present.
         """
         pic = _make_pic(asset_ref=None, is_placeholder=True, ph_idx=5)
         slide = Slide(index=1, placeholders=[], pictures=[pic])
         content = _emit_and_read(tmp_path, _make_pres([slide]))
-        assert ".slidev-layout .ph-5 :deep(img)" in content
-        assert ".slidev-layout .ph-5 :deep(p) { margin: 0; }" in content
+        assert ".slidev-layout .picture-5 :deep(img)" in content
+        assert ".slidev-layout .picture-5 :deep(p) { margin: 0; }" in content
