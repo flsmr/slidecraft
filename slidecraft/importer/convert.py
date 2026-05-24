@@ -159,7 +159,11 @@ def convert(
     emit_layouts(presentation, theme_dir)
 
     theme_rel = os.path.relpath(theme_dir.resolve(), deck_dir.resolve()).replace("\\", "/")
-    emit_deck(presentation, deck_dir, theme_relative_path=theme_rel)
+    # Pass theme_name through so the deck's package.json + slides.md frontmatter
+    # reference the same npm package name that emit_theme just wrote into
+    # theme/package.json. Without this, custom theme_names silently break
+    # `npm install` (deck depends on the default name, theme exports a custom one).
+    emit_deck(presentation, deck_dir, theme_relative_path=theme_rel, theme_name=theme_name)
 
     return ConvertResult(
         theme_dir=theme_dir,

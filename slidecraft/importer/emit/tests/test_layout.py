@@ -530,3 +530,68 @@ class TestPlaceholderClipPath:
         pres = _make_pres([slide])
         content = _emit_and_read(tmp_path, pres)
         assert "clip-path:polygon(50% 0%, 100% 100%, 0% 100%)" in content
+
+
+class TestPicturePlaceholderSlotErgonomics:
+    """The deck author overrides a picture-placeholder slot in markdown like:
+
+        ::ph_14::
+        ![](/my-photo.jpg)
+
+    Markdown wraps that in ``<p><img></p>`` with no inline styles. The layout
+    must emit CSS that (a) resets the wrapping <p> margin so the image sits
+    at the placeholder's top edge and (b) stretches any <img>/<svg>/<video>
+    child to fill the placeholder geometry — mirroring the inline style the
+    layout's default <img> carries.
+    """
+
+    def test_picture_placeholder_emits_p_margin_reset(self, tmp_path):
+        pic = _make_pic(
+            asset_ref="default.png",
+            is_placeholder=True,
+            ph_idx=14,
+        )
+        slide = Slide(index=1, placeholders=[], pictures=[pic])
+        content = _emit_and_read(tmp_path, _make_pres([slide]))
+        assert ".slidev-layout .ph-14 :deep(p) { margin: 0; }" in content
+
+    def test_picture_placeholder_emits_img_stretch_rule(self, tmp_path):
+        pic = _make_pic(
+            asset_ref="default.png",
+            is_placeholder=True,
+            ph_idx=14,
+        )
+        slide = Slide(index=1, placeholders=[], pictures=[pic])
+        content = _emit_and_read(tmp_path, _make_pres([slide]))
+        # The selector covers img + svg + video so markdown overrides and
+        # alternative content (inline SVG, embedded video) all stretch.
+        assert ".slidev-layout .ph-14 :deep(img)" in content
+        assert ".slidev-layout .ph-14 :deep(svg)" in content
+        assert ".slidev-layout .ph-14 :deep(video)" in content
+        assert "object-fit: fill;" in content
+        assert "width: 100%;" in content
+        assert "height: 100%;" in content
+
+    def test_free_picture_does_not_emit_slot_css(self, tmp_path):
+        """Free <p:pic> shapes are baked into the layout — no slot, no rule."""
+        pic = _make_pic(asset_ref="bg.png", shape_id=42, is_placeholder=False)
+        slide = Slide(index=1, placeholders=[], pictures=[pic])
+        content = _emit_and_read(tmp_path, _make_pres([slide]))
+        # Neither :deep(img) under .pic-42 (free pic class) nor under any .ph-N
+        # should exist for this slide.
+        assert ".pic-42 :deep(img)" not in content
+        # Picture placeholder CSS markers should be absent entirely.
+        assert ":deep(img)" not in content or ".ph-" not in content.split(":deep(img)")[0].rsplit("}", 1)[-1]
+
+    def test_unbound_picture_placeholder_still_emits_css(self, tmp_path):
+        """An empty picture-placeholder slot still gets the override CSS.
+
+        If the deck supplies an image later via ::ph_N::, the stretch rule
+        needs to be already in place. We emit the CSS based on the slot
+        existing, not on whether a default <img> is present.
+        """
+        pic = _make_pic(asset_ref=None, is_placeholder=True, ph_idx=5)
+        slide = Slide(index=1, placeholders=[], pictures=[pic])
+        content = _emit_and_read(tmp_path, _make_pres([slide]))
+        assert ".slidev-layout .ph-5 :deep(img)" in content
+        assert ".slidev-layout .ph-5 :deep(p) { margin: 0; }" in content

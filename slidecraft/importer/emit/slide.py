@@ -604,6 +604,22 @@ def emit_deck(
             if content:
                 md_parts.append(content)
 
+        # Picture-placeholder slots: the layout already renders the theme's
+        # default image, so the deck doesn't NEED to fill these — but we
+        # emit a commented-out hint so the deck author can discover the
+        # slot name without inspecting the .vue. Uncommenting and adding
+        # an <img> or markdown image overrides the default per slide.
+        # See emit/layout.py for the matching CSS that auto-stretches
+        # whatever the override produces (markdown wraps in <p><img></p>).
+        for pic in slide.pictures:
+            if not pic.is_placeholder or pic.ph_idx is None:
+                continue
+            md_parts.append("")
+            md_parts.append(
+                f"<!-- ::ph_{pic.ph_idx}:: to override the picture; "
+                f"default image lives in the theme -->"
+            )
+
         # Layer 3 — slide-source non-placeholder text shapes surface as
         # ::txt_<id>:: slots. Layout/master-source shapes are baked into
         # the layout .vue and don't appear in slides.md.

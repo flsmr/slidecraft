@@ -606,6 +606,42 @@ def _emit_layout_vue(slide: Slide, canvas_width: int, canvas_height: int) -> str
             f".slidev-layout .txt-{shape.shape_id} :deep(p) {{ margin: 0; }}"
         )
 
+    # Picture-placeholder slot ergonomics. The default <img> baked into a
+    # picture-placeholder <slot> carries inline ``width:100%;height:100%;
+    # object-fit:fill`` so it stretches into the placeholder geometry.
+    # When the deck author overrides the slot via markdown — e.g.
+    #
+    #     ::ph_14::
+    #     ![](/my-photo.jpg)
+    #
+    # — the markdown processor produces ``<p><img src="/my-photo.jpg"></p>``
+    # with no inline style, so the override image collapses to its native
+    # size in the top-left of the slot. Worse, the wrapping ``<p>`` adds a
+    # browser-default ~1em margin that pushes the image off-baseline.
+    #
+    # Per-picture-placeholder CSS fixes both: reset ``<p>`` margin (same
+    # idiom as the text-placeholder loop above) and stretch any ``<img>``,
+    # ``<svg>``, or ``<video>`` child to fill the placeholder box. The
+    # default <img> already has these properties inline; the CSS rule wins
+    # for override children, which is the case we care about.
+    for pic in slide.pictures:
+        if not pic.is_placeholder or pic.ph_idx is None:
+            continue
+        idx = pic.ph_idx
+        lines.append(
+            f".slidev-layout .ph-{idx} :deep(p) {{ margin: 0; }}"
+        )
+        lines.append(
+            f".slidev-layout .ph-{idx} :deep(img), "
+            f".slidev-layout .ph-{idx} :deep(svg), "
+            f".slidev-layout .ph-{idx} :deep(video) {{"
+        )
+        lines.append("  width: 100%;")
+        lines.append("  height: 100%;")
+        lines.append("  object-fit: fill;")
+        lines.append("  display: block;")
+        lines.append("}")
+
     def _emit_bullet_css(
         css_class: str,
         paragraphs,
