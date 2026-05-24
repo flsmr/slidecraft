@@ -8,6 +8,7 @@ import pytest
 from slidecraft.importer.model import (
     NoFill,
     Paragraph,
+    Picture,
     Placeholder,
     Presentation,
     RGB,
@@ -293,3 +294,79 @@ class TestSlideMultipleParagraphs:
         content = _emit_and_read(tmp_path, pres)
         # There should be a blank line between them
         assert "first paragraph\n\nsecond paragraph" in content
+
+
+def _make_pic_ph(ph_idx: int, asset_ref: str | None = "default.png") -> Picture:
+    """Build a picture-typed placeholder Picture for slot tests."""
+    return Picture(
+        asset_ref=asset_ref,
+        x_px=0.0, y_px=0.0, width_px=100.0, height_px=100.0,
+        is_placeholder=True,
+        ph_idx=ph_idx,
+        shape_id=900 + ph_idx,
+    )
+
+
+class TestPicturePlaceholderOverrideHint:
+    """A picture-placeholder slot gets a commented hint in slides.md so the
+    deck author can discover the slot name without reading the .vue file.
+    The hint stays commented because the theme's default image is rendered
+    if the deck does nothing — overriding is opt-in.
+    """
+
+    def test_picture_placeholder_emits_commented_hint(self, tmp_path):
+        pic = _make_pic_ph(ph_idx=14)
+        slide = Slide(index=1, placeholders=[], pictures=[pic])
+        content = _emit_and_read(tmp_path, _make_pres([slide]))
+        assert "<!-- ::ph_14:: to override the picture;" in content
+        assert "default image lives in the theme" in content
+
+    def test_hint_is_commented_not_active_slot(self, tmp_path):
+        """The hint must be inside an HTML comment so Slidev does not parse
+        it as an actual slot block (which would suppress the default image).
+        """
+        pic = _make_pic_ph(ph_idx=14)
+        slide = Slide(index=1, placeholders=[], pictures=[pic])
+        content = _emit_and_read(tmp_path, _make_pres([slide]))
+        # The literal ::ph_14:: only appears inside the comment, never on
+        # its own line — so Slidev sees no override and the theme default
+        # renders.
+        for line in content.splitlines():
+            if "::ph_14::" in line:
+                assert line.lstrip().startswith("<!--"), (
+                    f"::ph_14:: appears outside an HTML comment: {line!r}"
+                )
+
+    def test_free_picture_emits_no_hint(self, tmp_path):
+        """Free <p:pic> (not a placeholder) is baked into the layout — no
+        override surface, no hint."""
+        pic = Picture(
+            asset_ref="bg.png",
+            x_px=0.0, y_px=0.0, width_px=100.0, height_px=100.0,
+            is_placeholder=False,
+            shape_id=42,
+        )
+        slide = Slide(index=1, placeholders=[], pictures=[pic])
+        content = _emit_and_read(tmp_path, _make_pres([slide]))
+        assert "::ph_" not in content
+        assert "<!--" not in content
+
+    def test_unbound_picture_placeholder_still_emits_hint(self, tmp_path):
+        """An empty picture-placeholder slot also needs the discoverability
+        hint — that's the case where the deck MUST supply something for
+        anything to render in that slot.
+        """
+        pic = _make_pic_ph(ph_idx=5, asset_ref=None)
+        slide = Slide(index=1, placeholders=[], pictures=[pic])
+        content = _emit_and_read(tmp_path, _make_pres([slide]))
+        assert "<!-- ::ph_5:: to override the picture;" in content
+
+    def test_hint_emitted_per_picture_placeholder(self, tmp_path):
+        """One commented hint per picture-placeholder slot, in slide order."""
+        pic_a = _make_pic_ph(ph_idx=3)
+        pic_b = _make_pic_ph(ph_idx=7)
+        slide = Slide(index=1, placeholders=[], pictures=[pic_a, pic_b])
+        content = _emit_and_read(tmp_path, _make_pres([slide]))
+        assert content.count("::ph_3::") == 1
+        assert content.count("::ph_7::") == 1
+        assert content.index("::ph_3::") < content.index("::ph_7::")
