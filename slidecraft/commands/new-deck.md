@@ -1,135 +1,51 @@
 ---
-description: Create a new Slidev presentation that consumes an existing theme
+description: Scaffold a new Slidev presentation that consumes an existing theme
 argument-hint: [deck-name]
 ---
 
 # New Deck
 
-Scaffold a new Slidev presentation that consumes a theme produced by
-`/slidecraft:import-template` (or any other Slidev theme available on disk).
-
-The command is fully portable — it does **not** assume any particular project
-root, drive letter, or directory layout. All paths are prompted from the
-user, with sensible defaults derived from the current working directory.
+Thin wrapper around `python -m slidecraft.scaffold.new_deck`. The script
+does all the mechanics (mkdir, render templates, compute portable relative
+path, npm install). Your job is just to gather three inputs from the user
+and invoke it once.
 
 ## Steps
 
-1. **Deck name**: If the user passed `[deck-name]` as an argument, use it. Otherwise ask:
-   > What should the new deck be called? (used as the folder name and the `name` field in `package.json`)
-   Store as `DECK_NAME`.
+1. **Gather inputs.** Three pieces of information are needed:
 
-2. **Deck location**: Ask the user where the deck folder should be created. Suggest the current working directory as the default:
-   > Where should `<DECK_NAME>/` be created?
-   > Default: `<CWD>` (creates `<CWD>/<DECK_NAME>/`)
-   Resolve to an absolute path and store as `DECK_DIR = <chosen-base>/<DECK_NAME>`. Abort and ask the user to confirm overwrite if `DECK_DIR` already exists.
+   - **`DECK_NAME`** — Use the argument if provided, else ask:
+     > What should the new deck be called?
 
-3. **Theme location**: Help the user point at an existing Slidev theme. Search in this order and present the candidates:
-   1. Sibling directories of the chosen deck base (`<deck-base>/slidev-theme-*`)
-   2. The parent of the deck base (`<deck-base>/../slidev-theme-*`)
-   3. Any `slidev-theme-*` directory under the user's home (only if the previous two yielded nothing — keep the search shallow, max two levels deep, to avoid scanning huge trees)
+   - **`DECK_LOCATION`** — Where the deck folder will be created (the folder itself is `DECK_LOCATION/DECK_NAME`). Default to the current working directory:
+     > Where should the deck folder be created? (default: current directory)
 
-   For every candidate verify it contains `package.json` with a `"slidev"` key. Then ask:
-   > I found these themes:
-   >   1. `<package.json name>` at `<absolute path>`
-   >   2. …
-   > Which one would you like to use? You can also enter a custom absolute path, or press Enter to use Slidev's built-in default theme.
+   - **`THEME_DIR`** — Discover existing themes, present candidates, let the user pick. Search in this order:
+     1. Sibling directories of `DECK_LOCATION` matching `slidev-theme-*`
+     2. Parent directory of `DECK_LOCATION` matching `slidev-theme-*`
+     3. (Only if 1–2 yielded nothing) shallow search ≤ 2 levels deep under the user's home
 
-   Store:
-   - `THEME_DIR` — absolute path to the chosen theme directory (or `null` if using the Slidev default)
-   - `THEME_NAME` — the `"name"` field from the theme's `package.json` (e.g. `slidev-theme-ILSE`), or `"@slidev/theme-default"` if the default was chosen
-   - `THEME_REL` — `THEME_DIR` expressed relative to `DECK_DIR` using forward slashes (`os.path.relpath(...).replace("\\", "/")`); set to `null` if using the default theme
+     For each candidate, verify it contains `package.json` with a `"slidev"` key. Then present:
+     > Found these themes:
+     >   1. `<name>` at `<absolute-path>`
+     >   2. …
+     > Pick one, enter a custom absolute path, or press Enter for Slidev's built-in default.
 
-4. **Create the deck directory**:
+     Store the chosen absolute path as `THEME_DIR`, or `null` if the user chose the default.
+
+2. **Invoke the scaffolder.** One subprocess call does everything — directory creation, template rendering, portable forward-slash relative-path computation, and `npm install`:
+
    ```bash
-   mkdir -p "<DECK_DIR>/public"
-   ```
-   (`public/` is Slidev's convention for static assets — images you reference as `/foo.png` in markdown.)
-
-5. **Write `<DECK_DIR>/slides.md`** with a minimal starter deck. Use `THEME_NAME` in the frontmatter so npm resolves it via the `file:` dependency declared in the next step:
-
-   ```markdown
-   ---
-   theme: <THEME_NAME>
-   title: <DECK_NAME>
-   ---
-
-   # <DECK_NAME>
-
-   Replace this with your opening slide.
-
-   ---
-
-   # Slide 2
-
-   - Bullet one
-   - Bullet two
-
-   ---
-
-   # Slot overrides
-
-   When a layout exposes named slots (e.g. `slide14` from an imported theme),
-   override them with `::slot-name::` blocks:
-
-   ```
-   ::title::
-   My custom title
-
-   ::body-19::
-   My custom body
-
-   ::picture-22::
-   ![](/my-image.png)
-   ```
+   python -m slidecraft.scaffold.new_deck \
+     --name "<DECK_NAME>" \
+     --location "<DECK_LOCATION>" \
+     --theme "<THEME_DIR>"
    ```
 
-6. **Write `<DECK_DIR>/package.json`**. Reference the chosen theme via a `file:` dependency so npm symlinks it locally — this is the portable equivalent of publishing the theme to a registry:
+   Omit `--theme` entirely if the user chose Slidev's default. Pass `--no-install` to skip `npm install` (e.g. if the user wants to inspect the deck before installing). Pass `--overwrite` if the user explicitly wants to write into an existing directory.
 
-   ```json
-   {
-     "name": "<DECK_NAME>",
-     "private": true,
-     "scripts": {
-       "dev": "slidev",
-       "build": "slidev build",
-       "export": "slidev export"
-     },
-     "dependencies": {
-       "@slidev/cli": "^52.0.0",
-       "<THEME_NAME>": "file:<THEME_REL>"
-     }
-   }
-   ```
+   The script prints a key/value summary on stdout (`deck_dir`, `deck_name`, `theme_name`, `theme_dir`, `theme_rel`, `installed`, `preview`). It exits 0 on success, 1 with an `error:` stderr line on validation failure.
 
-   If the user chose the Slidev default theme (`THEME_DIR` is null), omit the second dependency and drop the `theme:` line from the frontmatter in step 5.
+3. **Report to the user.** Echo the script's summary, then point them at the preview command from the `preview:` line (always of the form `cd "<deck_dir>" && npx slidev`).
 
-7. **Write `<DECK_DIR>/.gitignore`**:
-   ```
-   node_modules/
-   dist/
-   .slidev/
-   *.log
-   .DS_Store
-   Thumbs.db
-   ```
-
-8. **Install npm dependencies**:
-   ```bash
-   cd "<DECK_DIR>"
-   npm install
-   ```
-   This pulls in `@slidev/cli` and symlinks the local theme via the `file:` dependency.
-
-9. **Optionally git-init** (ask the user; default no):
-   > Initialize a git repo in `<DECK_DIR>`?
-   If yes:
-   ```bash
-   cd "<DECK_DIR>"
-   git init
-   ```
-
-10. **Report to the user**:
-    - Deck directory: `<DECK_DIR>`
-    - Theme used: `<THEME_NAME>` at `<THEME_DIR or "Slidev built-in default">`
-    - Preview command: `cd "<DECK_DIR>" && npx slidev`
-    - To add custom material: edit `<DECK_DIR>/slides.md`, drop assets into `<DECK_DIR>/public/`, reference them as `/filename.ext`
+That's it — no manual file creation, no per-step orchestration. Every detail of layout, templates, and dependency wiring lives in `slidecraft/scaffold/new_deck.py` (and is covered by its tests).
