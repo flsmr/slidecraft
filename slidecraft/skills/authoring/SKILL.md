@@ -90,8 +90,8 @@ Write the complete `cif.json`. The CIF structure is:
     "subtitle": "Optional subtitle",
     "author": "Author Name",
     "date": "YYYY-MM-DD",
-    "theme": "iu",
-    "themePath": "../slidev-theme-iu"
+    "theme": "<theme-slug>",
+    "themePath": "../slidev-theme-<theme-slug>"
   },
   "slides": [
     {

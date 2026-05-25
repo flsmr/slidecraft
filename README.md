@@ -28,32 +28,39 @@ Multi-agent presentation pipeline that transforms raw material into polished Sli
 /slidecraft:start
 ```
 
-## Three-Repo Architecture
+## Recommended Directory Layout
 
-As of T-07 the slidecraft project is split into three independent repositories
-that live side-by-side under `D:\Archive\03_Freizeit\Projects\`:
+Slidecraft uses a three-component split — **plugin**, **themes**, **decks** —
+that lets each piece be versioned, shared, and shipped independently. The
+commands (`/slidecraft:import-template`, `/slidecraft:new-theme`,
+`/slidecraft:new-deck`) prompt you for every location, so the components
+can live anywhere you like; the layout below is just the recommended
+convention.
 
 ```
-D:\Archive\03_Freizeit\Projects\
-├── slidecraft\                    ← THIS REPO — plugin, scripts, skills, commands
-├── slidev-theme-iu\               ← IU Group corporate theme (git repo, flat)
-├── slidev-theme-<name>\           ← future theme repos, one per brand
-└── slidecraft-slide-decks\        ← all presentation decks (one subfolder per deck)
-    └── slidecraft-IUG-test-deck\
+<your-workspace>/
+├── slidecraft/                    ← THIS REPO (cloned once; the plugin source)
+├── slidev-theme-<brand>/          ← one folder per brand/template
+│   └── …                          ← created by /slidecraft:import-template
+└── decks/
+    └── <deck-name>/               ← one folder per presentation
+        └── …                      ← created by /slidecraft:new-deck
 ```
 
-**Why three repos?**
+`<your-workspace>` can be `~/projects/`, `D:\Work\`, `/Users/me/`, or anywhere
+else — none of the commands hard-code the path. They prompt for the base
+location and resolve everything relative to your answer.
+
+**Why split it three ways?**
 - Themes are versioned independently of decks (a theme bugfix doesn't bump every deck).
 - Decks can be shared/shipped without the plugin source.
-- New corporate templates get their own theme repo — run `/slidecraft:new-theme`.
+- New corporate templates get their own theme directory — run `/slidecraft:new-theme` or `/slidecraft:import-template`.
 
-**Relevant paths**
-
-| Repo | Purpose | Location |
-|------|---------|----------|
-| slidecraft | Plugin scripts, skills, commands | `D:\archive\03_freizeit\projects\slidecraft\` |
-| slidev-theme-iu | IU Group Slidev theme | `D:\Archive\03_Freizeit\Projects\slidev-theme-iu\` |
-| slidecraft-slide-decks | All authored decks | `D:\Archive\03_Freizeit\Projects\slidecraft-slide-decks\` |
+**Note for existing users:** earlier revisions of this README documented a
+hard-coded `D:\Archive\03_Freizeit\Projects\…` layout. That was the original
+author's local setup, not a requirement. Any layout works as long as the
+deck's `package.json` `file:` dependency resolves to a directory that
+contains a Slidev theme.
 
 ## Repository Structure
 

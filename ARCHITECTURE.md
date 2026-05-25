@@ -25,9 +25,9 @@ importer.convert(
 )
 ```
 
-Test paths (per user instruction; not committed):
-- `theme_dir = D:\Archive\03_Freizeit\Projects\slidecraft-themes\slidecraft-tmp-theme`
-- `deck_dir  = D:\Archive\03_Freizeit\Projects\slidecraft-slide-decks\slidecraft-tmp-deck`
+Test paths (illustrative — substitute your own absolute paths when running locally):
+- `theme_dir = <workspace>/slidev-theme-tmp`
+- `deck_dir  = <workspace>/decks/tmp-deck`
 
 ## Output layout
 

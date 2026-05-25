@@ -1,85 +1,110 @@
 ---
-description: Create a new Slidev theme repo from a corporate PPTX template, or scaffold an empty theme
-argument-hint: <theme-name> [--from-pptx <path>]
+description: Create a new Slidev theme from a corporate PPTX template, or scaffold an empty theme
+argument-hint: [theme-name] [--from-pptx <path>]
 ---
 
 # New Theme
 
-Create a new corporate theme as a flat sibling repo at
-`D:\Archive\03_Freizeit\Projects\slidev-theme-<name>\`.
+Create a new Slidev theme directory. Two modes:
+
+- **With `--from-pptx <path>`** — full conversion: delegates to the same
+  pipeline `/slidecraft:import-template` uses (the
+  `slidecraft.importer.convert` Python API).
+- **Without `--from-pptx`** — scaffold an empty theme skeleton the user
+  can fill in by hand.
+
+The command is fully portable — it does **not** assume any particular
+project root, drive letter, or directory layout. All paths are prompted
+from the user.
 
 ## Steps
 
-1. **Parse arguments**: Extract `<theme-name>` from the argument. Check for
-   `--from-pptx <path>` flag. Store as `THEME_NAME` and optionally `PPTX_PATH`.
+1. **Parse arguments**: Extract `[theme-name]` (if given) and the optional `--from-pptx <path>`. Store as `THEME_NAME` and (optionally) `PPTX_PATH`.
 
-2. **Resolve target directory**:
-   ```
-   THEME_DIR = D:\Archive\03_Freizeit\Projects\slidev-theme-<THEME_NAME>
-   ```
-   Abort if it already exists (ask the user to confirm overwrite first).
+2. **Theme name** (if not provided): Ask
+   > Short slug for the new theme? (e.g. `iu`, `corporate`, `acme`) — becomes the npm package name `slidev-theme-<slug>`
+   Store as `THEME_NAME`.
 
-3. **Create directory structure**:
-   ```
-   mkdir THEME_DIR
-   mkdir THEME_DIR\layouts
-   mkdir THEME_DIR\layouts-generated
-   mkdir THEME_DIR\components
-   mkdir THEME_DIR\public\assets
+3. **Theme location**: Ask the user where the theme directory should be created. Default to the current working directory:
+   > Where should `slidev-theme-<THEME_NAME>/` be created?
+   > Default: `<CWD>` (creates `<CWD>/slidev-theme-<THEME_NAME>/`)
+   Resolve to an absolute path and store as `THEME_DIR = <chosen-base>/slidev-theme-<THEME_NAME>`. Abort and ask the user to confirm overwrite if `THEME_DIR` already exists.
+
+4. **Install Python dependencies** (only needed if `--from-pptx` was given):
+   ```bash
+   pip install python-pptx lxml Pillow --break-system-packages -q
    ```
 
-4. **Write scaffold files** (if `--from-pptx` was NOT given):
+5. **If `--from-pptx <PPTX_PATH>` was given** — full extraction via the importer API. Ask the user where to put the demo deck (defaults to a `deck/` sibling of the theme):
+   > Where should the demo deck be written?
+   > Default: `<chosen-base>/deck/`
+   Store as `DECK_DIR`.
 
-   `package.json` — standard Slidev theme package with `"name": "slidev-theme-<THEME_NAME>"`,
-   `"version": "0.1.0"`, `"slidev"` key with `colorSchema: "light"` and font defaults.
+   Then run:
+   ```bash
+   python -c "
+   from pathlib import Path
+   from slidecraft.importer.convert import convert
 
-   `style.css` — empty file with a comment: `/* Global theme styles */`.
-
-   `_fonts.css` — empty file with a comment: `/* Font-face declarations */`.
-
-   `uno.config.ts` — minimal UnoCSS config:
-   ```ts
-   import { defineConfig } from 'unocss'
-   export default defineConfig({})
+   r = convert(
+       pptx_path=Path(r'<PPTX_PATH>'),
+       theme_dir=Path(r'<THEME_DIR>'),
+       deck_dir=Path(r'<DECK_DIR>'),
+       theme_name='slidev-theme-<THEME_NAME>',
+   )
+   print(r)
+   "
    ```
 
-   `theme-manifest.json` — stub:
+   `ConvertResult` returns `slides_count`, `typefaces_total`, `typefaces_substituted`, `sans_families`, `alias_font_faces`, and `warnings` — surface these to the user. The theme directory will contain `package.json`, `layouts/`, and `assets/`. The deck directory will contain `package.json` and `slides.md` (one slide per layout, ready to preview).
+
+   Then **skip steps 6–8** (the converter already produced a valid theme) and jump to step 9 (.gitignore, optional git init, report).
+
+6. **Scaffold an empty theme** (only when `--from-pptx` was NOT given):
+   ```bash
+   mkdir -p "<THEME_DIR>/layouts"
+   mkdir -p "<THEME_DIR>/styles"
+   mkdir -p "<THEME_DIR>/components"
+   mkdir -p "<THEME_DIR>/public"
+   ```
+
+7. **Write scaffold files**:
+
+   `<THEME_DIR>/package.json`:
    ```json
-   { "schema_version": "2.0", "source_pptx": null, "layouts": [] }
+   {
+     "name": "slidev-theme-<THEME_NAME>",
+     "version": "0.1.0",
+     "keywords": ["slidev-theme", "slidev"],
+     "engines": { "slidev": ">=0.48.0" },
+     "slidev": {
+       "colorSchema": "light",
+       "defaults": {
+         "aspectRatio": "16/9",
+         "canvasWidth": 1280
+       }
+     }
+   }
    ```
 
-   `example.md` — minimal Slidev deck using the theme:
+   `<THEME_DIR>/styles/index.css`:
+   ```css
+   /* Global theme styles — auto-injected by Slidev */
+   ```
+
+   `<THEME_DIR>/slides.md` (demo deck so the user can run `npx slidev` immediately):
    ```md
    ---
    theme: ./
    ---
    # Hello from slidev-theme-<THEME_NAME>
+
+   Edit `<THEME_DIR>/slides.md` to flesh out the theme.
    ```
 
-5. **If `--from-pptx <PPTX_PATH>` was given**, run the full extraction pipeline
-   (find the plugin dir as the parent of the `commands/` directory containing this file):
+8. **(Skipped — only applies when scaffolding; covered by step 7)**
 
-   ```bash
-   python <plugin-dir>/scripts/extract-pptx-theme.py \
-     --pptx "<PPTX_PATH>" \
-     --theme-dir "<THEME_DIR>" \
-     --name "<THEME_NAME>"
-
-   python <plugin-dir>/scripts/extract-fonts.py \
-     --pptx "<PPTX_PATH>" \
-     --theme-dir "<THEME_DIR>"
-
-   python <plugin-dir>/scripts/extract-assets.py \
-     --pptx "<PPTX_PATH>" \
-     --theme-dir "<THEME_DIR>"
-
-   python <plugin-dir>/scripts/generate-layouts.py \
-     --manifest "<THEME_DIR>/theme-manifest.json" \
-     --shapes-index "<THEME_DIR>/assets-shapes.json" \
-     --out "<THEME_DIR>/layouts-generated"
-   ```
-
-6. **Write `.gitignore`**:
+9. **Write `<THEME_DIR>/.gitignore`**:
    ```
    node_modules/
    dist/
@@ -89,25 +114,20 @@ Create a new corporate theme as a flat sibling repo at
    Thumbs.db
    ```
 
-7. **Git init**:
-   ```bash
-   cd THEME_DIR
-   git init
-   ```
+10. **Optionally git-init** (ask the user; default no):
+    > Initialize a git repo in `<THEME_DIR>`?
+    If yes:
+    ```bash
+    cd "<THEME_DIR>"
+    git init
+    ```
 
-8. **Install npm dependencies**:
-   ```bash
-   cd THEME_DIR
-   npm install
-   ```
-
-9. **Report to the user**:
-   - Theme directory created at `THEME_DIR`
-   - Whether extraction ran or scaffold was used
-   - Next steps: `npx @slidev/cli example.md` to preview
-
-   Reference to use the theme in a deck:
-   ```yaml
-   theme: ../../../slidev-theme-<THEME_NAME>
-   ```
-   (from `Projects/<decks-repo>/<deck-name>/content/slides.md`).
+11. **Report to the user**:
+    - Theme directory: `<THEME_DIR>`
+    - Whether extraction ran (`--from-pptx`) or empty scaffold was used
+    - If `--from-pptx` was used: include `slides_count`, `sans_families`, and any `warnings` from `ConvertResult`
+    - Demo deck location (if `--from-pptx`): `<DECK_DIR>`
+    - Preview commands:
+      - For the from-pptx demo deck: `cd "<DECK_DIR>" && npm install && npx slidev`
+      - For the scaffold-only demo: `cd "<THEME_DIR>" && npx slidev`
+    - To consume this theme in a separate deck, run `/slidecraft:new-deck` and point it at `<THEME_DIR>`.
