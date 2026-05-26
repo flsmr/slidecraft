@@ -99,16 +99,41 @@ def _parse_blip_fill(
     blip = blip_fill_elem.find(_atag("blip"))
     if blip is not None:
         # Luminance: <a:lum bright="" contrast="" />
+        #
+        # OOXML stores both attributes in thousandths of a percent, range
+        # ±100 000 (±100%). PowerPoint's render isn't a linear scale —
+        # at the extremes (±100%) the image is fully recoloured to pure
+        # white / black. CSS ``filter: brightness(N)`` multiplies each
+        # channel by N and saturates, which never reaches pure white
+        # even at brightness(10).
+        #
+        # The two extreme combinations PPT uses for monochrome-icon
+        # recolouring deserve special-case CSS so they look right:
+        #   bright=+100% contrast=+100% → "force to pure white"
+        #     ⇢ brightness(0) makes everything black (alpha preserved),
+        #       invert(1) flips it to pure white.
+        #   bright=-100% contrast=+100% → "force to pure black"
+        #     ⇢ brightness(0) directly.
+        # We use a tolerant threshold (>= 95% in absolute terms) so values
+        # like +98% still hit the "pure white" path. For non-extreme
+        # combinations we fall back to the linear-scale approximation
+        # (imperfect but matches PPT closely enough for small adjustments).
         lum = blip.find(_atag("lum"))
         if lum is not None:
             bright_raw = int(lum.get("bright", "0"))
             contrast_raw = int(lum.get("contrast", "0"))
-            # PPT values are in thousandths of percent (100 000 = +100%).
-            # CSS brightness(1.0) = neutral; +20 000 → CSS brightness(1.2)
-            bright_css = 1.0 + bright_raw / 100_000.0
-            contrast_css = 1.0 + contrast_raw / 100_000.0
-            filter_parts.append(f"brightness({bright_css:.4f})")
-            filter_parts.append(f"contrast({contrast_css:.4f})")
+            if bright_raw >= 95_000 and contrast_raw >= 95_000:
+                # Pure-white recolour. The IU template uses this for icons
+                # on dark backgrounds.
+                filter_parts.append("brightness(0)")
+                filter_parts.append("invert(1)")
+            elif bright_raw <= -95_000 and contrast_raw >= 95_000:
+                filter_parts.append("brightness(0)")
+            else:
+                bright_css = 1.0 + bright_raw / 100_000.0
+                contrast_css = 1.0 + contrast_raw / 100_000.0
+                filter_parts.append(f"brightness({bright_css:.4f})")
+                filter_parts.append(f"contrast({contrast_css:.4f})")
 
         # Alpha modifier: <a:alphaModFix amt="" />
         alpha_mod = blip.find(_atag("alphaModFix"))
