@@ -881,7 +881,7 @@ def _parse_pic(
     asset_ref = _resolve_blip_asset_ref(blip_fill, slide_part)
 
     sp_pr = pic_el.find(_x("p:spPr"))
-    x, y, w, h, _rot = _get_sp_position(pic_el)
+    x, y, w, h, rot_deg = _get_sp_position(pic_el)
     preset_name, preset_av = _read_prst_geom(sp_pr)
     effects = parse_effects(sp_pr, blip_fill)
 
@@ -895,6 +895,7 @@ def _parse_pic(
         y_px=y,
         width_px=w,
         height_px=h,
+        rotation_deg=rot_deg,
         preset_geom=preset_name,
         preset_geom_av=preset_av,
         effects=effects,
@@ -947,10 +948,15 @@ def _parse_picture_placeholder(
             asset_ref = layout_asset
             effective_blip_fill = layout_blip_fill
 
-    # Geometry cascade
-    x, y, w, h, _rot = _get_sp_position(sp_el)
+    # Geometry cascade — rotation cascades along with x/y/w/h.
+    # When the slide-level shape omits its own xfrm (common when a slide
+    # uses a placeholder verbatim from the layout), inherit the layout's
+    # rotation too. Without this, a layout-defined tilt (e.g. the IU
+    # template's slideLayout4 sets a -240000 EMU rot ≈ -4° on its image
+    # placeholder idx=24) is silently dropped on the slide.
+    x, y, w, h, rot_deg = _get_sp_position(sp_el)
     if w == 0 and h == 0 and layout_sp is not None:
-        x, y, w, h, _rot = _get_sp_position(layout_sp)
+        x, y, w, h, rot_deg = _get_sp_position(layout_sp)
 
     preset_name, preset_av = _read_prst_geom(sp_pr)
     effects = parse_effects(sp_pr, effective_blip_fill)
@@ -961,6 +967,7 @@ def _parse_picture_placeholder(
         y_px=y,
         width_px=w,
         height_px=h,
+        rotation_deg=rot_deg,
         preset_geom=preset_name,
         preset_geom_av=preset_av,
         effects=effects,
@@ -1093,7 +1100,7 @@ def _parse_layout_only_picture_placeholder(
     blip_fill = sp_pr.find(_x("a:blipFill")) if sp_pr is not None else None
     asset_ref = _resolve_blip_asset_ref(blip_fill, layout_part)
 
-    x, y, w, h, _rot = _get_sp_position(layout_sp)
+    x, y, w, h, rot_deg = _get_sp_position(layout_sp)
     if asset_ref is None and w == 0 and h == 0:
         return None
 
@@ -1106,6 +1113,7 @@ def _parse_layout_only_picture_placeholder(
         y_px=y,
         width_px=w,
         height_px=h,
+        rotation_deg=rot_deg,
         preset_geom=preset_name,
         preset_geom_av=preset_av,
         effects=effects,

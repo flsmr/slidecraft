@@ -161,9 +161,13 @@ class Placeholder:
 class Picture:
     """A `<p:pic>` shape or picture-typed placeholder, fully resolved at slide level.
 
-    Geometry (x/y/w/h) is in px. Rotation, flips, opacity, filters, and pre-bake
-    derivatives all live in the ``effects`` dict (output of
-    ``pictures.effects.parse_effects``) — emit reads them from there.
+    Geometry (x/y/w/h) is in px. ``rotation_deg`` is the OOXML xfrm.rot
+    expressed in degrees (PPT stores 60000ths of a degree on the spPr
+    xfrm; parse divides). Other flips, opacity, filters, blip-fill
+    rotations, and pre-bake derivatives live in the ``effects`` dict
+    (output of ``pictures.effects.parse_effects``); emit composes the
+    xfrm rotation in front of those visual transforms on the same CSS
+    ``transform:`` declaration so the visual order matches PPT.
 
     ``asset_ref`` is the basename written into ``deck/public/assets/`` by
     ``pictures.extract.extract_pictures`` (preserves the original
@@ -175,6 +179,10 @@ class Picture:
     y_px: float
     width_px: float
     height_px: float
+    # xfrm.rot in degrees (positive = clockwise per OOXML; CSS `rotate()` uses
+    # the same convention). Cascades slide → layout in the parse layer so a
+    # layout-defined tilt is preserved when a slide doesn't override its xfrm.
+    rotation_deg: float = 0.0
     # Shape geometry mask (prstGeom). None means rectangular (no clip).
     preset_geom: Optional[str] = None
     preset_geom_av: Optional[dict[str, int]] = None

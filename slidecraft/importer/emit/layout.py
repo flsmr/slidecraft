@@ -400,7 +400,14 @@ def _picture_wrapper_style(pic: Picture) -> str:
 
     eff = pic.effects or {}
 
-    transforms = eff.get("transforms") or []
+    # Effects-derived transforms (scaleX flip, blip-fill rotate, etc.).
+    # OOXML xfrm.rot lives on Picture.rotation_deg as a first-class field
+    # and is composed onto the same `transform:` declaration. Combining
+    # them in one CSS transform preserves the visual ordering PPT applies
+    # (geometry rotate first, then any blip-fill effects on top).
+    transforms = list(eff.get("transforms") or [])
+    if pic.rotation_deg != 0.0:
+        transforms.insert(0, f"rotate({pic.rotation_deg:.4g}deg)")
     if transforms:
         parts.append(f"transform:{' '.join(transforms)}")
 
