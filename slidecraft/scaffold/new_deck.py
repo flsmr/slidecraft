@@ -22,6 +22,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from ..npm_name import validate_npm_package_name
+
 
 # ---------------------------------------------------------------------------
 # Templates
@@ -143,6 +145,10 @@ def _load_theme_metadata(theme_dir: Path) -> tuple[str, str]:
         raise ValueError(
             f"theme package.json missing 'name' field: {pkg_path}"
         )
+    # Surface Slidev/npm naming rules as a Python error before we generate
+    # any files referencing the bad name — otherwise the deck only fails
+    # at `npx slidev` with a cryptic message buried in node_modules.
+    validate_npm_package_name(name, role="theme")
     return name, str(pkg_path)
 
 
@@ -164,8 +170,13 @@ def _render_package_json(
     theme_rel: Optional[str],
 ) -> str:
     """Render package.json with stable key ordering."""
+    # The deck's own npm package name is the lowercased deck_name. Validate
+    # so a deck_name like "my deck" or "my!deck" fails fast instead of
+    # generating an unrunnable package.json.
+    npm_deck_name = deck_name.lower()
+    validate_npm_package_name(npm_deck_name, role="deck")
     pkg: dict = {
-        "name": deck_name.lower(),
+        "name": npm_deck_name,
         "private": True,
         "scripts": {
             "dev": "slidev",

@@ -12,6 +12,7 @@ from .parse import parse
 from .pictures.derivatives import apply_derivative
 from .pictures.extract import extract_pictures
 from .pictures.manifest import write_manifest
+from ..npm_name import validate_npm_package_name
 
 # Substitute names that need a space inserted for the Google Fonts URL.
 # e.g. our local file uses "DejaVuSans" but Google Fonts lists "DejaVu Sans".
@@ -54,6 +55,12 @@ def convert(
     *,
     theme_name: str = "slidev-theme-slidecraft-tmp",
 ) -> ConvertResult:
+    # Fail fast on invalid theme names — Slidev's runtime check rejects
+    # uppercase / non-npm-compliant theme names with a cryptic stack
+    # trace at deck startup. Validating here means the user gets an
+    # actionable error before any files are written.
+    validate_npm_package_name(theme_name, role="theme")
+
     pptx_path = Path(pptx_path)
     theme_dir = Path(theme_dir)
     deck_dir = Path(deck_dir)

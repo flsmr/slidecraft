@@ -62,12 +62,12 @@ class TestScaffoldWithTheme:
         assert result.theme_rel == "../../slidev-theme-test"
 
     def test_slides_md_references_theme_by_name(self, tmp_path):
-        theme = _make_valid_theme(tmp_path / "slidev-theme-test", name="slidev-theme-ACME")
+        theme = _make_valid_theme(tmp_path / "slidev-theme-test", name="slidev-theme-acme")
         deck = tmp_path / "my-deck"
         scaffold_deck(deck, theme, "my-deck", install=False)
 
         slides = (deck / "slides.md").read_text()
-        assert "theme: slidev-theme-ACME" in slides
+        assert "theme: slidev-theme-acme" in slides
         assert "# my-deck" in slides
 
     def test_result_fields(self, tmp_path):
@@ -154,6 +154,23 @@ class TestValidation:
         (theme / "package.json").write_text("not json{")
         with pytest.raises(ValueError, match="invalid JSON"):
             scaffold_deck(tmp_path / "deck", theme, "x", install=False)
+
+    def test_rejects_uppercase_theme_name(self, tmp_path):
+        """Regression: Slidev rejects uppercase theme names at startup.
+        We catch it here so the deck never gets generated against a bad
+        theme (which would otherwise error only at `npx slidev` time)."""
+        bad = _make_valid_theme(tmp_path / "slidev-theme-bad", name="slidev-theme-BAD")
+        with pytest.raises(ValueError, match="uppercase"):
+            scaffold_deck(tmp_path / "deck", bad, "x", install=False)
+
+    def test_rejects_uppercase_deck_name(self, tmp_path):
+        """Same enforcement for the deck's own package.json name."""
+        # deck_name is lowercased before going into package.json, so an
+        # all-uppercase deck_name still produces a valid lowercased npm
+        # name. We only error when lowercasing isn't enough — e.g. a name
+        # with spaces or punctuation that npm rejects.
+        with pytest.raises(ValueError, match="deck name"):
+            scaffold_deck(tmp_path / "deck", None, "has spaces", install=False)
 
 
 # ---------------------------------------------------------------------------
