@@ -230,6 +230,96 @@ def _extract_slot_names(layout_vue: Path) -> list[str]:
     return _SLOT_NAME_RE.findall(text)
 
 
+# ---------------------------------------------------------------------------
+# Demo-deck discovery and content copy
+# ---------------------------------------------------------------------------
+#
+# When ``import-template`` generates a theme, it also writes a *demo deck*
+# alongside it — one slide per layout, every slot populated with the
+# original PPT's example content (title text, body copy, picture
+# placeholder defaults). The demo deck looks "right" because each piece
+# of text was authored for the layout's fixed-width box.
+#
+# Inventing our own placeholder text ("body-21 content", "Layout: slide1")
+# overflows those boxes — the IU template's title slot is 475 × 116px at
+# 101pt font; anything longer than ~10 chars wraps and breaks the design.
+#
+# So gallery mode now COPIES the demo deck's slides.md verbatim (just
+# patching the global frontmatter to reference the user-chosen theme
+# name + add a deck title). Falls back to a "structure-only" gallery
+# (frontmatter + slot-name comment, no text overrides) when no demo
+# deck is found — that's structurally clear and avoids the overflow
+# problem at the cost of empty boxes.
+
+# Where ``import-template`` puts the demo deck, relative to the theme:
+#   <theme_dir>/../deck/slides.md
+# Some users may also put it as a sibling literal "deck" folder of the
+# theme dir's parent; we check both.
+_DEMO_DECK_REL_CANDIDATES: tuple[Path, ...] = (
+    Path("..") / "deck" / "slides.md",
+    Path("..") / "demo" / "slides.md",
+)
+
+
+def _find_demo_deck(theme_dir: Path) -> Optional[Path]:
+    """Return the path to a sibling demo-deck ``slides.md`` if one exists.
+
+    The demo deck is what ``import-template`` writes as ``<base>/deck/``
+    when it converts a PPTX. We check a couple of conventional locations
+    relative to the theme directory; returning the first that resolves
+    to a real file. ``None`` means "no demo deck available — fall back".
+    """
+    for rel in _DEMO_DECK_REL_CANDIDATES:
+        candidate = (theme_dir / rel).resolve()
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+# Match the FIRST frontmatter block at the top of a slides.md (between two
+# `---` lines on their own). Multiline+dotall so the body can span lines.
+_FIRST_FRONTMATTER_RE = re.compile(
+    r"\A---\s*\n(.*?)\n---\s*\n",
+    re.DOTALL,
+)
+
+
+def _patch_demo_deck_frontmatter(text: str, theme_name: str) -> str:
+    """Take the demo deck's slides.md content, replace/insert ``theme:``
+    in slide 1's frontmatter so it points at ``theme_name``.
+
+    Idempotent — if the theme is already correct, no changes.
+
+    Why patch instead of regenerate: we want to preserve every other
+    field the demo deck happened to set (custom canvas size, fonts
+    declared in frontmatter, etc.). Less brittle than rebuilding the
+    YAML from scratch.
+    """
+    m = _FIRST_FRONTMATTER_RE.match(text)
+    if m is None:
+        # No frontmatter — that's unusual for a Slidev deck but possible.
+        # Prepend a minimal one.
+        return f"---\ntheme: {theme_name}\n---\n\n{text}"
+    block = m.group(1)
+    lines = block.split("\n")
+    new_lines: list[str] = []
+    theme_seen = False
+    for line in lines:
+        if line.startswith("theme:"):
+            new_lines.append(f"theme: {theme_name}")
+            theme_seen = True
+        else:
+            new_lines.append(line)
+    if not theme_seen:
+        new_lines.insert(0, f"theme: {theme_name}")
+    new_block = "\n".join(new_lines)
+    return f"---\n{new_block}\n---\n" + text[m.end():]
+
+
+# ---------------------------------------------------------------------------
+# Structure-only gallery (fallback when no demo deck available)
+# ---------------------------------------------------------------------------
+
 # Slots that are unique within a layout (≤1 each). Mirrors the singleton
 # set in slidecraft.importer.emit.naming — keeping a small duplicate is
 # easier than introducing a cross-package coupling on a 5-name list.
@@ -238,61 +328,96 @@ _SINGLETON_TEXT_SLOTS: frozenset[str] = frozenset({
 })
 
 
-def _render_slot_override(slot: str, layout: str) -> Optional[str]:
-    """Render the markdown for one slot's override block in gallery mode.
+def _render_slot_hint_comment(slots: list[str]) -> str:
+    """Render an HTML comment listing the slots available for a layout.
 
-    Returns ``None`` when the slot should NOT be overridden — for picture
-    placeholders, leaving the slot un-overridden means the default image
-    baked into the layout's ``<slot name="picture-N">{img}</slot>`` shows
-    through. Overriding with empty content would suppress that default
-    and make the slot render blank.
-
-    For text slots we emit placeholder copy so each gallery slide looks
-    visually populated (the original complaint was "non look like the
-    one in the theme"). The placeholder pattern depends on slot role:
-
-      title             → "Layout: <name>"   (single short heading)
-      subtitle/footer/  → "(slot)"            (parenthesised marker —
-        date/slide-num                          signals "this exists; fill in")
-      body-N / content- → "<slot> content"   (generic placeholder copy)
-        N / ph-N
-      picture-N         → None               (defer to layout default)
+    Used in structure-only mode (no demo deck). The user sees the layout
+    rendered empty + a comment telling them which slot names they can
+    override. No text overrides are emitted because we don't know what
+    will fit the layout's fixed-width boxes; inventing text causes
+    overflow (the bug that motivated this rewrite).
     """
-    if slot.startswith("picture-"):
-        return None
-    if slot == "title":
-        body = f"Layout: {layout}"
-    elif slot in _SINGLETON_TEXT_SLOTS:
-        body = f"({slot})"
-    else:
-        # body-N, content-N, ph-N, or any future text-slot prefix.
-        body = f"{slot} content"
-    return f"::{slot}::\n{body}\n"
-
-
-def _render_gallery_slide_body(layout: str, slots: list[str]) -> str:
-    """Render the body (slot-override blocks) for one gallery slide.
-
-    Does NOT include the slide's frontmatter — the caller adds that. The
-    body is just the per-slot override blocks separated by blank lines,
-    with a trailing newline.
-    """
-    blocks: list[str] = []
-    for slot in slots:
-        block = _render_slot_override(slot, layout)
-        if block is not None:
-            blocks.append(block)
-    # Add a hint comment for picture slots so the user knows they're there
-    # (they're not in `blocks` because we deliberately don't override them).
-    picture_slots = [s for s in slots if s.startswith("picture-")]
-    if picture_slots:
-        names = ", ".join(picture_slots)
-        blocks.append(
-            f"<!-- Picture slot(s) {names} show the layout's default image. "
-            f"To override, add e.g. ``::{picture_slots[0]}::`` followed by "
-            f"``![](/your-image.png)``. -->\n"
+    if not slots:
+        return ""
+    text_slots = [s for s in slots if not s.startswith("picture-")]
+    pic_slots = [s for s in slots if s.startswith("picture-")]
+    lines = ["<!-- Slots available in this layout:"]
+    if text_slots:
+        lines.append(f"  Text:    {', '.join(text_slots)}")
+        lines.append(
+            "    Override by adding a block like ``::<slot>::\\n<your text>``"
         )
-    return "\n".join(blocks)
+    if pic_slots:
+        lines.append(f"  Picture: {', '.join(pic_slots)}")
+        lines.append(
+            "    Default image is baked in; override with "
+            "``::<slot>::\\n![](/your-image.png)``"
+        )
+    lines.append("-->")
+    return "\n".join(lines)
+
+
+def _render_structure_only_slides_md(
+    deck_name: str,
+    theme_name: str,
+    theme_dir: Path,
+    layouts: list[str],
+) -> str:
+    """Fallback gallery used when no sibling demo deck is found.
+
+    Emits one slide per layout with NO text-slot overrides — just the
+    ``layout:`` frontmatter and an HTML comment listing the slot names
+    so the user knows what they can override. Layouts render with their
+    text-slot boxes empty (the wrapper divs and backgrounds still show);
+    picture slots render the default images the converter baked in.
+
+    This is structurally informative but visually sparse. Use the
+    demo-deck path (``_copy_demo_deck_as_gallery``) when one exists —
+    that's the one that shows each layout's intended look with the
+    template's original example content fitted to each box.
+    """
+    if not layouts:
+        raise ValueError("gallery mode requires at least one layout")
+
+    first_layout = layouts[0]
+    first_slots = _extract_slot_names(theme_dir / "layouts" / f"{first_layout}.vue")
+
+    parts: list[str] = ["---", f"theme: {theme_name}", f"layout: {first_layout}", "---", ""]
+    parts.append(_GALLERY_INTRO_COMMENT)
+    parts.append("")
+    hint = _render_slot_hint_comment(first_slots)
+    if hint:
+        parts.append(hint)
+
+    for layout in layouts[1:]:
+        slots = _extract_slot_names(theme_dir / "layouts" / f"{layout}.vue")
+        parts.append("")
+        parts.append("---")
+        parts.append(f"layout: {layout}")
+        parts.append("---")
+        parts.append("")
+        hint = _render_slot_hint_comment(slots)
+        if hint:
+            parts.append(hint)
+
+    return "\n".join(parts) + "\n"
+
+
+def _copy_demo_deck_as_gallery(
+    demo_deck_path: Path,
+    theme_name: str,
+) -> str:
+    """Read the sibling demo deck and patch its frontmatter to use
+    ``theme_name``. Returns the patched slides.md content.
+
+    The demo deck was generated by ``import-template`` with one slide
+    per layout, every slot already populated with the original PPT's
+    example content. Because that content was authored for each layout's
+    fixed-width box, it fits without overflow — unlike anything we'd
+    invent at scaffold time.
+    """
+    text = demo_deck_path.read_text(encoding="utf-8")
+    return _patch_demo_deck_frontmatter(text, theme_name)
 
 
 def _render_gallery_slides_md(
@@ -303,53 +428,37 @@ def _render_gallery_slides_md(
 ) -> str:
     """Render the full gallery slides.md.
 
-    Structure: the GLOBAL frontmatter (``theme:`` + ``title:`` + ``layout:
-    <first>``) doubles as slide 1's frontmatter. After the close ``---``
-    we put the explanatory HTML comment (renders nothing visible) and
-    then slide 1's slot-override blocks. Subsequent slides each start
-    with ``---\\nlayout: slideN\\n---\\n``.
+    Two paths:
+      1. **Demo-deck path (preferred)** — when a sibling demo deck exists
+         (typically ``<theme_dir>/../deck/slides.md``, the one
+         ``import-template`` generated), copy it verbatim with the
+         frontmatter patched to reference ``theme_name``. The user gets
+         a deck identical to the demo: every layout populated with the
+         template's example content, fitted to each layout's geometry.
 
-    Critical Slidev rule we encode here: a single ``---`` line on its own
-    is a slide separator. The frontmatter ``---`` lines also act as
-    separators, so we MUST NOT insert an extra ``---`` between slides
-    that already begin with a frontmatter block — that creates an empty
-    intermediate slide. (Previous bug: 99 slides instead of 49.)
+      2. **Structure-only path (fallback)** — when no demo deck is
+         found, emit one slide per layout with NO text-slot overrides
+         and a slot-name hint comment. Layouts render empty but
+         structurally visible; picture defaults still show.
+
+    Critical Slidev rule both paths respect: a single ``---`` line is
+    both a slide separator AND a frontmatter delimiter. Inserting an
+    extra ``---`` between slides whose frontmatter already opens with
+    ``---`` creates an empty intermediate slide (regression we hit at
+    99 slides for the 49-layout ILSE theme).
     """
     if not layouts:
         raise ValueError("gallery mode requires at least one layout")
 
-    first_layout = layouts[0]
-    first_slots = _extract_slot_names(theme_dir / "layouts" / f"{first_layout}.vue")
-
-    parts: list[str] = []
-
-    # Slide 1: global frontmatter doubles as this slide's frontmatter.
-    parts.append("---")
-    parts.append(f"theme: {theme_name}")
-    parts.append(f"title: {deck_name}")
-    parts.append(f"layout: {first_layout}")
-    parts.append("---")
-    parts.append("")
-    parts.append(_GALLERY_INTRO_COMMENT)
-    parts.append("")
-    body = _render_gallery_slide_body(first_layout, first_slots)
-    if body:
-        parts.append(body)
-
-    # Slides 2..N: each begins with its own frontmatter block, which
-    # functions as both the slide separator AND the frontmatter open.
-    for layout in layouts[1:]:
-        slots = _extract_slot_names(theme_dir / "layouts" / f"{layout}.vue")
-        parts.append("")
-        parts.append("---")
-        parts.append(f"layout: {layout}")
-        parts.append("---")
-        parts.append("")
-        body = _render_gallery_slide_body(layout, slots)
-        if body:
-            parts.append(body)
-
-    return "\n".join(parts) + "\n"
+    demo = _find_demo_deck(theme_dir)
+    if demo is not None:
+        return _copy_demo_deck_as_gallery(demo, theme_name)
+    return _render_structure_only_slides_md(
+        deck_name=deck_name,
+        theme_name=theme_name,
+        theme_dir=theme_dir,
+        layouts=layouts,
+    )
 
 
 def _portable_relpath(target: Path, start: Path) -> str:
