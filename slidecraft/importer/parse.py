@@ -981,6 +981,7 @@ def _parse_inherited_text_placeholder(
     theme_el,
     clr_map,
     typefaces: set[str],
+    order_index: int = 0,
 ) -> Optional[Placeholder]:
     """Parse a layout-only or master-only TEXT placeholder for a slide.
 
@@ -1060,6 +1061,7 @@ def _parse_inherited_text_placeholder(
         is_prompt_fallback=False,
         shape_autofit=shape_autofit,
         wrap_text=wrap_text,
+        order_index=order_index,
     )
 
 
@@ -1161,10 +1163,21 @@ def parse(pptx_path: Path) -> Presentation:
             continue
 
         # Record document order so picture/placeholder interleaving is reproducible
-        # in emit (P6). Each direct child of <p:spTree> gets a sequential index.
-        doc_order: dict[int, int] = {}
-        for i, child in enumerate(sp_tree):
-            doc_order[id(child)] = i
+        # in emit. Each direct child of <p:spTree> gets a sequential index based
+        # on its position in the underlying XML. We build the map by walking the
+        # tree ONCE and using a dict keyed by the element wrapper itself; lxml
+        # guarantees same-C-node ⇒ equal wrappers (==), so subsequent ``findall``
+        # results can look up their position reliably via the helper below.
+        sp_tree_children = list(sp_tree)
+        def _doc_pos(el) -> int:
+            # lxml's __eq__ compares the underlying C element identity, so
+            # list.index() finds the same XML node even if findall() returns
+            # a different Python proxy object. id()-keyed dicts are unreliable
+            # because lxml's proxy lifetime is not tied to Python object lifetime.
+            try:
+                return sp_tree_children.index(el)
+            except ValueError:
+                return 0
 
         # ----- Picture placeholders + free <p:pic> -----
         # These are walked before the text-placeholder loop only because the
@@ -1175,7 +1188,7 @@ def parse(pptx_path: Path) -> Presentation:
             picture = _parse_pic(
                 pic_el,
                 slide.part,
-                doc_order.get(id(pic_el), 0),
+                _doc_pos(pic_el),
             )
             if picture is not None:
                 pictures.append(picture)
@@ -1195,7 +1208,7 @@ def parse(pptx_path: Path) -> Presentation:
                     layout.part,
                     layout_sp_for_pic,
                     idx,
-                    doc_order.get(id(sp_el), 0),
+                    _doc_pos(sp_el),
                 )
                 pictures.append(picture)
                 continue
@@ -1354,6 +1367,7 @@ def parse(pptx_path: Path) -> Presentation:
                 clip_path=clip_path,
                 shape_autofit=shape_autofit,
                 wrap_text=wrap_text,
+                order_index=_doc_pos(sp_el),
             ))
 
         # Surface layout-only picture placeholders. OOXML: a layout-level
@@ -1374,9 +1388,15 @@ def parse(pptx_path: Path) -> Presentation:
             l_csld = layout._element.find(_x("p:cSld"))
             layout_sp_tree = l_csld.find(_x("p:spTree")) if l_csld is not None else None
         if layout_sp_tree is not None:
-            # Use a high base order_index so layout-inherited pics naturally land
-            # behind slide-level pics in DOM order (they're the background).
-            base = 10_000
+            # Layout-inherited shapes get NEGATIVE order_index so they always
+            # render BEHIND anything the slide itself authored. Without this,
+            # an inherited background placeholder (e.g. picture-22 covering
+            # the full slide) would emit AFTER slide-level title placeholders
+            # in DOM order — putting it on top and visually hiding the title.
+            # OOXML semantics treat the layout as background; we mirror that
+            # with a negative base so sorting by order_index ASCENDING puts
+            # all layout content first (= earlier in DOM = lower z-index).
+            base = -10_000
             for i, lsp in enumerate(layout_sp_tree.findall(_x("p:sp"))):
                 lidx = _ph_idx(lsp)
                 if lidx is None:
@@ -1420,7 +1440,7 @@ def parse(pptx_path: Path) -> Presentation:
             })
             slide_ph_types = {p.type for p in placeholders if p.type is not None}
 
-            for lsp in layout_sp_tree.findall(_x("p:sp")):
+            for lsp_i, lsp in enumerate(layout_sp_tree.findall(_x("p:sp"))):
                 lidx = _ph_idx(lsp)
                 lph_type = _ph_type(lsp)
                 if lph_type == "pic":
@@ -1434,9 +1454,13 @@ def parse(pptx_path: Path) -> Presentation:
                     continue
                 if lph_type not in _TEXT_PH_TYPES and lph_type is not None:
                     continue
+                # Layout-inherited text placeholders go behind slide content
+                # (same negative-base convention as inherited pictures, with
+                # a small offset so they don't collide with the picture range).
                 inherited_ph = _parse_inherited_text_placeholder(
                     lsp, lph_type, lidx, master,
                     master_tx_styles, theme_el, clr_map, typefaces,
+                    order_index=base + 8_000 + lsp_i,
                 )
                 if inherited_ph is not None:
                     placeholders.append(inherited_ph)
@@ -1493,7 +1517,10 @@ def parse(pptx_path: Path) -> Presentation:
                 covered_positions = {
                     (round(p.x_px), round(p.y_px)) for p in pictures
                 }
-                master_base = 20_000
+                # Master shapes go BEHIND layout shapes (which are themselves
+                # behind slide content). More negative = further back = emitted
+                # earlier in DOM = lower z-index.
+                master_base = -20_000
                 for k, mpic in enumerate(master_sp_tree.findall(_x("p:pic"))):
                     inherited_master = _parse_pic(
                         mpic, master.part, master_base + k,

@@ -147,6 +147,14 @@ class Placeholder:
     # fixed-size box with overflow:hidden.
     shape_autofit: bool = False
     wrap_text: bool = True
+    # Document order within the source PPTX. PPT spTree order = z-order
+    # (earlier = back, later = front). Emit honours this by sorting all
+    # slide-level shapes (placeholders + pictures + text shapes) by
+    # order_index and rendering them in that sequence. Slide-level
+    # shapes get their natural 0..N from sp_tree position; layout- and
+    # master-inherited shapes get NEGATIVE values so they always render
+    # behind anything the slide itself authored.
+    order_index: int = 0
 
 
 @dataclass

@@ -517,65 +517,80 @@ def _emit_layout_vue(slide: Slide, canvas_width: int, canvas_height: int) -> str
     lines.append(f'{_INDENT}<div class="slidev-layout">')
     lines.append(f'{_INDENT * 2}<div class="slide-root">')
 
-    # Layout 3 background decoration: layout/master non-placeholder shapes
-    # render BEHIND placeholders and pictures. Slide-source text shapes are
-    # foreground content and emit after placeholders/pictures (see below).
-    # This mirrors PPT z-order: layout/master spTree below slide spTree.
+    # Layout/master non-placeholder text shapes render BEHIND everything as
+    # background decoration. They have no order_index (predates the unified
+    # z-order pass) and are always furthest back.
     for shape in slide.text_shapes:
         if shape.source in ("layout", "master"):
             lines.append(f"{_INDENT * 3}{render_text_shape_host(shape)}")
 
+    # ------------------------------------------------------------------
+    # Unified z-order pass — interleave placeholders + pictures + slide
+    # text shapes by their ``order_index``. Mirrors OOXML spTree order
+    # so layout-inherited content (negative order_index → emitted first
+    # → lowest z-index) sits behind slide-level content (0..N → emitted
+    # after → on top). Before this pass, all placeholders rendered
+    # before all pictures regardless of source order, which put
+    # inherited background placeholders ON TOP of slide-level title
+    # placeholders — the bug that made slides 5-8's white chips
+    # invisible behind the layout's full-slide image placeholder.
+    # ------------------------------------------------------------------
+    z_items: list[tuple[int, str, object]] = []
     for ph in slide.placeholders:
-        anchor = ph.text_frame.anchor if ph.text_frame else "t"
-        style = _placeholder_style(ph, frame_anchor=anchor)
-        slot = slot_name_for_placeholder(ph)
-        lines.append(f'{_INDENT * 3}<div class="{slot}" style="{style}">')
-        lines.append(f'{_INDENT * 4}<slot name="{slot}" />')
-        lines.append(f"{_INDENT * 3}</div>")
-
-    # Pictures (P6): free <p:pic> shapes baked fully into the layout; picture
-    # placeholders emit a wrapped <slot> with the layout's default <img> as the
-    # slot's default content, so slides can override per-placeholder by
-    # supplying their own ::picture-<idx>:: block.
+        z_items.append((ph.order_index, "placeholder", ph))
     for pic in slide.pictures:
-        style = _picture_wrapper_style(pic)
-        img_tag = _picture_img_tag(pic, asset_var_map)
-        if pic.is_placeholder and pic.ph_idx is not None:
-            slot = slot_name_for_picture(pic)
-            lines.append(
-                f'{_INDENT * 3}<div class="{slot}" style="{style}">'
-            )
-            if img_tag:
-                lines.append(f'{_INDENT * 4}<slot name="{slot}">{img_tag}</slot>')
+        z_items.append((pic.order_index, "picture", pic))
+    for shape in slide.text_shapes:
+        if shape.source == "slide":
+            # Slide-source text shapes use shape_id as a proxy when
+            # order_index isn't tracked on the TextShape model; surface
+            # them above slide-level content but below table overlays.
+            z_items.append((getattr(shape, "order_index", 1_000_000), "text", shape))
+    # Stable sort by order_index ASCENDING — back to front in DOM order.
+    z_items.sort(key=lambda x: x[0])
+
+    for _, kind, item in z_items:
+        if kind == "placeholder":
+            ph = item  # type: ignore[assignment]
+            anchor = ph.text_frame.anchor if ph.text_frame else "t"
+            style = _placeholder_style(ph, frame_anchor=anchor)
+            slot = slot_name_for_placeholder(ph)
+            lines.append(f'{_INDENT * 3}<div class="{slot}" style="{style}">')
+            lines.append(f'{_INDENT * 4}<slot name="{slot}" />')
+            lines.append(f"{_INDENT * 3}</div>")
+        elif kind == "picture":
+            pic = item  # type: ignore[assignment]
+            style = _picture_wrapper_style(pic)
+            img_tag = _picture_img_tag(pic, asset_var_map)
+            if pic.is_placeholder and pic.ph_idx is not None:
+                slot = slot_name_for_picture(pic)
+                lines.append(
+                    f'{_INDENT * 3}<div class="{slot}" style="{style}">'
+                )
+                if img_tag:
+                    lines.append(f'{_INDENT * 4}<slot name="{slot}">{img_tag}</slot>')
+                else:
+                    # Un-bound picture placeholder — empty box; slide may still
+                    # override via ::picture-<idx>:: to supply its own image.
+                    lines.append(f'{_INDENT * 4}<slot name="{slot}" />')
+                lines.append(f"{_INDENT * 3}</div>")
             else:
-                # Un-bound picture placeholder — empty box; slide may still
-                # override via ::picture-<idx>:: to supply its own image.
-                lines.append(f'{_INDENT * 4}<slot name="{slot}" />')
-            lines.append(f"{_INDENT * 3}</div>")
-        else:
-            # Free <p:pic> — baked completely; no slot, no override.
-            lines.append(
-                f'{_INDENT * 3}<div class="pic-{pic.shape_id}" style="{style}">'
-            )
-            if img_tag:
-                lines.append(f"{_INDENT * 4}{img_tag}")
-            lines.append(f"{_INDENT * 3}</div>")
+                # Free <p:pic> — baked completely; no slot, no override.
+                lines.append(
+                    f'{_INDENT * 3}<div class="pic-{pic.shape_id}" style="{style}">'
+                )
+                if img_tag:
+                    lines.append(f"{_INDENT * 4}{img_tag}")
+                lines.append(f"{_INDENT * 3}</div>")
+        elif kind == "text":
+            lines.append(f"{_INDENT * 3}{render_text_shape_host(item)}")
 
     # Layer 4 — tables (<p:graphicFrame>/<a:tbl>) live on the slide only;
-    # emit between pictures and slide-source text shapes. render_table()
-    # returns a multi-line block; indent each line.
+    # emit after the z-ordered content as foreground overlays.
     for table in slide.tables:
         block = render_table(table)
         for line in block.split("\n"):
             lines.append(f"{_INDENT * 3}{line}")
-
-    # Slide-source text shapes are foreground — emit after placeholders and
-    # pictures so they sit on top (matches the IU template's slide 6/7/8
-    # "Source" footers). Layout/master-source shapes were already emitted
-    # above as background decoration.
-    for shape in slide.text_shapes:
-        if shape.source == "slide":
-            lines.append(f"{_INDENT * 3}{render_text_shape_host(shape)}")
 
     lines.append(f"{_INDENT * 2}</div>")
     lines.append(f"{_INDENT}</div>")
