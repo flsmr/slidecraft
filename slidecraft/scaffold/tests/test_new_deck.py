@@ -8,6 +8,9 @@ import pytest
 
 from slidecraft.scaffold.new_deck import (
     ScaffoldResult,
+    _enumerate_layouts,
+    _extract_slot_names,
+    _natural_sort_key,
     _portable_relpath,
     _render_package_json,
     main,
@@ -29,6 +32,15 @@ def _make_valid_theme(theme_dir: Path, name: str = "slidev-theme-test") -> Path:
     }
     (theme_dir / "package.json").write_text(json.dumps(pkg), encoding="utf-8")
     return theme_dir
+
+
+def _add_layout(theme_dir: Path, name: str, slots: list[str]) -> None:
+    """Add a fake layout .vue file to a test theme directory."""
+    layouts = theme_dir / "layouts"
+    layouts.mkdir(exist_ok=True)
+    slot_html = "\n".join(f'      <slot name="{s}" />' for s in slots)
+    vue = f'<template>\n  <div class="slidev-layout">\n{slot_html}\n  </div>\n</template>\n'
+    (layouts / f"{name}.vue").write_text(vue, encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -238,6 +250,20 @@ class TestCli:
         out = capsys.readouterr().out
         assert "(Slidev built-in default)" in out
 
+    def test_cli_minimal_flag_opts_out_of_gallery(self, tmp_path, capsys):
+        theme = _make_valid_theme(tmp_path / "slidev-theme-test")
+        for i in range(1, 4):
+            _add_layout(theme, f"slide{i}", ["title"])
+        rc = main([
+            "--name", "cli-deck",
+            "--location", str(tmp_path / "decks"),
+            "--theme", str(theme),
+            "--no-install",
+            "--minimal",
+        ])
+        assert rc == 0
+        assert "mode:        minimal" in capsys.readouterr().out
+
     def test_cli_returns_1_on_validation_error(self, tmp_path, capsys):
         # Invalid theme — should exit 1 with stderr message, not raise.
         bad_theme = tmp_path / "no-pkg"
@@ -251,3 +277,145 @@ class TestCli:
         assert rc == 1
         err = capsys.readouterr().err
         assert "error:" in err
+
+
+# ---------------------------------------------------------------------------
+# Gallery mode (default when theme has layouts/)
+# ---------------------------------------------------------------------------
+
+class TestGalleryMode:
+    """When the theme has a layouts/ directory, the scaffolder emits one
+    slide per layout — required because slides without explicit `layout:`
+    frontmatter use Slidev's built-in default layout, NOT the theme."""
+
+    def test_emits_one_slide_per_layout(self, tmp_path):
+        theme = _make_valid_theme(tmp_path / "slidev-theme-test")
+        _add_layout(theme, "slide1", ["title", "body-12"])
+        _add_layout(theme, "slide2", ["title"])
+        _add_layout(theme, "slide3", ["body-19"])
+        deck = tmp_path / "my-deck"
+        result = scaffold_deck(deck, theme, "my-deck", install=False)
+
+        assert result.mode == "gallery"
+        assert result.slide_count == 3
+
+        slides = (deck / "slides.md").read_text()
+        assert "layout: slide1" in slides
+        assert "layout: slide2" in slides
+        assert "layout: slide3" in slides
+
+    def test_emits_title_slot_override_when_title_in_slots(self, tmp_path):
+        theme = _make_valid_theme(tmp_path / "slidev-theme-test")
+        _add_layout(theme, "slide1", ["title", "body-12"])
+        deck = tmp_path / "my-deck"
+        scaffold_deck(deck, theme, "my-deck", install=False)
+        slides = (deck / "slides.md").read_text()
+
+        assert "::title::" in slides
+        assert "Layout: slide1" in slides
+
+    def test_lists_other_slots_in_comment(self, tmp_path):
+        theme = _make_valid_theme(tmp_path / "slidev-theme-test")
+        _add_layout(theme, "slide1", ["title", "body-12", "body-19", "picture-22"])
+        deck = tmp_path / "my-deck"
+        scaffold_deck(deck, theme, "my-deck", install=False)
+        slides = (deck / "slides.md").read_text()
+
+        # Comment listing the non-title slots so the user can discover them.
+        assert "body-12" in slides
+        assert "body-19" in slides
+        assert "picture-22" in slides
+        # And only non-title slots — title is already overridden above.
+        assert "Other slots in this layout" in slides
+
+    def test_layout_without_title_omits_title_override(self, tmp_path):
+        theme = _make_valid_theme(tmp_path / "slidev-theme-test")
+        _add_layout(theme, "slide1", ["body-12", "body-19"])  # no title slot
+        deck = tmp_path / "my-deck"
+        scaffold_deck(deck, theme, "my-deck", install=False)
+        slides = (deck / "slides.md").read_text()
+
+        # The slide has `layout: slide1` but no `::title::` block because
+        # the layout doesn't expose a title slot.
+        assert "layout: slide1" in slides
+        slide1_section = slides.split("layout: slide1")[1].split("---")[0]
+        assert "::title::" not in slide1_section
+
+    def test_falls_back_to_minimal_when_theme_has_no_layouts_dir(self, tmp_path):
+        theme = _make_valid_theme(tmp_path / "slidev-theme-test")  # no layouts/
+        deck = tmp_path / "my-deck"
+        result = scaffold_deck(deck, theme, "my-deck", install=False)
+        assert result.mode == "minimal"
+        # Minimal still pins layout: to "default" so Slidev knows what to
+        # render. (Themes without layouts/ are typically hand-scaffolded
+        # and rely on Slidev's built-in default layout.)
+        assert "layout: default" in (deck / "slides.md").read_text()
+
+    def test_minimal_flag_forces_minimal_mode_even_with_layouts(self, tmp_path):
+        theme = _make_valid_theme(tmp_path / "slidev-theme-test")
+        _add_layout(theme, "slide1", ["title"])
+        _add_layout(theme, "slide2", ["title"])
+        deck = tmp_path / "my-deck"
+        result = scaffold_deck(deck, theme, "my-deck", install=False, minimal=True)
+        assert result.mode == "minimal"
+        assert result.slide_count == 2
+        # Minimal pins the starter to the FIRST available layout so the
+        # theme's styling actually applies on `npx slidev`.
+        assert "layout: slide1" in (deck / "slides.md").read_text()
+
+    def test_natural_sort_orders_slide2_before_slide10(self, tmp_path):
+        theme = _make_valid_theme(tmp_path / "slidev-theme-test")
+        for i in [1, 2, 10, 11]:
+            _add_layout(theme, f"slide{i}", ["title"])
+        deck = tmp_path / "my-deck"
+        scaffold_deck(deck, theme, "my-deck", install=False)
+        slides = (deck / "slides.md").read_text()
+        # Indices in document order.
+        i1 = slides.index("layout: slide1\n")
+        i2 = slides.index("layout: slide2\n")
+        i10 = slides.index("layout: slide10\n")
+        i11 = slides.index("layout: slide11\n")
+        assert i1 < i2 < i10 < i11
+
+
+# ---------------------------------------------------------------------------
+# Layout enumeration helpers
+# ---------------------------------------------------------------------------
+
+class TestEnumerateLayouts:
+    def test_returns_empty_for_theme_without_layouts_dir(self, tmp_path):
+        theme = _make_valid_theme(tmp_path / "slidev-theme-test")
+        assert _enumerate_layouts(theme) == []
+
+    def test_returns_layout_names_without_extension(self, tmp_path):
+        theme = _make_valid_theme(tmp_path / "slidev-theme-test")
+        _add_layout(theme, "cover", ["title"])
+        _add_layout(theme, "section", ["title"])
+        names = _enumerate_layouts(theme)
+        assert set(names) == {"cover", "section"}
+
+    def test_natural_sort_key_orders_numerically(self):
+        keys = sorted(["slide10", "slide2", "slide1", "slide11"], key=_natural_sort_key)
+        assert keys == ["slide1", "slide2", "slide10", "slide11"]
+
+
+class TestExtractSlotNames:
+    def test_returns_slot_names_in_document_order(self, tmp_path):
+        layout = tmp_path / "slide1.vue"
+        layout.write_text(
+            '<template>\n'
+            '  <slot name="title" />\n'
+            '  <slot name="body-12" />\n'
+            '  <slot name="picture-22" />\n'
+            '</template>\n',
+            encoding="utf-8",
+        )
+        assert _extract_slot_names(layout) == ["title", "body-12", "picture-22"]
+
+    def test_returns_empty_for_layout_with_no_slots(self, tmp_path):
+        layout = tmp_path / "slide1.vue"
+        layout.write_text('<template>\n  <div>no slots</div>\n</template>\n', encoding="utf-8")
+        assert _extract_slot_names(layout) == []
+
+    def test_returns_empty_for_nonexistent_file(self, tmp_path):
+        assert _extract_slot_names(tmp_path / "does-not-exist.vue") == []

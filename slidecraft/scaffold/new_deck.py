@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -26,13 +27,14 @@ from ..npm_name import validate_npm_package_name
 
 
 # ---------------------------------------------------------------------------
-# Templates
+# Templates — minimal mode (no theme, or --minimal)
 # ---------------------------------------------------------------------------
 
-_SLIDES_MD_WITH_THEME = """\
+_SLIDES_MD_MINIMAL_WITH_THEME = """\
 ---
 theme: {theme_name}
 title: {deck_name}
+layout: {first_layout}
 ---
 
 # {deck_name}
@@ -40,36 +42,13 @@ title: {deck_name}
 Replace this with your opening slide.
 
 ---
+layout: {first_layout}
+---
 
 # Slide 2
 
 - Bullet one
 - Bullet two
-
----
-
-# Slot overrides
-
-When a layout exposes named slots (e.g. ``slide14`` from an imported theme),
-override them with ``::slot-name::`` blocks. Example:
-
-```
----
-layout: slide14
----
-
-::title::
-My custom title
-
-::body-19::
-My custom body
-
-::picture-22::
-![](/my-image.png)
-```
-
-Drop assets into ``public/`` and reference them as ``/filename.ext`` from any
-slide.
 """
 
 _SLIDES_MD_DEFAULT_THEME = """\
@@ -87,6 +66,59 @@ Replace this with your opening slide.
 
 - Bullet one
 - Bullet two
+"""
+
+# ---------------------------------------------------------------------------
+# Gallery mode (default when a theme is given): one slide per layout
+# ---------------------------------------------------------------------------
+
+_GALLERY_HEADER = """\
+---
+theme: {theme_name}
+title: {deck_name}
+---
+
+<!--
+This deck was scaffolded in **gallery mode** — one slide per layout the theme
+exposes, so you can browse every layout the corporate template provides.
+Delete the slides you don't need, override slot content with ``::slot-name::``
+blocks, and drop static assets into ``public/`` (reference as ``/file.ext``).
+
+Run ``python -m slidecraft.scaffold.new_deck --minimal`` next time to skip
+the gallery and get a 2-slide starter instead.
+-->
+
+"""
+
+# Per-slide template inside the gallery. Title slot is filled with a default
+# heading so the slide isn't visually empty when previewed; other slots fall
+# through to whatever default content the layout's .vue ships with (text
+# placeholder prompts, default images, etc.) — that's how the user sees the
+# layout "as designed" before overriding anything.
+_GALLERY_SLIDE_WITH_TITLE = """\
+---
+layout: {layout}
+---
+
+::title::
+{title_text}
+{slot_hint}
+"""
+
+_GALLERY_SLIDE_WITHOUT_TITLE = """\
+---
+layout: {layout}
+---
+{slot_hint}
+"""
+
+_GITIGNORE = """\
+node_modules/
+dist/
+.slidev/
+*.log
+.DS_Store
+Thumbs.db
 """
 
 _GITIGNORE = """\
@@ -111,6 +143,8 @@ class ScaffoldResult:
     theme_dir: Optional[Path] # None ⇒ using Slidev's built-in default
     theme_rel: Optional[str]  # forward-slash relpath used in package.json file: dep
     installed: bool           # whether npm install ran successfully
+    mode: str                 # "gallery", "minimal", or "default-theme"
+    slide_count: int          # how many slides the generated slides.md contains
 
     def preview_hint(self) -> str:
         return f'cd "{self.deck_dir}" && npx slidev'
@@ -150,6 +184,99 @@ def _load_theme_metadata(theme_dir: Path) -> tuple[str, str]:
     # at `npx slidev` with a cryptic message buried in node_modules.
     validate_npm_package_name(name, role="theme")
     return name, str(pkg_path)
+
+
+# ---------------------------------------------------------------------------
+# Layout enumeration — for gallery mode
+# ---------------------------------------------------------------------------
+
+_LAYOUT_NUMBER_RE = re.compile(r"(\d+)")
+_SLOT_NAME_RE = re.compile(r'<slot\s+name="([^"]+)"')
+
+
+def _natural_sort_key(name: str) -> tuple:
+    """Sort key that orders `slide2` before `slide10` (natural numeric order).
+
+    Splits the name into alternating text/digit runs and converts the digit
+    runs to ints so they compare numerically. Falls back to lexical for
+    purely textual names.
+    """
+    parts = _LAYOUT_NUMBER_RE.split(name)
+    return tuple(int(p) if p.isdigit() else p for p in parts)
+
+
+def _enumerate_layouts(theme_dir: Path) -> list[str]:
+    """Return layout names (without .vue suffix) for every .vue file in the
+    theme's ``layouts/`` directory, sorted naturally so slide2 < slide10.
+
+    Returns an empty list if the theme has no ``layouts/`` directory — that's
+    the path for hand-scaffolded themes that ship only global styles. Callers
+    fall back to the minimal starter when this returns [].
+    """
+    layouts_dir = theme_dir / "layouts"
+    if not layouts_dir.is_dir():
+        return []
+    names = [p.stem for p in layouts_dir.glob("*.vue")]
+    names.sort(key=_natural_sort_key)
+    return names
+
+
+def _extract_slot_names(layout_vue: Path) -> list[str]:
+    """Return the ordered list of slot names declared in a layout .vue file.
+
+    Reads ``<slot name="…" …/>`` declarations from the template. Order
+    preserved by document order so the gallery comment lists slots in the
+    same sequence the layout designer placed them — usually top-to-bottom,
+    left-to-right.
+    """
+    try:
+        text = layout_vue.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return []
+    return _SLOT_NAME_RE.findall(text)
+
+
+def _render_gallery_slide(layout: str, slots: list[str]) -> str:
+    """Render one slide in gallery mode — uses ``layout: <name>``, fills the
+    ``::title::`` slot (if present) with a default heading so the slide isn't
+    visually empty, and leaves the other slots un-overridden so they fall
+    through to the layout's baked-in defaults.
+
+    The list of remaining slot names becomes an HTML comment so the user can
+    discover what's available without inspecting the .vue file.
+    """
+    title_text = f"Layout: {layout}"
+    other_slots = [s for s in slots if s != "title"]
+    if other_slots:
+        hint = (
+            "\n<!-- Other slots in this layout (uncomment a ::slot:: block "
+            f"below to override): {', '.join(other_slots)} -->\n"
+        )
+    else:
+        hint = ""
+
+    if "title" in slots:
+        return _GALLERY_SLIDE_WITH_TITLE.format(
+            layout=layout, title_text=title_text, slot_hint=hint,
+        )
+    return _GALLERY_SLIDE_WITHOUT_TITLE.format(layout=layout, slot_hint=hint)
+
+
+def _render_gallery_slides_md(
+    deck_name: str,
+    theme_name: str,
+    theme_dir: Path,
+    layouts: list[str],
+) -> str:
+    """Render the full gallery slides.md — header + one slide per layout."""
+    parts: list[str] = [
+        _GALLERY_HEADER.format(theme_name=theme_name, deck_name=deck_name),
+    ]
+    for layout in layouts:
+        slots = _extract_slot_names(theme_dir / "layouts" / f"{layout}.vue")
+        parts.append("---\n")  # Slidev slide separator
+        parts.append(_render_gallery_slide(layout, slots))
+    return "\n".join(parts)
 
 
 def _portable_relpath(target: Path, start: Path) -> str:
@@ -233,6 +360,7 @@ def scaffold_deck(
     *,
     overwrite: bool = False,
     install: bool = True,
+    minimal: bool = False,
 ) -> ScaffoldResult:
     """Create a new Slidev deck at ``deck_dir`` consuming ``theme_dir``.
 
@@ -257,6 +385,14 @@ def scaffold_deck(
         If True (default), run ``npm install`` in the deck dir after
         scaffolding. Set False for tests or when the caller wants to
         defer install.
+    minimal
+        If True, skip gallery mode and emit a 2-slide starter even when
+        the theme exposes many layouts. Default False — gallery mode
+        (one slide per layout) is the standard, because slides without
+        an explicit ``layout:`` frontmatter use Slidev's built-in
+        default layout (NOT the theme's styling), so the gallery is
+        what makes "the theme actually loads" obviously true on first
+        ``npx slidev``.
     """
     deck_dir = Path(deck_dir)
     if deck_dir.exists() and not overwrite:
@@ -268,22 +404,46 @@ def scaffold_deck(
     # Validate and resolve the theme (or set defaults for the no-theme path).
     theme_name = "@slidev/theme-default"
     theme_rel: Optional[str] = None
+    layouts: list[str] = []
     if theme_dir is not None:
         theme_dir = Path(theme_dir)
         theme_name, _ = _load_theme_metadata(theme_dir)
         theme_rel = _portable_relpath(theme_dir, deck_dir)
+        layouts = _enumerate_layouts(theme_dir)
 
     # Create directories.
     deck_dir.mkdir(parents=True, exist_ok=overwrite)
     (deck_dir / "public").mkdir(exist_ok=True)
 
-    # Render templates.
-    if theme_dir is not None:
-        slides_md = _SLIDES_MD_WITH_THEME.format(
-            theme_name=theme_name, deck_name=deck_name,
-        )
-    else:
+    # Choose the slides.md template:
+    #   • No theme            → 2-slide default-theme starter
+    #   • Theme + minimal     → 2-slide minimal starter pinned to layouts[0]
+    #   • Theme + has layouts → gallery (one slide per layout)
+    #   • Theme + no layouts  → minimal pinned to "default"
+    if theme_dir is None:
         slides_md = _SLIDES_MD_DEFAULT_THEME.format(deck_name=deck_name)
+        mode = "default-theme"
+        slide_count = 2
+    elif minimal or not layouts:
+        # Pin to the first available layout if any, else fall back to
+        # "default" (Slidev's built-in) so the slide at least renders.
+        first_layout = layouts[0] if layouts else "default"
+        slides_md = _SLIDES_MD_MINIMAL_WITH_THEME.format(
+            theme_name=theme_name,
+            deck_name=deck_name,
+            first_layout=first_layout,
+        )
+        mode = "minimal"
+        slide_count = 2
+    else:
+        slides_md = _render_gallery_slides_md(
+            deck_name=deck_name,
+            theme_name=theme_name,
+            theme_dir=theme_dir,
+            layouts=layouts,
+        )
+        mode = "gallery"
+        slide_count = len(layouts)
 
     (deck_dir / "slides.md").write_text(slides_md, encoding="utf-8")
     (deck_dir / "package.json").write_text(
@@ -301,6 +461,8 @@ def scaffold_deck(
         theme_dir=theme_dir,
         theme_rel=theme_rel,
         installed=installed,
+        mode=mode,
+        slide_count=slide_count,
     )
 
 
@@ -333,6 +495,13 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         "--overwrite", action="store_true",
         help="Allow writing into an existing deck directory.",
     )
+    p.add_argument(
+        "--minimal", action="store_true",
+        help="Emit a 2-slide starter instead of the default gallery mode "
+             "(one slide per theme layout). Use when you want to start "
+             "from a blank slate and already know which layouts you'll "
+             "use.",
+    )
     return p.parse_args(argv)
 
 
@@ -347,6 +516,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             deck_name=args.name,
             overwrite=args.overwrite,
             install=not args.no_install,
+            minimal=args.minimal,
         )
     except (FileExistsError, FileNotFoundError, ValueError) as e:
         sys.stderr.write(f"error: {e}\n")
@@ -359,6 +529,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     print(f"theme_name:  {result.theme_name}")
     print(f"theme_dir:   {result.theme_dir if result.theme_dir else '(Slidev built-in default)'}")
     print(f"theme_rel:   {result.theme_rel if result.theme_rel else '(none)'}")
+    print(f"mode:        {result.mode}")
+    print(f"slide_count: {result.slide_count}")
     print(f"installed:   {result.installed}")
     print(f"preview:     {result.preview_hint()}")
     return 0

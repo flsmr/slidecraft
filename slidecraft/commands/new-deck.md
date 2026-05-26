@@ -44,9 +44,16 @@ and invoke it once.
      --theme "<THEME_DIR>"
    ```
 
-   Omit `--theme` entirely if the user chose Slidev's default. Pass `--no-install` to skip `npm install` (e.g. if the user wants to inspect the deck before installing). Pass `--overwrite` if the user explicitly wants to write into an existing directory.
+   Omit `--theme` entirely if the user chose Slidev's default.
 
-   The script prints a key/value summary on stdout (`deck_dir`, `deck_name`, `theme_name`, `theme_dir`, `theme_rel`, `installed`, `preview`). It exits 0 on success, 1 with an `error:` stderr line on validation failure.
+   **Default behaviour is gallery mode.** When a theme exposes layouts (`<theme>/layouts/*.vue`), the scaffolder emits **one starter slide per layout** with the correct `layout: slideN` frontmatter. This matters: a slide without an explicit `layout:` frontmatter uses Slidev's **built-in default layout**, NOT the theme's — so a deck full of un-tagged slides would render with zero theme styling. Gallery mode guarantees the theme actually loads on first `npx slidev`, and it doubles as a layout reference the user can browse and delete from.
+
+   Useful flags:
+   - `--minimal` — opt out of gallery mode; emit a 2-slide starter pinned to the first available theme layout. Use when the user already knows which layouts they want and prefers a blank slate.
+   - `--no-install` — skip `npm install`.
+   - `--overwrite` — allow writing into an existing directory.
+
+   The script prints a key/value summary on stdout (`deck_dir`, `deck_name`, `theme_name`, `theme_dir`, `theme_rel`, `mode`, `slide_count`, `installed`, `preview`). It exits 0 on success, 1 with an `error:` stderr line on validation failure.
 
 3. **Report to the user.** Echo the script's summary, then point them at the preview command from the `preview:` line (always of the form `cd "<deck_dir>" && npx slidev`).
 
