@@ -344,19 +344,58 @@ class TestGalleryMode:
         assert "::title::" in slides
         assert "Layout: slide1" in slides
 
-    def test_lists_other_slots_in_comment(self, tmp_path):
+    def test_populates_every_text_slot(self, tmp_path):
+        """Each text slot must get a ``::slot::`` override with placeholder
+        copy so the layout looks visually populated when previewed —
+        otherwise un-overridden slots render empty (the converter doesn't
+        bake defaults into text slots, only picture slots)."""
         theme = _make_valid_theme(tmp_path / "slidev-theme-test")
-        _add_layout(theme, "slide1", ["title", "body-12", "body-19", "picture-22"])
+        _add_layout(theme, "slide1", ["title", "body-12", "body-19"])
         deck = tmp_path / "my-deck"
         scaffold_deck(deck, theme, "my-deck", install=False)
         slides = (deck / "slides.md").read_text()
 
-        # Comment listing the non-title slots so the user can discover them.
-        assert "body-12" in slides
-        assert "body-19" in slides
+        assert "::title::" in slides
+        assert "::body-12::" in slides
+        assert "::body-19::" in slides
+        # Title gets a layout-aware heading; body slots get generic copy.
+        assert "Layout: slide1" in slides
+        assert "body-12 content" in slides
+        assert "body-19 content" in slides
+
+    def test_picture_slots_not_overridden(self, tmp_path):
+        """Picture slots are left un-overridden so the layout's default
+        image (baked by the converter into ``<slot name="picture-N">{img}``)
+        shows through. Overriding with empty content would suppress it."""
+        theme = _make_valid_theme(tmp_path / "slidev-theme-test")
+        _add_layout(theme, "slide1", ["title", "picture-22"])
+        deck = tmp_path / "my-deck"
+        scaffold_deck(deck, theme, "my-deck", install=False)
+        slides = (deck / "slides.md").read_text()
+
+        # Title is overridden as a block; picture-22 is NOT — i.e.,
+        # ``::picture-22::`` does not appear on a line by itself.
+        # (It does appear inside the comment hint, wrapped in backticks,
+        # but that's documentation, not an active override.)
+        assert any(line == "::title::" for line in slides.splitlines())
+        assert not any(line == "::picture-22::" for line in slides.splitlines())
+        # The user is told the picture slot exists via a comment hint.
+        assert "default image" in slides
         assert "picture-22" in slides
-        # And only non-title slots — title is already overridden above.
-        assert "Other slots in this layout" in slides
+
+    def test_singleton_slots_use_parenthesised_marker(self, tmp_path):
+        """Singletons like footer/date/slide-number should get a clearly
+        placeholder-y override so they're visible but obviously meant to
+        be replaced. We use parens like ``(footer)``."""
+        theme = _make_valid_theme(tmp_path / "slidev-theme-test")
+        _add_layout(theme, "slide1", ["footer", "date", "slide-number"])
+        deck = tmp_path / "my-deck"
+        scaffold_deck(deck, theme, "my-deck", install=False)
+        slides = (deck / "slides.md").read_text()
+
+        assert "::footer::\n(footer)" in slides
+        assert "::date::\n(date)" in slides
+        assert "::slide-number::\n(slide-number)" in slides
 
     def test_layout_without_title_omits_title_override(self, tmp_path):
         theme = _make_valid_theme(tmp_path / "slidev-theme-test")
@@ -392,6 +431,37 @@ class TestGalleryMode:
         # Minimal pins the starter to the FIRST available layout so the
         # theme's styling actually applies on `npx slidev`.
         assert "layout: slide1" in (deck / "slides.md").read_text()
+
+    def test_slide_count_matches_layout_count_exactly(self, tmp_path):
+        """Regression: previously rendered an empty separator slide between
+        every real slide, doubling the count (49 layouts → 99 slides).
+        Slide boundaries in Slidev are ``---`` lines; the global frontmatter
+        IS slide 1's frontmatter, so the count is (frontmatter_blocks)
+        and equals N for N layouts."""
+        theme = _make_valid_theme(tmp_path / "slidev-theme-test")
+        n = 7
+        for i in range(1, n + 1):
+            _add_layout(theme, f"slide{i}", ["title", "body-1"])
+        deck = tmp_path / "my-deck"
+        result = scaffold_deck(deck, theme, "my-deck", install=False)
+        slides = (deck / "slides.md").read_text()
+
+        # ScaffoldResult reports the right number.
+        assert result.slide_count == n
+        # And the actual file has the right number of `layout: slideN` lines —
+        # one per slide, none missing, none duplicated.
+        layout_lines = [
+            line for line in slides.splitlines()
+            if line.startswith("layout: slide")
+        ]
+        assert len(layout_lines) == n
+
+        # And there are no orphan `---` separators between slides — every
+        # `---` is part of a frontmatter block. The total `---` count
+        # should be exactly 2 * n (open + close for each slide's
+        # frontmatter; the first close doubles as the body separator).
+        dash_lines = [line for line in slides.splitlines() if line == "---"]
+        assert len(dash_lines) == 2 * n
 
     def test_natural_sort_orders_slide2_before_slide10(self, tmp_path):
         theme = _make_valid_theme(tmp_path / "slidev-theme-test")

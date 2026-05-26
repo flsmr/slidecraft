@@ -72,50 +72,26 @@ Replace this with your opening slide.
 # Gallery mode (default when a theme is given): one slide per layout
 # ---------------------------------------------------------------------------
 
-_GALLERY_HEADER = """\
----
-theme: {theme_name}
-title: {deck_name}
----
-
+# Gallery-mode header: the explanatory HTML comment lives at the top of
+# slides.md, sandwiched between the global frontmatter close and the
+# first layout's slot overrides. Slidev renders nothing for an HTML
+# comment, so it sits invisibly above slide 1's actual content.
+_GALLERY_INTRO_COMMENT = """\
 <!--
-This deck was scaffolded in **gallery mode** — one slide per layout the theme
-exposes, so you can browse every layout the corporate template provides.
-Delete the slides you don't need, override slot content with ``::slot-name::``
-blocks, and drop runtime assets into ``public/`` (reference as ``/file.ext``).
+This deck was scaffolded in **gallery mode** — one starter slide per layout
+the theme exposes, every text slot populated with a placeholder so you can
+see the layout's intended shape at first ``npx slidev``.
 
-Two folders sit alongside this slides.md:
-  - ``public/``    — runtime-served by Slidev; for images/videos slides reference
-  - ``resources/`` — source material the deck is built from (papers, raw
-                    images, outlines, meeting notes); NOT served by Slidev
+Workflow:
+  1. Browse the slides to see what each layout looks like populated.
+  2. Delete the slides you don't need.
+  3. Replace placeholder text in the ``::slot-name::`` blocks with your
+     real content.
+  4. Drop runtime assets into ``public/`` and reference them as ``/file.ext``.
+     Source material (papers, outlines, meeting notes) lives in ``resources/``.
 
-Run ``python -m slidecraft.scaffold.new_deck --minimal`` next time to skip
-the gallery and get a 2-slide starter instead.
--->
-
-"""
-
-# Per-slide template inside the gallery. Title slot is filled with a default
-# heading so the slide isn't visually empty when previewed; other slots fall
-# through to whatever default content the layout's .vue ships with (text
-# placeholder prompts, default images, etc.) — that's how the user sees the
-# layout "as designed" before overriding anything.
-_GALLERY_SLIDE_WITH_TITLE = """\
----
-layout: {layout}
----
-
-::title::
-{title_text}
-{slot_hint}
-"""
-
-_GALLERY_SLIDE_WITHOUT_TITLE = """\
----
-layout: {layout}
----
-{slot_hint}
-"""
+Re-scaffold with ``--minimal`` to skip gallery mode and get a 2-slide starter.
+-->"""
 
 _GITIGNORE = """\
 node_modules/
@@ -254,30 +230,69 @@ def _extract_slot_names(layout_vue: Path) -> list[str]:
     return _SLOT_NAME_RE.findall(text)
 
 
-def _render_gallery_slide(layout: str, slots: list[str]) -> str:
-    """Render one slide in gallery mode — uses ``layout: <name>``, fills the
-    ``::title::`` slot (if present) with a default heading so the slide isn't
-    visually empty, and leaves the other slots un-overridden so they fall
-    through to the layout's baked-in defaults.
+# Slots that are unique within a layout (≤1 each). Mirrors the singleton
+# set in slidecraft.importer.emit.naming — keeping a small duplicate is
+# easier than introducing a cross-package coupling on a 5-name list.
+_SINGLETON_TEXT_SLOTS: frozenset[str] = frozenset({
+    "title", "subtitle", "footer", "date", "slide-number",
+})
 
-    The list of remaining slot names becomes an HTML comment so the user can
-    discover what's available without inspecting the .vue file.
+
+def _render_slot_override(slot: str, layout: str) -> Optional[str]:
+    """Render the markdown for one slot's override block in gallery mode.
+
+    Returns ``None`` when the slot should NOT be overridden — for picture
+    placeholders, leaving the slot un-overridden means the default image
+    baked into the layout's ``<slot name="picture-N">{img}</slot>`` shows
+    through. Overriding with empty content would suppress that default
+    and make the slot render blank.
+
+    For text slots we emit placeholder copy so each gallery slide looks
+    visually populated (the original complaint was "non look like the
+    one in the theme"). The placeholder pattern depends on slot role:
+
+      title             → "Layout: <name>"   (single short heading)
+      subtitle/footer/  → "(slot)"            (parenthesised marker —
+        date/slide-num                          signals "this exists; fill in")
+      body-N / content- → "<slot> content"   (generic placeholder copy)
+        N / ph-N
+      picture-N         → None               (defer to layout default)
     """
-    title_text = f"Layout: {layout}"
-    other_slots = [s for s in slots if s != "title"]
-    if other_slots:
-        hint = (
-            "\n<!-- Other slots in this layout (uncomment a ::slot:: block "
-            f"below to override): {', '.join(other_slots)} -->\n"
-        )
+    if slot.startswith("picture-"):
+        return None
+    if slot == "title":
+        body = f"Layout: {layout}"
+    elif slot in _SINGLETON_TEXT_SLOTS:
+        body = f"({slot})"
     else:
-        hint = ""
+        # body-N, content-N, ph-N, or any future text-slot prefix.
+        body = f"{slot} content"
+    return f"::{slot}::\n{body}\n"
 
-    if "title" in slots:
-        return _GALLERY_SLIDE_WITH_TITLE.format(
-            layout=layout, title_text=title_text, slot_hint=hint,
+
+def _render_gallery_slide_body(layout: str, slots: list[str]) -> str:
+    """Render the body (slot-override blocks) for one gallery slide.
+
+    Does NOT include the slide's frontmatter — the caller adds that. The
+    body is just the per-slot override blocks separated by blank lines,
+    with a trailing newline.
+    """
+    blocks: list[str] = []
+    for slot in slots:
+        block = _render_slot_override(slot, layout)
+        if block is not None:
+            blocks.append(block)
+    # Add a hint comment for picture slots so the user knows they're there
+    # (they're not in `blocks` because we deliberately don't override them).
+    picture_slots = [s for s in slots if s.startswith("picture-")]
+    if picture_slots:
+        names = ", ".join(picture_slots)
+        blocks.append(
+            f"<!-- Picture slot(s) {names} show the layout's default image. "
+            f"To override, add e.g. ``::{picture_slots[0]}::`` followed by "
+            f"``![](/your-image.png)``. -->\n"
         )
-    return _GALLERY_SLIDE_WITHOUT_TITLE.format(layout=layout, slot_hint=hint)
+    return "\n".join(blocks)
 
 
 def _render_gallery_slides_md(
@@ -286,15 +301,55 @@ def _render_gallery_slides_md(
     theme_dir: Path,
     layouts: list[str],
 ) -> str:
-    """Render the full gallery slides.md — header + one slide per layout."""
-    parts: list[str] = [
-        _GALLERY_HEADER.format(theme_name=theme_name, deck_name=deck_name),
-    ]
-    for layout in layouts:
+    """Render the full gallery slides.md.
+
+    Structure: the GLOBAL frontmatter (``theme:`` + ``title:`` + ``layout:
+    <first>``) doubles as slide 1's frontmatter. After the close ``---``
+    we put the explanatory HTML comment (renders nothing visible) and
+    then slide 1's slot-override blocks. Subsequent slides each start
+    with ``---\\nlayout: slideN\\n---\\n``.
+
+    Critical Slidev rule we encode here: a single ``---`` line on its own
+    is a slide separator. The frontmatter ``---`` lines also act as
+    separators, so we MUST NOT insert an extra ``---`` between slides
+    that already begin with a frontmatter block — that creates an empty
+    intermediate slide. (Previous bug: 99 slides instead of 49.)
+    """
+    if not layouts:
+        raise ValueError("gallery mode requires at least one layout")
+
+    first_layout = layouts[0]
+    first_slots = _extract_slot_names(theme_dir / "layouts" / f"{first_layout}.vue")
+
+    parts: list[str] = []
+
+    # Slide 1: global frontmatter doubles as this slide's frontmatter.
+    parts.append("---")
+    parts.append(f"theme: {theme_name}")
+    parts.append(f"title: {deck_name}")
+    parts.append(f"layout: {first_layout}")
+    parts.append("---")
+    parts.append("")
+    parts.append(_GALLERY_INTRO_COMMENT)
+    parts.append("")
+    body = _render_gallery_slide_body(first_layout, first_slots)
+    if body:
+        parts.append(body)
+
+    # Slides 2..N: each begins with its own frontmatter block, which
+    # functions as both the slide separator AND the frontmatter open.
+    for layout in layouts[1:]:
         slots = _extract_slot_names(theme_dir / "layouts" / f"{layout}.vue")
-        parts.append("---\n")  # Slidev slide separator
-        parts.append(_render_gallery_slide(layout, slots))
-    return "\n".join(parts)
+        parts.append("")
+        parts.append("---")
+        parts.append(f"layout: {layout}")
+        parts.append("---")
+        parts.append("")
+        body = _render_gallery_slide_body(layout, slots)
+        if body:
+            parts.append(body)
+
+    return "\n".join(parts) + "\n"
 
 
 def _portable_relpath(target: Path, start: Path) -> str:
