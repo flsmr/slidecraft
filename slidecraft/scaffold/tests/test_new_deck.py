@@ -57,6 +57,10 @@ class TestScaffoldWithTheme:
         assert (deck / "package.json").is_file()
         assert (deck / ".gitignore").is_file()
         assert (deck / "public").is_dir()
+        # resources/ for source material (papers, raw images, outlines)
+        # plus a README explaining the convention.
+        assert (deck / "resources").is_dir()
+        assert (deck / "resources" / "README.md").is_file()
 
     def test_package_json_uses_portable_relative_path(self, tmp_path):
         """The file: dependency must use forward slashes (cross-platform)."""
@@ -94,6 +98,32 @@ class TestScaffoldWithTheme:
         assert result.theme_dir == theme
         assert result.installed is False  # install=False
         assert result.preview_hint().endswith("npx slidev")
+
+
+class TestResourcesFolder:
+    """resources/ is the source-material folder — papers, raw images,
+    outlines, meeting notes. NOT served by Slidev (that's what public/
+    is for). Created on every scaffold so users have a consistent place
+    to drop the inputs their deck is based on."""
+
+    def test_created_for_themed_deck(self, tmp_path):
+        theme = _make_valid_theme(tmp_path / "slidev-theme-test")
+        deck = tmp_path / "my-deck"
+        scaffold_deck(deck, theme, "my-deck", install=False)
+        assert (deck / "resources").is_dir()
+
+    def test_created_for_default_theme_deck(self, tmp_path):
+        deck = tmp_path / "my-deck"
+        scaffold_deck(deck, None, "my-deck", install=False)
+        assert (deck / "resources").is_dir()
+
+    def test_readme_explains_distinction_from_public(self, tmp_path):
+        deck = tmp_path / "my-deck"
+        scaffold_deck(deck, None, "my-deck", install=False)
+        readme = (deck / "resources" / "README.md").read_text()
+        # README must distinguish resources/ (source) from public/ (runtime).
+        assert "public/" in readme
+        assert "NOT served" in readme
 
 
 class TestScaffoldWithDefaultTheme:

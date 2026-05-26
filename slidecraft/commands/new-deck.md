@@ -55,6 +55,8 @@ and invoke it once.
 
    The script prints a key/value summary on stdout (`deck_dir`, `deck_name`, `theme_name`, `theme_dir`, `theme_rel`, `mode`, `slide_count`, `installed`, `preview`). It exits 0 on success, 1 with an `error:` stderr line on validation failure.
 
-3. **Report to the user.** Echo the script's summary, then point them at the preview command from the `preview:` line (always of the form `cd "<deck_dir>" && npx slidev`).
+3. **Report to the user.** Echo the script's summary, then point them at the preview command from the `preview:` line (always of the form `cd "<deck_dir>" && npx slidev`). Mention the two scaffolded folders:
+   - `public/` — runtime-served by Slidev; drop here any image/video referenced from a slide as `/file.ext`.
+   - `resources/` — source material the deck is based on (papers, raw images, outlines, meeting notes). NOT served by Slidev; this is the user's input archive. A `README.md` inside explains the convention.
 
 That's it — no manual file creation, no per-step orchestration. Every detail of layout, templates, and dependency wiring lives in `slidecraft/scaffold/new_deck.py` (and is covered by its tests).

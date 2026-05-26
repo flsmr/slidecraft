@@ -82,7 +82,12 @@ title: {deck_name}
 This deck was scaffolded in **gallery mode** — one slide per layout the theme
 exposes, so you can browse every layout the corporate template provides.
 Delete the slides you don't need, override slot content with ``::slot-name::``
-blocks, and drop static assets into ``public/`` (reference as ``/file.ext``).
+blocks, and drop runtime assets into ``public/`` (reference as ``/file.ext``).
+
+Two folders sit alongside this slides.md:
+  - ``public/``    — runtime-served by Slidev; for images/videos slides reference
+  - ``resources/`` — source material the deck is built from (papers, raw
+                    images, outlines, meeting notes); NOT served by Slidev
 
 Run ``python -m slidecraft.scaffold.new_deck --minimal`` next time to skip
 the gallery and get a 2-slide starter instead.
@@ -121,13 +126,26 @@ dist/
 Thumbs.db
 """
 
-_GITIGNORE = """\
-node_modules/
-dist/
-.slidev/
-*.log
-.DS_Store
-Thumbs.db
+_RESOURCES_README = """\
+# Source material
+
+Drop the raw material your presentation is based on here:
+
+- Papers (PDFs), articles, references
+- Source images, screenshots, diagrams in their original resolution
+- Outlines, meeting notes, draft talking points
+- Spreadsheets, CSVs, datasets
+
+**This folder is NOT served by Slidev** — it's just your source-of-truth
+for things that feed *into* the slides. Use it as scratchpad / archive.
+
+For files the slides actually reference at runtime (images shown on a
+slide via `![](/foo.png)`, embedded videos, etc.), put them in `public/`
+instead — Slidev serves that folder at `/`.
+
+Both folders are committed to git by default; if any single file in
+`resources/` gets large (multi-MB PDFs), consider adding a `.gitignore`
+entry or using Git LFS.
 """
 
 
@@ -412,8 +430,18 @@ def scaffold_deck(
         layouts = _enumerate_layouts(theme_dir)
 
     # Create directories.
+    #   public/    — Slidev convention; runtime-served at /, slides reference
+    #                as `![](/foo.png)`. For artifacts that ship with the deck.
+    #   resources/ — source material the deck is based on (papers, raw
+    #                images, outlines, meeting notes). NOT served by Slidev.
+    #                Separate folder so the user can keep a clean line
+    #                between "input material" and "runtime assets".
     deck_dir.mkdir(parents=True, exist_ok=overwrite)
     (deck_dir / "public").mkdir(exist_ok=True)
+    (deck_dir / "resources").mkdir(exist_ok=True)
+    (deck_dir / "resources" / "README.md").write_text(
+        _RESOURCES_README, encoding="utf-8",
+    )
 
     # Choose the slides.md template:
     #   • No theme            → 2-slide default-theme starter
