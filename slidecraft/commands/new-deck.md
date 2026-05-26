@@ -17,6 +17,8 @@ and invoke it once.
    - **`DECK_NAME`** — Use the argument if provided, else ask:
      > What should the new deck be called?
 
+     The deck folder name preserves what the user typed (so a name like `2026-05-26_ILSE` becomes the literal folder name they expect to see). The scaffolder lowercases it internally for the npm `name` field. If the user-supplied name still contains characters npm rejects after lowercasing (spaces, punctuation, leading `.`/`_`), ask the user to revise — the scaffolder will raise `ValueError` otherwise.
+
    - **`DECK_LOCATION`** — Where the deck folder will be created (the folder itself is `DECK_LOCATION/DECK_NAME`). Default to the current working directory:
      > Where should the deck folder be created? (default: current directory)
 

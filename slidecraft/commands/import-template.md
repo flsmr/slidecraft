@@ -19,6 +19,13 @@ browser.
 
 3. **Choose theme name**: Ask the user for a short slug (e.g., "iu", "corporate", "brand"). It becomes the npm package name `slidev-theme-<name>` and lands in the deck's `theme:` frontmatter.
 
+   **Normalize the slug to a valid npm package name before passing it to `convert()`.** npm (and therefore Slidev's startup check) rejects anything that isn't lowercase letters / digits / hyphens / underscores / dots, with no leading dot or underscore. Apply these transforms silently to whatever the user typed:
+   - Lowercase everything (`ILSE` → `ilse`, `Corporate` → `corporate`)
+   - Replace spaces and other invalid characters with hyphens (`my brand` → `my-brand`)
+   - Strip leading dots and underscores
+
+   If the result is still empty or invalid (e.g. user entered `!!!`), ask them for a different slug rather than guessing. The Python entry point validates again and will raise `ValueError` with an actionable hint if anything slips through — but normalizing here avoids the user seeing that error.
+
 4. **Install Python dependencies** (if not already present):
    ```bash
    pip install python-pptx lxml Pillow --break-system-packages -q
