@@ -137,6 +137,16 @@ class Placeholder:
     # background are both clipped to this path. Set by parse.py via
     # pictures.geometry.cust_geom_to_clip_path / preset_to_css.
     clip_path: Optional[str] = None
+    # OOXML <a:bodyPr> autofit + wrap settings, cascaded slide → layout. They
+    # control whether the box's width/height should be FIXED (the default —
+    # text overflows and gets clipped) or DYNAMIC (grow to fit text content).
+    # ``shape_autofit`` mirrors <a:spAutoFit/>; when True the wrapper's
+    # height grows with content. ``wrap_text`` mirrors bodyPr.@wrap; False
+    # (PPT's ``wrap="none"``) means the wrapper grows horizontally and never
+    # line-wraps the text. Both False is the spec default — caller emits a
+    # fixed-size box with overflow:hidden.
+    shape_autofit: bool = False
+    wrap_text: bool = True
 
 
 @dataclass

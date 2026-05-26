@@ -204,13 +204,68 @@ def _para_props_css(ph: Placeholder) -> list[str]:
 # ---------------------------------------------------------------------------
 
 def _placeholder_style(ph: Placeholder, frame_anchor: str = "t") -> str:
-    """Build the full inline style string for a placeholder wrapper div."""
+    """Build the full inline style string for a placeholder wrapper div.
+
+    Honors PPT bodyPr autofit/wrap so a placeholder that the template
+    marked as "shape resizes to fit text" (``<a:spAutoFit/>``) or
+    "don't wrap" (``wrap="none"``) renders with dynamic dimensions
+    instead of a fixed box that clips overflowing content.
+
+    Sizing rules (mirrors what PowerPoint does):
+      shape_autofit=True, wrap_text=False  → no fixed width or height; the
+        box grows horizontally (text never wraps) and vertically. CSS:
+        ``white-space: nowrap; width: max-content; height: max-content;
+        min-width/min-height`` set to the OOXML values so the box never
+        shrinks below the designer's minimum.
+      shape_autofit=True, wrap_text=True   → fixed width (so text wraps
+        at the designed width), but height grows. The OOXML height
+        becomes ``min-height``.
+      shape_autofit=False, wrap_text=False → fixed height, but width
+        grows. Text never wraps; box extends horizontally.
+      shape_autofit=False, wrap_text=True  → fixed box, both dimensions
+        respected (the default, what previous emit output was always).
+
+    We always emit min-width/min-height = the OOXML value so the
+    placeholder's "designed minimum" footprint is preserved — important
+    for visual rhythm (e.g. the IU template's title box should still be
+    AT LEAST 540×62px even if "And charts" only fills part of it).
+    """
+    # Decide what to emit for width/height based on autofit/wrap.
+    if not ph.wrap_text and ph.shape_autofit:
+        # Both axes dynamic — text in one continuous line, box grows.
+        size_parts = [
+            f"min-width:{ph.width_px:.4g}px",
+            f"width:max-content",
+            f"min-height:{ph.height_px:.4g}px",
+            f"height:max-content",
+            "white-space:nowrap",
+        ]
+    elif ph.shape_autofit:
+        # Width fixed (text wraps at the designed width), height grows.
+        size_parts = [
+            f"width:{ph.width_px:.4g}px",
+            f"min-height:{ph.height_px:.4g}px",
+            f"height:max-content",
+        ]
+    elif not ph.wrap_text:
+        # Height fixed, width grows so text never wraps.
+        size_parts = [
+            f"min-width:{ph.width_px:.4g}px",
+            f"width:max-content",
+            f"height:{ph.height_px:.4g}px",
+            "white-space:nowrap",
+        ]
+    else:
+        # Default — fixed box; text overflowing the box gets clipped.
+        size_parts = [
+            f"width:{ph.width_px:.4g}px",
+            f"height:{ph.height_px:.4g}px",
+        ]
     parts: list[str] = [
         "position:absolute",
         f"left:{ph.x_px:.4g}px",
         f"top:{ph.y_px:.4g}px",
-        f"width:{ph.width_px:.4g}px",
-        f"height:{ph.height_px:.4g}px",
+        *size_parts,
     ]
 
     if ph.rotation_deg != 0.0:

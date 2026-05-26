@@ -458,6 +458,93 @@ def _ph_type(sp_el: etree._Element) -> Optional[str]:
     return ph.get("type")  # e.g. "title", "body", None
 
 
+def _parse_body_pr_autofit(sp_el: etree._Element) -> tuple[Optional[bool], Optional[bool]]:
+    """Read autofit + wrap from a shape's ``<a:bodyPr>``.
+
+    Returns ``(shape_autofit, wrap_text)`` where each may be ``None`` if the
+    setting is absent at this level — the caller is responsible for
+    cascading slide → layout → master via ``or``-like resolution.
+
+    OOXML semantics:
+      - ``<a:spAutoFit/>`` child   → ``shape_autofit=True``  (box grows to fit text)
+      - ``<a:normAutofit/>`` child → ``shape_autofit=False`` (text shrinks instead)
+      - ``<a:noAutofit/>`` child   → ``shape_autofit=False`` (default behaviour)
+      - bodyPr present but no autofit child → ``shape_autofit=None`` (inherit)
+      - ``bodyPr.@wrap="none"``    → ``wrap_text=False`` (extend horizontally,
+                                      never line-wrap)
+      - ``bodyPr.@wrap="square"`` or absent → ``wrap_text=True`` (default)
+
+    The combination ``wrap_text=False`` + ``shape_autofit=True`` is what
+    PowerPoint generates for "title-style" placeholders that the designer
+    wants to size to their content (e.g. the IU template's slide-24
+    centre title at width 540px doesn't wrap "Designs with tables" — the
+    box is expected to extend horizontally to fit the actual content).
+    """
+    tx_body = sp_el.find(_x("p:txBody"))
+    if tx_body is None:
+        return None, None
+    body_pr = tx_body.find(_x("a:bodyPr"))
+    if body_pr is None:
+        return None, None
+
+    # Autofit: examine the bodyPr's children for the three known markers.
+    shape_autofit: Optional[bool] = None
+    if body_pr.find(_x("a:spAutoFit")) is not None:
+        shape_autofit = True
+    elif body_pr.find(_x("a:noAutofit")) is not None:
+        shape_autofit = False
+    elif body_pr.find(_x("a:normAutofit")) is not None:
+        # normAutofit means "scale text down to fit"; we don't currently
+        # implement font-scaling on the emit side, so semantically the
+        # SHAPE is fixed — shape_autofit=False expresses that.
+        shape_autofit = False
+
+    # Wrap: bodyPr.@wrap defaults to "square" (wrap-enabled). We only flip
+    # to False when it's explicitly "none".
+    wrap_attr = body_pr.get("wrap")
+    if wrap_attr == "none":
+        wrap_text: Optional[bool] = False
+    elif wrap_attr is not None:
+        wrap_text = True
+    else:
+        wrap_text = None  # inherit
+
+    return shape_autofit, wrap_text
+
+
+def _resolve_body_pr_cascade(
+    slide_sp: Optional[etree._Element],
+    layout_sp: Optional[etree._Element],
+    master_sp: Optional[etree._Element],
+) -> tuple[bool, bool]:
+    """Cascade slide → layout → master to resolve bodyPr autofit/wrap.
+
+    Returns ``(shape_autofit, wrap_text)`` with concrete bools (no None).
+    Cascade order matches OOXML: the slide's own setting wins if present,
+    else inherit the layout's, else the master's, else PPT defaults
+    (``shape_autofit=False, wrap_text=True``).
+
+    Each property cascades INDEPENDENTLY — a slide might set wrap=none
+    explicitly while leaving autofit to inherit from the layout.
+    """
+    shape_autofit: Optional[bool] = None
+    wrap_text: Optional[bool] = None
+    for src in (slide_sp, layout_sp, master_sp):
+        if src is None:
+            continue
+        sa, wt = _parse_body_pr_autofit(src)
+        if shape_autofit is None and sa is not None:
+            shape_autofit = sa
+        if wrap_text is None and wt is not None:
+            wrap_text = wt
+        if shape_autofit is not None and wrap_text is not None:
+            break  # both resolved, no need to descend further
+    return (
+        shape_autofit if shape_autofit is not None else False,
+        wrap_text if wrap_text is not None else True,
+    )
+
+
 def _ph_has_text(sp_el: etree._Element) -> bool:
     """Return True if the <p:sp> has a <p:txBody> with at least one <a:t> with text."""
     tx_body = sp_el.find(_x("p:txBody"))
@@ -752,11 +839,43 @@ def _parse_pic(
 ) -> Optional[Picture]:
     """Parse a ``<p:pic>`` shape into a :class:`Picture`.
 
+    A ``<p:pic>`` element is normally a free-floating picture, but OOXML
+    also lets a ``<p:pic>`` carry a ``<p:ph>`` reference inside its
+    ``<p:nvPicPr>/<p:nvPr>`` — that's how PowerPoint stores a picture
+    placeholder whose default fill has been overridden with a specific
+    image on the slide. Treating those as free pics caused a serious
+    regression: the placeholder's idx never landed in ``slide_ph_idxes``,
+    so the layout's matching idx got inherited and emitted as a SECOND
+    picture next to the slide's version (the "icons shown twice" bug
+    on the IU template's slides 19, 20, …).
+
+    So: detect ``<p:ph>`` inside ``<p:nvPicPr>/<p:nvPr>``, and if present
+    surface this Picture as ``is_placeholder=True`` with the placeholder
+    idx. Layout inheritance then correctly skips the matching layout
+    placeholder.
+
     Returns ``None`` only when the picture lacks both a resolvable image and
     geometry (degenerate case worth skipping silently).
     """
     nv_pic_pr = pic_el.find(_x("p:nvPicPr"))
     shape_id, alt_text = _read_cnv_pr(nv_pic_pr)
+
+    # Placeholder detection — OOXML allows <p:pic> to be a picture
+    # placeholder when it carries a <p:ph> in <p:nvPicPr>/<p:nvPr>.
+    is_placeholder = False
+    ph_idx: Optional[int] = None
+    if nv_pic_pr is not None:
+        nv_pr = nv_pic_pr.find(_x("p:nvPr"))
+        if nv_pr is not None:
+            ph_el = nv_pr.find(_x("p:ph"))
+            if ph_el is not None:
+                is_placeholder = True
+                idx_attr = ph_el.get("idx")
+                if idx_attr is not None:
+                    try:
+                        ph_idx = int(idx_attr)
+                    except ValueError:
+                        ph_idx = None
 
     blip_fill = pic_el.find(_x("p:blipFill"))
     asset_ref = _resolve_blip_asset_ref(blip_fill, slide_part)
@@ -781,8 +900,8 @@ def _parse_pic(
         effects=effects,
         alt_text=alt_text,
         shape_id=shape_id,
-        is_placeholder=False,
-        ph_idx=None,
+        is_placeholder=is_placeholder,
+        ph_idx=ph_idx,
         order_index=order_index,
     )
 
@@ -922,6 +1041,9 @@ def _parse_inherited_text_placeholder(
                     if run.font_family:
                         typefaces.add(run.font_family)
 
+    shape_autofit, wrap_text = _resolve_body_pr_cascade(
+        slide_sp=None, layout_sp=src_sp, master_sp=None,
+    )
     return Placeholder(
         idx=idx if idx is not None else -1,
         type=ph_type,
@@ -936,6 +1058,8 @@ def _parse_inherited_text_placeholder(
         default_run_props=default_run,
         default_para_props=default_para,
         is_prompt_fallback=False,
+        shape_autofit=shape_autofit,
+        wrap_text=wrap_text,
     )
 
 
@@ -1210,6 +1334,9 @@ def parse(pptx_path: Path) -> Presentation:
                 if clip_path is not None:
                     break
 
+            shape_autofit, wrap_text = _resolve_body_pr_cascade(
+                slide_sp=sp_el, layout_sp=layout_sp, master_sp=master_sp,
+            )
             placeholders.append(Placeholder(
                 idx=idx,
                 type=ph_type,
@@ -1225,6 +1352,8 @@ def parse(pptx_path: Path) -> Presentation:
                 default_para_props=default_para,
                 is_prompt_fallback=is_prompt_fallback,
                 clip_path=clip_path,
+                shape_autofit=shape_autofit,
+                wrap_text=wrap_text,
             ))
 
         # Surface layout-only picture placeholders. OOXML: a layout-level
