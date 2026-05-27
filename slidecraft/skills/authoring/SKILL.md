@@ -11,7 +11,7 @@ description: >
 
 # Authoring Skill
 
-You transform raw material from the `resources/` folder into a fully rendered Slidev presentation. The CIF (`.slidecraft/cif.json`) is the sole source of truth — you always write the CIF first and render `slides.md` from it. You never edit `slides.md` directly.
+You transform raw material from the `resources/` folder into a fully rendered Slidev presentation. The deck's canonical source is **one markdown file per slide** under `<deck>/slides/<descriptive-name>.md`, ordered by `<deck>/slides.md` which uses `---src:` imports. Slidev consumes the files directly — there is no rendering step. You don't draft inline; you delegate to the [`slide-author`](../../agents/slide-author.md) subagent, then run the [`slide-critic`](../../agents/slide-critic.md) + [`source-researcher`](../../agents/source-researcher.md) loop.
 
 Before starting, read `references/best-practices.md` for presentation design rules and apply them throughout.
 
@@ -93,10 +93,15 @@ Key questions to cover:
 | Mode | When | Single argument? | Tone reference |
 |---|---|---|---|
 | **argument-driven** | research talks, briefings answering "should we…" | yes — one defensible sentence | `business.md` or `academic.md` |
-| **textbook recap** | university lecture mirroring a chapter | no — *coverage* of the chapter's content | `academic.md` |
+| **textbook recap** | university lecture pedagogically restructuring a chapter | no — *coverage* with teaching scaffold (Ausubel + Def-Ex-Thm-Ex) | `academic.md` |
+| **source-mirror** | lecture or recap that closely follows the source's own structure | no — *faithful* to source's section order, with human-in-loop topic selection | `academic.md` |
 | **decision briefing** | executive update, change proposal | yes — the recommendation | `business.md` |
 | **keynote / pitch** | conference talk, sales pitch | yes — the one big idea | `keynote.md` |
 | **other** | anything else | ask the user | ask the user |
+
+**Difference between textbook-recap and source-mirror.** Both target academic teaching audiences and load `academic.md`. They diverge on *structure source*:
+- `textbook-recap` overlays a pedagogical skeleton (Ausubel advance organiser + Definition→Example→Theorem→Example→Remark) on top of the source. The deck has its own internal logic; the source provides content.
+- `source-mirror` follows the source's own section order. The deck IS the chapter, with selected topics dropped or kept. Human-in-the-loop selection step (Step 4b) is mandatory.
 
 - **For argument-driven, decision briefing, keynote**: ask for *the single argument* — not "the topics", but the **one defensible claim** the deck makes, the sentence the audience should repeat the next day.
 - **For textbook recap**: ask for *the chapter or sections* covered + *what practical examples the user wants interleaved*. Do NOT force a single argument; coverage is the point.
@@ -229,164 +234,136 @@ When the skeleton, ghost-deck test, visual-type choices, and budget all agree �
 
 ---
 
-## Step 4 — CIF Generation
+## Step 4 — Slide-file authoring (delegated to the `slide-author` subagent)
 
-Write the complete `cif.json`. The CIF structure is:
+The deck's canonical source is **one markdown file per slide** under `<deck>/slides/<descriptive-name>.md`, plus a thin `<deck>/slides.md` that imports them in order via `---src: ./slides/<name>.md` frontmatter blocks. **There is no rendering step** — Slidev consumes the slide files directly.
 
-```json
-{
-  "meta": {
-    "title": "Presentation Title",
-    "subtitle": "Optional subtitle",
-    "author": "Author Name",
-    "date": "YYYY-MM-DD",
-    "theme": "<theme-slug>",
-    "themePath": "../slidev-theme-<theme-slug>"
-  },
-  "slides": [
-    {
-      "id": "slide-01",
-      "layout": "cover",
-      "title": "Slide Title",
-      "content": "Main content text or markdown",
-      "slots": {},
-      "notes": "What the presenter says here...",
-      "meta": {}
-    }
-  ]
-}
-```
+You don't draft the slides inline in your own context. **You delegate to the `slide-author` subagent** so the drafting context is clean of this conversation's working dialog. The author returns the slide files; you then run the critic loop (Step 5).
 
-> **Important**: The CIF uses `meta.theme` (string name) and `meta.themePath` (relative path), NOT a nested object. See `references/cif-schema.md` for the full specification.
-
-### Read the theme's intent docs before drafting
-
-Before populating any slide, **read the theme's `semantic-layouts.json`** at `<theme-path>/semantic-layouts.json` (resolved from CIF's `meta.themePath` or the deck's `.slidecraft.json`). For each role you plan to use, the alias's `intent` field documents what that layout is FOR:
-
-```json
-"end": {
-  "layout": "slide9",
-  "slots": {"title": "title", "body": "body-13"},
-  "intent": "Closing slide. Title slot is conventionally 'Thank you' or 'Questions?' — NEVER recap content. Body holds contact info or next steps.",
-  "defaults": {"title": "Thank you", "body": "Questions welcome."}
-}
-```
-
-When you populate the CIF entry for that slide, **honour the intent**. Don't put recap content in the `end` slide's title; don't put a formula in the `cover` slide's title. If the alias has `defaults`, you may leave the slot empty in the CIF — the renderer fills the default. If you want to override (e.g. "Questions?" instead of the default "Thank you"), specify it.
-
-If the theme's `semantic-layouts.json` is missing or has no `intent` for a role, fall back to the conventions in Step 3d's title-length table and the design rules in your tone reference.
-
-### Layout selection guide
-
-Choose layouts based on the purpose of each slide:
-
-| Situation | Layout |
-|---|---|
-| First slide / title slide | `cover` |
-| Regular content with bullets | `default` |
-| Section break / chapter divider | `section` |
-| Section break with gray background | `section-gray` |
-| Section with overview list | `section-overview` |
-| Two-column comparison | `two-cols` |
-| Three-column layout | `three-cols` |
-| Pull quote or testimonial | `quote` |
-| Last slide (thank you / contact) | `end` |
-| Divider between major parts | `divider` |
-| High-emphasis accent statement | `accent` |
-| Sidebar note or annotation | `side-note` |
-| Key statistic or number | `fact` |
-| Key statistic, light background | `fact-light` |
-
-### Before writing the CIF
-
-Check whether a CIF already exists at `.slidecraft/cif.json`. If it does, save a timestamped copy to `.slidecraft/history/` before overwriting:
+### 4a. Invoke the `slide-author` subagent
 
 ```
-.slidecraft/history/cif-YYYYMMDD-HHMMSS.json
+Task({
+  subagent_type: "slide-author",
+  description: "Draft deck",
+  prompt: `Draft the deck at <deck-dir>.
+
+Brief:
+  audience: <one-line role + prior knowledge>
+  deck mode: <argument-driven | textbook-recap | source-mirror | decision-briefing | keynote>
+  pacing: <duration in minutes; target slide count>
+  coverage: <chapter / section / scope>
+
+Sources: <deck-dir>/.slidecraft/cache/pdf/ (extractor already run)
+Theme: <theme-dir> (read its semantic-layouts.json for alias intent + slot maps)
+Tone reference: slidecraft/references/tones/<academic|business|keynote>.md (read it)
+
+Audience-and-purpose profile:
+  <one paragraph; see Step 2>
+
+Output expected:
+  - one file per slide at <deck>/slides/<descriptive-name>.md
+  - <deck>/slides.md updated to import them in order
+  - <deck>/references.bib for cited sources
+  - return summary listing filenames, cite keys, structural issues`,
+})
 ```
 
-Use the current date and time for the timestamp.
+The author's full protocol is in [`slidecraft/agents/slide-author.md`](../../agents/slide-author.md). It reads sources, picks a skeleton per deck mode, drafts files using the theme's intent docs + tone reference, and returns the file list. It does **not** invoke critic / researcher — that's your job in Step 5.
 
-### Writing the file
+### 4b. Special case — source-mirror mode pauses for selection
 
-Write the completed CIF to `.slidecraft/cif.json`. Ensure:
-- Every slide has a unique `id` (e.g., `slide-01`, `slide-02`, ...) — because edits ("change slide 4") need stable handles.
-- Every slide has non-empty `notes` — because the slide is the headline, the notes are the script; a slide without notes can't actually be presented.
-- Titles follow assertion style where the layout supports it — because the ghost-deck test requires it.
-- Content uses markdown formatting where appropriate (bold, lists, code) — because Slidev's renderer expects markdown, and emphasis aids reading-while-listening.
+If the deck mode is `source-mirror`, the author **stops mid-draft** with a candidate list of teaching topics extracted from the source ("here are 12 candidates from Unit 1.3-1.5"). Present this list to the user with the question *"which 5–8 should the deck actively teach?"*. Once the user confirms the selection, re-invoke the author with the chosen topics; it then drafts only those. Other deck modes don't pause.
 
-### Worked examples — what the difference looks like
+### 4c. The slide-file schema (canonical form)
 
-These three pairs show what improving from "passable" to "good" looks like for the same underlying content. When drafting, ask of every slide: which column does this look like?
+Each file under `<deck>/slides/` has this shape:
 
-**Example 1 — assertion bullets vs evidence bullets**
+```markdown
+---
+id: pinhole                       # stable id == filename without .md
+layout: content-image             # semantic role from theme's semantic-layouts.json
+sources:                          # citation keys + locator + relevance
+  - key: szeliski2022
+    locator: "§2.1.4"
+    relevance: "pinhole projection model"
+  - key: bobmellish2005
+    locator: "Wikimedia Commons"
+    relevance: "figure attribution"
+visualization_hint: ""            # optional: hint for a future viz agent
+---
 
-| ❌ Bullets paraphrase the title | ✅ Bullets are specific evidence |
-|---|---|
-| **Title:** Autonomous systems need 3D understanding | **Title:** Autonomous systems need 3D understanding |
-| • Self-driving cars need depth | • Waymo's perception stack runs SfM on 10 cameras at 10 Hz |
-| • Robots need localization | • KITTI benchmark (Geiger 2012) is the standard test set — 22 sequences, 41K labelled frames |
-| • AR needs registration | • ARKit's world tracking re-solves K every 2 minutes during a session |
-| • All start from 2D pixels | • Failure cases: monocular depth on textureless walls is the #1 cause of phantom braking |
+::title::
+Pinhole: 3D rays converge through one point
 
-The right column has named systems, numbers, and failure modes. The left column reads like a generic AI summary. The titles are identical; the difference is *what counts as a bullet*. **Concrete > abstract, always.**
+::body-16::
+- Light through a tiny aperture creates an inverted image
+- Every 3D point traces a ray through the **camera centre**
+- Foundational model — real lenses approximate it
+- Inversion usually flipped in diagrams
 
-**Example 2 — bare formula vs annotated equation**
+::picture-14::
+![Pinhole camera (Bob Mellish 2005, CC BY-SA 3.0)](/figures/pinhole-camera.png)
 
-| ❌ Formula without intuition | ✅ Annotated equation |
-|---|---|
-| **Title:** The full camera projection | **Title:** The full camera projection: P = K[R\|t] |
-| $$\\tilde{x} = K[R\|t]X$$ | $$\\underbrace{\\tilde{x}}_{\\text{pixel (u,v,1)}} = \\underbrace{K}_{\\text{what camera is}}\\underbrace{[R\|t]}_{\\text{where camera is}}\\underbrace{X}_{\\text{world point}}$$ |
-| (no other content) | "K = intrinsics (focal length, principal point). [R\|t] = extrinsics (pose). The whole 3×4 matrix is P." |
+::citations::
+Szeliski, 2022, §2.1.4; Mellish, 2005, Wikimedia Commons
 
-The right column lets the audience parse the formula in 5 seconds; the left column needs the presenter to read each symbol aloud. **An equation slide is an exhibit — annotate it like one.**
+<!-- ==== SLIDE CONTEXT — for agents and the editor; not rendered ====
 
-**Example 3 — bullets vs comparison table**
+## Verbatim source extracts
+**Szeliski 2022, §2.1.4:** "3D to 2D projections. ..." (full paragraph)
+**IU course book §1.3:** "The pinhole camera model, ..."
 
-| ❌ Three flat bullets | ✅ Side-by-side comparison |
-|---|---|
-| **Title:** Three calibration methods | **Title:** Pick the calibration method by what you can measure |
-| • DLT — direct linear solve | (a 3-row table: rows = DLT / Zhang / Tsai; columns = Target type, Min points, Best for, In OpenCV) |
-| • Zhang — planar checkerboard | |
-| • Tsai — non-linear refinement | |
+## Drafting decisions
+- Lead with "rays converge" framing over "image inversion" — the
+  latter is a visual quirk; ray-through-centre is load-bearing.
 
-A three-method comparison is structurally a table — the visual-type matrix in Step 3c says so. Bullets force the audience to mentally pivot to the comparison; the table presents it.
+## Downstream agent hints
+- **Visualization agent**: a custom SVG would replace this stock photo.
+- **Quiz generator**: "double f → image scale does what?" (linearly).
+- **Critic**: Rule 3 ✓; Rule 4 ✓.
 
-### Citations
+==== END CONTEXT ==== -->
 
-If the deck is for an academic or research audience, add **on-slide citations** for every non-original claim, figure, or dataset, in a small footer or inline. Use the format `(Author Year)` for inline and reserve the speaker notes for the full reference. End the deck with a dedicated References slide listing everything cited. This is the standard for academic-pptx-skill ([Gabberflast](https://github.com/Gabberflast/academic-pptx-skill)) and matches IU course conventions.
+<!--
+Speaker notes (Slidev parses the last comment as notes):
+Definition slide. Worked example IS the figure. Source: Szeliski (2022) §2.1.4.
+-->
+```
 
-For business or keynote decks, on-slide citations clutter — keep them in notes only.
+**Section order matters:**
+1. YAML frontmatter (structured fields, no markdown)
+2. Slot blocks (`::slot-name::`) — the renderable content per the theme's slot map
+3. Context block (`<!-- ==== SLIDE CONTEXT ... -->`) — placed after slot blocks so editors hit content first, not background
+4. Speaker notes (`<!-- ... -->`) — last comment in the file; Slidev parses it as notes
+
+**Filenames are descriptive nouns**, never numeric. Order lives in `<deck>/slides.md`. Deleting one slide means editing one import line; renaming means editing two; two agents working on different files don't collide.
+
+### 4d. Theme intent docs are mandatory reading
+
+The author reads `<theme-dir>/semantic-layouts.json` before populating any slide. Each alias has an `intent` field that tells the author what that layout is FOR. Honor it. Examples:
+
+- `cover` intent says "title is a short noun phrase, NEVER a formula" — author writes "Camera Geometry", not "Every camera obeys x = K[R\|t]X".
+- `end` intent says "title is 'Thank you' or 'Questions?' — NOT recap content" — author writes "Thank you", not the deck's summary.
+- `content-image` intent says "image slot is a SINGLE paragraph markdown image reference" — author never writes multi-paragraph slot content (it breaks MDC parsing).
+
+The schema supports `defaults` per alias (e.g. `defaults: {title: "Thank you"}` on the end role), but these are **documentation, not auto-fill**. The author reads them and explicitly types the value into the slide file.
+
+### 4e. references.bib
+
+The author maintains `<deck>/references.bib` in BibTeX format. Every cite key referenced in any slide's `sources:` frontmatter must have a bib entry. Format follows APA-7th-ready BibTeX conventions (Pandoc and Zotero compatible).
 
 ---
 
-## Step 5 — Rendering
-
-After writing the CIF, run the renderer to produce `slides.md`:
-
-```bash
-python -m slidecraft.scripts.render_cif --input .slidecraft/cif.json --output slides.md
-```
-
-The renderer uses Python standard library only — no dependencies need to be installed.
-
-The script resolves the theme via the deck's `.slidecraft.json` (or CIF's `meta.themePath`), reads the theme's `semantic-layouts.json` if present, maps each CIF semantic role to the theme's bespoke layouts and named slots, and writes a Slidev-ready `slides.md`. See `slidecraft/scripts/render_cif.py` for details.
-
-If the render fails, report the error to the user verbatim and leave any prior `slides.md` untouched (the script writes atomically). Common causes:
-- CIF uses a `layout` role with no alias in the theme's `semantic-layouts.json` AND no matching `<layout>.vue` file → the user needs to add that role to the mapping.
-- `.slidecraft.json` missing or wrong `themePath` → fix the path.
-
----
-
-## Step 6 — Critic & Researcher Loop (before showing the user)
+## Step 5 — Critic & Researcher Loop (before showing the user)
 
 Don't ship the first draft. The default AI failure mode is bullet-list slides that paraphrase their titles; the cheapest defense is to send the draft through a **dedicated critic agent** before the user sees it.
 
-You don't carry the full slide-craft rulebook in your own context — the `slide-critic` agent does. You produce drafts; the critic produces findings; you apply fixes. This separation is by design: it keeps your context budget free for source material, and gets you a genuinely fresh-eyes review (an agent that didn't write the slide is less biased toward defending it).
+The author returned a list of slide files. The critic reads them, the researcher verifies grounding flags, you apply fixes by editing the individual slide files. No CIF, no render step — files are the canonical form.
 
-### 6a. Invoke the critic
+### 5a. Invoke the critic
 
-After rendering, spawn the `slide-critic` agent via the Task tool:
+After the author returns, spawn the `slide-critic` agent via the Task tool:
 
 ```
 Task({
@@ -394,9 +371,10 @@ Task({
   description: "Critique slide deck",
   prompt: `Review the draft deck at <deck-dir>.
 
-CIF: <deck-dir>/.slidecraft/cif.json
-Rendered: <deck-dir>/slides.md
-Argument profile: <copy the one-paragraph audience-and-argument profile from Step 2>
+Slide files: <deck-dir>/slides/*.md (read each)
+Deck-level: <deck-dir>/slides.md (ordering + theme frontmatter)
+References: <deck-dir>/references.bib
+Argument profile: <copy the one-paragraph audience-and-purpose profile from Step 2>
 Focus: all slides`,
 })
 ```
@@ -408,11 +386,11 @@ The critic returns a prose summary followed by a fenced JSON block. Parse the JS
 - `findings[]` — per-slide issues, each with `severity`, `rule`, `current`, `suggested_fix`, and `needs_research`
 - `overall_verdict` — `ready` / `needs_revision` / `structural_issues`
 
-### 6b. If verdict is `structural_issues`: stop and surface
+### 5b. If verdict is `structural_issues`: stop and surface
 
 If the critic says the deck has structural issues (ghost-deck test fails, argument drift, wildly off pacing), don't try to fix slide-by-slide — the storyline itself is broken. Bring the critic's diagnosis to the user, propose a restructure, and wait for their direction. Don't burn cycles patching individual slides on a broken skeleton.
 
-### 6c. For each `needs_research: true` finding: spawn the researcher
+### 5c. For each `needs_research: true` finding: spawn the researcher
 
 The critic doesn't verify claims itself; it flags them. For each finding with `needs_research: true`, spawn the `source-researcher` agent via Task:
 
@@ -436,27 +414,27 @@ The researcher returns a verdict (`supported` / `partial` / `unsupported`) with 
 
 Allow web fallback only if the user has previously authorized internet research in this session.
 
-### 6d. Apply the critic's other fixes
+### 5d. Apply the critic's other fixes
 
-For each finding without `needs_research`, apply the `suggested_fix` to the CIF. Edits to the CIF follow the standard pattern: save history, modify `cif.json`, re-render.
+For each finding without `needs_research`, apply the `suggested_fix` by **editing the individual slide file** the finding names. Edits follow the standard pattern: copy the current `slides/<name>.md` to `.slidecraft/history/<name>-YYYYMMDD-HHMMSS.md`, modify the slide file in place, and you're done — Slidev hot-reloads.
 
 If a fix is **structural** (e.g. the critic wants a comparison-table slide but the theme has no `two-cols` alias in `semantic-layouts.json`), flag it to the user as a separate question rather than degrade the slide silently.
 
-### 6e. Re-invoke the critic — at most once
+### 5e. Re-invoke the critic — at most once
 
 After applying fixes, re-invoke `slide-critic` once. If the verdict is now `ready` or there are only minor findings, proceed to Step 7. If major findings remain, accept them as known caveats and hand off to the user with a brief note; don't loop a third time.
 
-### 6f. Persist the critique
+### 5f. Persist the critique
 
 Save the final critic JSON to `.slidecraft/history/critique-YYYYMMDD-HHMMSS.json`. This makes the critic's reasoning auditable later when the user asks "why is slide 12 like this?".
 
-### 6g. Don't show the user the raw critique
+### 5g. Don't show the user the raw critique
 
 The user evaluating the deck for the first time should see your best work, not a confession. Show them the rendered preview only. The critique is for you, not for them — unless they explicitly ask "what did the critic say?", in which case summarise.
 
 ---
 
-## Step 7 — Preview & Edit Loop
+## Step 6 — Preview & Edit Loop
 
 After the critique pass, **do not present a text outline of the slides**. Instead, point the user at the actual rendered preview — they're going to evaluate the deck visually, not as a list of titles. Tell them:
 
@@ -474,9 +452,9 @@ Then wait for their edit requests. Don't volunteer a critique of your own draft 
 
 Handle these natural-language edit requests:
 
-- **"Change slide 3"** or **"Rewrite slide 3"** — Ask what should change, update that slide's entry in the CIF.
+- **"Change slide 3"** or **"Rewrite slide 3"** — Ask what should change, then edit the corresponding `slides/<name>.md` file directly (the deck's `slides.md` import list gives you the filename for ordinal "slide 3").
 - **"Add a slide about X"** — Determine the best position, create a new slide entry, renumber IDs if needed.
-- **"Remove slide 5"** or **"Delete the quote slide"** — Remove the entry from the CIF and renumber.
+- **"Remove slide 5"** or **"Delete the quote slide"** — Delete the slide file from `slides/` AND remove its `---src:` line from `slides.md`. No renumbering needed (filenames are descriptive).
 - **"Swap slides 4 and 5"** — Exchange the two entries in the `slides` array.
 - **"Show me slide 7"** — Display the full content, notes, and layout of that slide.
 - **"Change the title of slide 2 to X"** — Update just the `title` field.
@@ -485,16 +463,16 @@ Handle these natural-language edit requests:
 
 ### For every edit
 
-1. Save the current CIF to `.slidecraft/history/cif-YYYYMMDD-HHMMSS.json`
-2. Apply the edit to `.slidecraft/cif.json`
-3. Re-run the renderer
+1. Copy the slide file to `.slidecraft/history/<name>-YYYYMMDD-HHMMSS.md`
+2. Apply the edit directly to `slides/<name>.md`
+3. Slidev hot-reloads on file save — no render step
 4. Confirm the change to the user
 
 Continue the loop until the user is satisfied with the deck.
 
 ---
 
-## Step 8 — Enhancement Menu
+## Step 7 — Enhancement Menu
 
 After a successful render, critique pass, and the user's first preview (Step 7), present the enhancement menu **once per authoring run**. The deck is already usable at this point — enhancements are opt-in, and the user can pick zero, one, or many.
 
@@ -550,25 +528,25 @@ This is the only menu item handled directly inside the authoring skill, because 
 4. On approval, for each accepted row:
    - **Copy** the chosen image from `.slidecraft/cache/pdf/<slug>/images/<name>` (or from its `resources/` location for loose images) into `<deck>/public/figures/`. The cache lives under `.slidecraft/`, which Slidev does **not** serve from `public/` — direct cache references will 404. Keep the same file basename; since the cache name is SHA1-influenced (`page-NNN-fig-NN.<ext>`) collisions across PDFs are highly unlikely, but if one occurs, prefix the destination with the doc-slug.
    - Reference the copied image from the slide using a `/figures/<filename>` URL (Slidev resolves `/` against `public/`).
-5. **Updates follow the standard CIF-edit pattern:**
-   - Save the current CIF to `.slidecraft/history/cif-YYYYMMDD-HHMMSS.json`.
-   - Modify `.slidecraft/cif.json` — append an image placeholder to the slide's `content` field (e.g. `![](/figures/page-012-fig-03.png)`) and set `meta.illustrated: true` on each touched slide.
-   - Re-render via `scripts/render-cif.py`.
+5. **Updates follow the standard slide-file-edit pattern:**
+   - Copy the current `slides/<name>.md` to `.slidecraft/history/<name>-YYYYMMDD-HHMMSS.md`.
+   - Modify the slide file — add the image to the appropriate slot (often `::image::` or `::picture-<N>::` per the theme's alias) and set a frontmatter flag like `illustrated: true` on each touched slide for auditability.
+   - Slidev hot-reloads; no render step.
    - Confirm the changes to the user, then return to the enhancement menu.
 
 ---
 
 ## Key rules (the *why* in one place)
 
-- **Never edit `slides.md` directly** — because the CIF is the source of truth and `slides.md` is a regenerated artifact. Direct edits to `slides.md` are silently overwritten on the next render.
-- **Save CIF history before overwriting** — because every edit is reversible only if there's a snapshot, and authoring is iterative; you'll want to roll back a bad change at least once per session.
+- **`slides.md` is the ordering manifest, not content** — edit it only to reorder, add, or remove slide imports. All slide content lives in `slides/<name>.md`.
+- **Save slide-file history before overwriting** — because every edit is reversible only if there's a snapshot, and authoring is iterative; you'll want to roll back a bad change at least once per session.
 - **Speaker notes are the script, not optional** — because a slide is a headline and the notes are what's actually said; a slide without notes can't be presented, only read.
 - **One idea per slide** — because a slide with two ideas forces the audience to pick which to listen to; they usually pick neither.
 - **Assertion titles** — because the ghost-deck test requires that titles alone tell the argument; topic labels ("Performance") leave the work to the body, which the audience doesn't read while listening.
 - **≤ 40 words / ≤ 4 bullets per slide body** — because beyond that, audiences read instead of listen, and the speaker becomes redundant. Compress or split.
 - **Concrete > abstract in every bullet** — because "Acme lost $4M on miscalibration" sticks; "calibration matters" does not. If a bullet has no named entity, number, or specific failure mode, it's probably restating the title.
 - **Visual type before content (Step 3c matrix)** — because picking words first leads to bullet-list defaults; picking the shape first opens the door to tables, hero numbers, comparisons, and annotated exhibits.
-- **Run the critique pass (Step 6) before showing the user** — because the first draft is reliably a B-grade deck and the cheapest fix is to read it as a critic before the user does.
+- **Run the critique pass (Step 5) before showing the user** — because the first draft is reliably a B-grade deck and the cheapest fix is to read it as a critic before the user does.
 - **Read `references/best-practices.md` at session start** — because the density, font, and pacing limits there are the empirical baseline; the skill's rules above are derived from them.
 - **Never `Read` PDFs directly** — because a 1000-page reference book blows the context window; the cache (Step 1b) exists to prevent this. Large `Sources/` PDFs are map-only until a specific slide needs deeper material.
 - **Illustrate copies images to `public/figures/`** — because Slidev serves only from `public/`; references to the `.slidecraft/cache/` path 404 in the browser.
