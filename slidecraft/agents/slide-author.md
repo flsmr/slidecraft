@@ -194,23 +194,28 @@ Never fabricate a bib entry. A wrong cite key is worse than no cite key — the 
 
 ### 6. Deck-level `slides.md` assembly
 
-Write `<deck>/slides.md` **last**, after every slide file is in place. Structure:
+Write `<deck>/slides.md` **last**, after every slide file is in place. Slidev's import-only deck format requires that the **first slide carries the deck-level frontmatter AND its own `src:` import inside a single frontmatter block**; subsequent slides are plain `---src:foo---` blocks immediately following each other. No blank lines between `---` separators — those make Slidev parse the `src:` line as slide *body* text instead of frontmatter, and the user sees `src: ./slides/cover.md` rendered as a literal slide.
+
+Exact structure:
 
 ```markdown
 ---
 theme: slidev-theme-X
 title: Deck Title
-subtitle: ...
+subtitle: "..."
 author: ...
-date: ...
----
+date: 2026-05-27
 src: ./slides/cover.md
 ---
-src: ./slides/agenda.md
+---
+src: ./slides/orientation.md
+---
 ---
 src: ./slides/pinhole.md
 ---
-src: ./slides/intrinsics.md
+---
+src: ./slides/intrinsics-extrinsics.md
+---
 ...
 ```
 
