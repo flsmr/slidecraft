@@ -167,7 +167,31 @@ For each planned slide, in order:
 
    These come from the authoring SKILL's Step 3d and are enforced by `slide-critic` Rule 2.
 
-4. **Slot blocks.** Fill the physical slots the alias declares, using the `::slot-name::` syntax. **Slot content is a single paragraph or list — no blank lines inside any slot's content** (blank lines close Slidev's MDC slot block early, causing leak into the slide root). If you need multi-paragraph content, use `<br><br>` or restructure into bullets. For the `citations` slot (when the theme provides it), format as inline APA-7th: *"Szeliski 2022, §2.1.4; Hartley & Zisserman 2003, §6.1"*.
+4. **Slot blocks.** Fill the physical slots the alias declares, using the `::slot-name::` syntax. **CRITICAL: use the alias's slot-MAP VALUES (the physical names like `body-16`, `picture-14`, `body-13`), NOT the slot-MAP KEYS (the semantic names like `body`, `image`, `citations`).** Slidev resolves slot blocks against the layout's actual `<slot name="X" />` declarations, which are the physical names. Writing `::body::` when the alias maps `body → body-16` produces a silently invisible slide (the slot block has no matching `<slot>` to fill). Worked example with the ILSE `content-image` alias whose slot map is `{title: title, body: body-16, image: picture-14, citations: body-13}`:
+
+   ```markdown
+   ::title::               ← semantic `title` happens to == physical
+   Pinhole: 3D rays converge
+
+   ::body-16::             ← semantic `body` → physical `body-16` ✅
+   - bullet 1
+   - bullet 2
+
+   ::picture-14::          ← semantic `image` → physical `picture-14` ✅
+   ![alt](/figures/x.png)
+
+   ::body-13::             ← semantic `citations` → physical `body-13` ✅
+   Szeliski 2022, §2.1.4
+   ```
+
+   And the wrong version that will silently fail to render anything in those slots:
+   ```markdown
+   ::body::                ← ❌ no <slot name="body" /> exists; invisible
+   ::image::               ← ❌ same problem
+   ::citations::           ← ❌ same problem
+   ```
+
+   **Slot content is a single paragraph or list — no blank lines inside any slot's content** (blank lines close Slidev's MDC slot block early, causing leak into the slide root). If you need multi-paragraph content, use `<br><br>` or restructure into bullets. For the citations slot (whatever physical name the theme exposes for it), format as inline APA-7th: *"Szeliski 2022, §2.1.4; Hartley & Zisserman 2003, §6.1"*.
 
 5. **Speaker notes — substantial.** The last `<!-- ... -->` comment in the file is parsed by Slidev as notes. Notes must include the **transition into the slide** (a one-sentence cue for the presenter), the elaboration the slide body can't fit, full citations for non-trivial claims, and any predict-then-reveal beat. If the notes are shorter than the slide body, the slide is under-written. Don't repeat the slide verbatim — the slide is the headline, the notes are the script.
 
