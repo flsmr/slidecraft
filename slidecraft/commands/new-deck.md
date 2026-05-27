@@ -55,7 +55,14 @@ and invoke it once.
 
    The script prints a key/value summary on stdout (`deck_dir`, `deck_name`, `theme_name`, `theme_dir`, `theme_rel`, `mode`, `slide_count`, `installed`, `preview`). It exits 0 on success, 1 with an `error:` stderr line on validation failure.
 
-3. **Report to the user.** Echo the script's summary, then point them at the preview command from the `preview:` line (always of the form `cd "<deck_dir>" && npx slidev`). Mention the two scaffolded folders:
+3. **Ensure the theme has a semantic-layout mapping.** The `authoring` skill drafts content by **role** (`cover`, `default`, `section`, …), which only works when the theme has a `<theme-dir>/semantic-layouts.json` describing which numbered layout plays which role. Brand-new imports include this step automatically (see `/slidecraft:import-template` step 9); older imported themes may be missing it.
+
+   Check whether the chosen theme has the file:
+   - If `<THEME_DIR>/semantic-layouts.json` exists: proceed.
+   - If `THEME_DIR` is `null` (user picked Slidev's built-in default theme): no mapping needed — Slidev's defaults already cover semantic role names. Proceed.
+   - Otherwise: **walk the user through the mapping interview now** using the same flow as `/slidecraft:import-template` step 9 (sub-steps 9a through 9g). Don't skip — this is one-time, and a deck without it can't be authored by role.
+
+4. **Report to the user.** Echo the scaffolder's summary, then point them at the preview command from the `preview:` line (always of the form `cd "<deck_dir>" && npx slidev`). Mention the two scaffolded folders:
    - `public/` — runtime-served by Slidev; drop here any image/video referenced from a slide as `/file.ext`.
    - `resources/` — source material the deck is based on (papers, raw images, outlines, meeting notes). NOT served by Slidev; this is the user's input archive. A `README.md` inside explains the convention.
 

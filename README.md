@@ -18,6 +18,22 @@ Multi-agent presentation pipeline that transforms raw material into polished Sli
 /plugin install slidecraft@slidecraft-marketplace
 ```
 
+### Python dependencies
+
+The plugin's helper scripts run under your local Python (3.10+). Install
+the core runtime deps once per machine:
+
+```bash
+pip install -r slidecraft/requirements.txt
+```
+
+Additionally, if you plan to use `/slidecraft:import-template` to convert
+PPTX templates into Slidev themes, install the importer's extras:
+
+```bash
+pip install -r slidecraft/importer/requirements.txt
+```
+
 ## Usage
 
 ```bash

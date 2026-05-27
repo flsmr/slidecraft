@@ -131,7 +131,7 @@ The content reviewer is a quality-assurance agent that evaluates a completed CIF
 
 **Agent description**: "Reviews slide deck content for completeness, logical flow, audience fit, and design compliance"
 
-**Input**: Path to `.slidecraft/cif.json` and optionally a brief (from `assets/brief.md` or user instructions)
+**Input**: Path to `.slidecraft/cif.json` and optionally a brief (from `resources/brief.md` or user instructions)
 
 **Review dimensions** (each scored 1-5):
 

@@ -30,7 +30,7 @@ Count total slides: `N`.
 
 ## Step 2 — Load the Brief (Optional)
 
-Check whether `assets/brief.md` exists. If it does, read it. You will use it for Dimension 6 (Brief Compliance). If it does not exist, skip Dimension 6 and record `"briefCompliance": null` in the output.
+Check whether `resources/brief.md` exists. If it does, read it. You will use it for Dimension 6 (Brief Compliance). If it does not exist, skip Dimension 6 and record `"briefCompliance": null` in the output.
 
 ---
 
@@ -184,7 +184,7 @@ Evaluate the quality of speaker notes across all slides.
 
 ### Dimension 6 — Brief Compliance
 
-Only score this dimension if `assets/brief.md` was found in Step 2.
+Only score this dimension if `resources/brief.md` was found in Step 2.
 
 If no brief exists: skip and set `"briefCompliance": null`.
 
