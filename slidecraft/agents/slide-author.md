@@ -167,7 +167,20 @@ For each planned slide, in order:
 
    These come from the authoring SKILL's Step 3d and are enforced by `slide-critic` Rule 2.
 
-4. **Slot blocks.** Fill the physical slots the alias declares, using the `::slot-name::` syntax. **CRITICAL: use the alias's slot-MAP VALUES (the physical names like `body-16`, `picture-14`, `body-13`), NOT the slot-MAP KEYS (the semantic names like `body`, `image`, `citations`).** Slidev resolves slot blocks against the layout's actual `<slot name="X" />` declarations, which are the physical names. Writing `::body::` when the alias maps `body → body-16` produces a silently invisible slide (the slot block has no matching `<slot>` to fill). Worked example with the ILSE `content-image` alias whose slot map is `{title: title, body: body-16, image: picture-14, citations: body-13}`:
+4. **Layout name AND slot names use PHYSICAL names from the theme alias.** With the renderer deleted, slide files are Slidev-consumable directly — which means the `layout:` frontmatter value must be the physical layout file name (e.g. `slide5`, not `content-image`) AND the `::slot::` block names must be the physical slot names (e.g. `::body-16::`, not `::body::`). Read the alias from `<theme>/semantic-layouts.json` and use the right column:
+
+   ```yaml
+   ---
+   layout: slide5          # ← physical, NOT "content-image"
+   ---
+   ::title::               # semantic == physical (rare lucky overlap)
+   Pinhole...
+
+   ::body-16::             # ← physical, NOT "::body::"
+   - bullet 1
+   ```
+
+   **CRITICAL: use the alias's slot-MAP VALUES (the physical names like `body-16`, `picture-14`, `body-13`), NOT the slot-MAP KEYS (the semantic names like `body`, `image`, `citations`).** Slidev resolves slot blocks against the layout's actual `<slot name="X" />` declarations, which are the physical names. Writing `::body::` when the alias maps `body → body-16` produces a silently invisible slide (the slot block has no matching `<slot>` to fill). Worked example with the ILSE `content-image` alias whose slot map is `{title: title, body: body-16, image: picture-14, citations: body-13}`:
 
    ```markdown
    ::title::               ← semantic `title` happens to == physical
@@ -192,6 +205,8 @@ For each planned slide, in order:
    ```
 
    **Slot content is a single paragraph or list — no blank lines inside any slot's content** (blank lines close Slidev's MDC slot block early, causing leak into the slide root). If you need multi-paragraph content, use `<br><br>` or restructure into bullets. For the citations slot (whatever physical name the theme exposes for it), format as inline APA-7th: *"Szeliski 2022, §2.1.4; Hartley & Zisserman 2003, §6.1"*.
+
+   **Image-in-named-slot is a known Slidev limitation.** Slidev's `slide-import-guard` plugin transforms both `![](/figures/foo.png)` markdown AND `<img src="/figures/foo.png">` HTML inside a `::slot::` block into a JS `import` statement. On Windows the leading `/` resolves to the drive root (`C:\figures\...`) which fails Vite's `fs.allow` check, breaking the whole slide with "An error occurred". Until Slidev fixes this, **do not put image references inside named slot blocks**. Workarounds: (a) leave the picture-slot empty so the theme layout's default image (the importer baked one into each `slideN.vue` for pictures) renders instead; (b) put the image in the slide body slot as plain markdown OUTSIDE any `::slot::` block (where MDC's image transformer works correctly); (c) use a Vue `<script setup>` with an explicit `import x from '/figures/x.png?url'` and bind via `:src` — but that's brittle inside an MDC block. The cleanest current path is (a): leave the picture-slot unfilled (or fill with a `&nbsp;`) and document the figure in the context block + speaker notes; a future visualization-agent pass can swap in real diagrams via an SFC.
 
 5. **Speaker notes — substantial.** The last `<!-- ... -->` comment in the file is parsed by Slidev as notes. Notes must include the **transition into the slide** (a one-sentence cue for the presenter), the elaboration the slide body can't fit, full citations for non-trivial claims, and any predict-then-reveal beat. If the notes are shorter than the slide body, the slide is under-written. Don't repeat the slide verbatim — the slide is the headline, the notes are the script.
 
