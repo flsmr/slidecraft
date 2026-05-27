@@ -156,18 +156,36 @@ For each planned slide, in order:
 
 2. **Read the theme alias's `intent` for the chosen role.** Honor it strictly. Cover titles are deck names (not sentences, not formulas). End-slide titles are closing words (not recap). Section titles are sub-headings (not content). If the intent contradicts what you want to write, you've picked the wrong role for the slide, not been wronged by the theme.
 
-3. **Title** — apply the title-length-by-role rules AND the no-formulae rule:
+3. **Title is a CONCEPT name; assertion goes in body `# H1`** — apply the title-by-role rules + the no-formulae rule:
 
-   | Role | Length | Form |
+   | Role | `::title::` slot | Body `# H1` |
    |---|---|---|
-   | `cover` | 1–4 words | short noun phrase; no formula, no sentence |
-   | `section`, `section-overview` | 1–5 words | chapter heading |
-   | `default`, `content-image`, etc. | 4–10 words | assertion sentence or rich noun phrase |
-   | `end` | fixed | "Thank you" / "Questions?" — from theme defaults |
+   | `cover` | 1–4 words; noun phrase; no formula | not used |
+   | `section`, `section-overview` | 1–5 words; chapter heading | not used (section bodies are sub-headings, not assertions) |
+   | `default`, `content-image`, etc. | **1–5 words; concept name** (e.g. *"Pinhole camera"*) | **recommended** — full assertion sentence, 4–10 words, e.g. `# Every 3D ray converges through one point` |
+   | `end` | fixed | not used |
 
-   **No formulae, single uppercase letters, or operator characters in titles** (slide-critic Rule 12). A title with math (`K and [R|t]…`, `P = K[R|t]X`, `u = fX/Z`) reads as a bullet, not a headline. The audience can't parse it in 5 seconds — title's job fails. Math lives in slide *bodies*, where it can be annotated. Acronyms (`SfM`, `SLAM`, `DLT`) are fine — they're words, not symbols.
+   The title slot is small (~32 px font in the IUG theme); concept labels fit, assertion sentences overflow. The assertion belongs in the body as a markdown `# H1` heading on the first line — the body slot has room for both the H1 and the bullets/equations underneath. The ghost-deck test (Rule 1) reads the body H1 when present, falling back to the title — so the argument signal is preserved either way.
 
-   These come from the authoring SKILL's Step 3d and are enforced by `slide-critic` Rules 2 and 12.
+   Worked example:
+
+   ```markdown
+   ::title::
+   Pinhole camera
+
+   ::body-16::
+   # Every 3D ray converges through one point
+
+   - A tiny aperture admits one ray per direction
+   - The image plane sits at distance f behind the camera centre
+   - Real lenses are an engineered approximation
+   ```
+
+   **No formulae, single uppercase letters, or operator characters in titles OR in body `# H1` headings** (slide-critic Rule 12). Math like `K and [R|t]`, `P = K[R|t]X`, `u = fX/Z` reads as a bullet, not a headline. Math lives in the body bullets/equations, not in the heading. Acronyms (`SfM`, `SLAM`, `DLT`) are fine — they're words, not symbols.
+
+   **Section divider bodies follow the same rule** (slide-critic Rule 13): the body slot of a section-role slide visually reads as a second title line; same no-formula constraint applies.
+
+   These come from the authoring SKILL's Step 3d and are enforced by `slide-critic` Rules 2, 12, and 13.
 
 4. **Layout name AND slot names use PHYSICAL names from the theme alias.** With the renderer deleted, slide files are Slidev-consumable directly — which means the `layout:` frontmatter value must be the physical layout file name (e.g. `slide5`, not `content-image`) AND the `::slot::` block names must be the physical slot names (e.g. `::body-16::`, not `::body::`). Read the alias from `<theme>/semantic-layouts.json` and use the right column:
 

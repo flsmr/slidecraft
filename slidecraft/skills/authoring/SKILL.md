@@ -191,18 +191,22 @@ The default bullet-list slide is the failure mode you're trying to avoid — it'
 
 ### 3d. Per-slide design rules (with the *why*)
 
-#### Title length by slide role
+#### Title is a CONCEPT name; assertion goes in body `# H1`
 
-A title that's too long reads as a bullet. Differentiate by what the slide is FOR:
+The theme's title slot is small (~32 px font on default-role slides). Crowding an assertion sentence overflows it. So: title slots hold concept names; the assertion — the load-bearing claim of the slide — goes in the body's first line as a markdown `# H1` heading.
 
-| Slide role | Title length | Form | Example |
-|---|---|---|---|
-| `cover` | 1–4 words | short noun phrase, **no formula, no sentence** | *"Camera Geometry"*, *"From Pixels to 3D"* |
-| `section`, `section-overview` | 1–5 words | chapter heading | *"Multi-view geometry"*, *"Today's agenda"* |
-| `default`, `content-image`, others | 4–10 words | assertion sentence or rich noun phrase | *"Two views recover lost depth"*, *"Calibration drift in field use"* |
-| `end` | fixed | "Thank you" / "Questions?" — from theme defaults | *"Thank you"* |
+| Slide role | `::title::` slot | Body `# H1` |
+|---|---|---|
+| `cover` | 1–4 words; noun phrase; **no formula, no sentence** | not used |
+| `section`, `section-overview` | 1–5 words; chapter heading | not used (section bodies are sub-headings, not assertions) |
+| `default`, `content-image`, others | **1–5 words; concept name** (e.g. *"Pinhole camera"*) | **recommended** — full assertion sentence, 4–10 words, e.g. `# Every 3D ray converges through one point` |
+| `end` | fixed | not used |
 
-Why differentiated: the previous 8–14-word "assertion-style for everything" rule (Alley) produced cover titles like *"Every camera obeys one equation: x = K[R\|t]X"* — that's a bullet, not a cover. Covers are deck *names*, sections are *signposts*, content is *claim*-bearing. Each role has its own job.
+The ghost-deck test (Step 3b) reads each slide's body `# H1` when present, falling back to the title. The argument signal is preserved regardless of which the author picks per slide.
+
+**No formulae, single uppercase letters, or operator characters in titles OR body `# H1`** (slide-critic Rule 12). Math (`K`, `[R|t]`, `P = K[R|t]X`) belongs in the body bullets / annotated equations, not in the heading. Same constraint applies to section divider bodies (Rule 13).
+
+Why the change from the previous "assertion-title" rule: Alley's research assumed the title IS the headline. In our theme the title slot is a separate, small visual element above the body — there's room for both a concept label *and* a body H1 headline, and the visual rendering is meaningfully better. Visible-area concept labels render legibly; assertions render legibly inside the body H1.
 
 #### Body limits (7×7, relaxed from the previous 4×7)
 

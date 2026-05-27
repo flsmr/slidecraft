@@ -26,30 +26,41 @@ Before reviewing, **read [references/best-practices.md](../references/best-pract
 
 You carry the full slide-craft rulebook so the authoring skill doesn't have to. Apply these rules rigorously; flag every violation, even small ones (the calling skill can choose which to act on).
 
-### Rule 1 — Ghost-deck test
+### Rule 1 — Ghost-deck test (reads body H1 when present)
 
-Extract the title of every slide in sequence. Read them as a single block of prose. **Can a reader follow the deck's argument from titles alone?**
+For every slide, pull the **assertion** in this priority order:
 
-- ✅ Good: titles narrate the storyline. A reader reading only titles can paraphrase the deck's claim.
-- ❌ Bad: titles are topic labels ("Performance", "Calibration", "Results"). A reader gets the *table of contents*, not the *argument*.
-- ❌ Bad: a title in the middle breaks the flow — the reader has to guess what slide N is for.
+1. The first `# H1` markdown heading in the slide body, if present.
+2. Otherwise, the `::title::` slot content.
 
-Report the ghost-deck reading verbatim in your output. If broken, suggest title rewrites in assertion form ("Three methods compete; Zhang's is the practical choice" not "Calibration methods").
+Concatenate these in slide order and read as a single block of prose. **Can a reader follow the deck's argument from these alone?**
 
-### Rule 2 — Title length and form by slide role
+- ✅ Good: the sequence narrates the storyline. A reader reading only these can paraphrase the deck's claim.
+- ❌ Bad: pure concept labels ("Performance", "Calibration", "Results") with no body `# H1` to back them. A reader gets the *table of contents*, not the *argument*.
+- ❌ Bad: a slide in the middle breaks the flow — neither title nor H1 says what the slide proves.
 
-A title that's too long reads as a bullet; a title that's too short fails the ghost-deck test. Apply these limits BY ROLE:
+Report the ghost-deck reading verbatim in your output, noting whether each entry came from `(title)` or `(H1)` so the caller can see which slides are leaning on which signal. If broken, suggest a body `# H1` (preferred — leaves the title slot as a clean concept label) or, when the slide doesn't have a body, a stronger title slot.
 
-| Slide role | Title length | Form | Bad example | Good example |
-|---|---|---|---|---|
-| `cover` | 1–4 words | short noun phrase; **NO formula, NO sentence** | *"Every camera obeys one equation: x = K[R\|t]X"* | *"Camera Geometry"* |
-| `section`, `section-overview` | 1–5 words | chapter heading | *"Pick the calibration method by the target you can measure"* | *"Calibration"* |
-| `default`, `content-image`, etc. | 4–10 words | assertion or rich noun phrase | *"Performance"*, *"Risks"* (too short) | *"Two views recover the depth one view lost"* |
-| `end` | fixed | "Thank you" / "Questions?" — should come from theme defaults | *"x = K[R\|t]X is the spine"* (recap, wrong slide) | *"Thank you"* |
+### Rule 2 — Title is a concept noun phrase; assertion lives in body `# H1`
 
-Why differentiated: a uniform "8–14 words assertion" rule (the old form) forced cover titles like *"Every camera obeys one equation"* — that's a bullet, not a cover. The role determines what the title's *job* is: cover names the deck, section signposts, content slides argue, end closes.
+The theme's title slot is a small visual element (typically narrow, 32 px font on default-role slides). Crowding an assertion sentence into it overflows or shrinks the text. **Title slots hold concept names (noun phrases); the assertion — the load-bearing claim of the slide — goes in the body's first line as a markdown `# H1` heading.** This separates theme-imposed structure (a short label) from rhetorical structure (the headline claim), and keeps both legible.
 
-Empirical basis: Alley, *Assertion-Evidence Approach* (for default content slides); convergent with academic-pptx-skill, Duarte, McKinsey/Minto.
+| Slide role | `::title::` slot | Body `# H1` |
+|---|---|---|
+| `cover` | 1–4 words; noun phrase; **NO formula, NO sentence** | not used |
+| `section`, `section-overview` | 1–5 words; chapter heading | not used |
+| `default`, `content-image`, etc. | **1–5 words; concept name** (e.g. *"Pinhole camera"*) | **optional but recommended** — full assertion sentence, 4–10 words, e.g. `# Every 3D ray converges through one point` |
+| `end` | fixed | not used |
+
+Good vs bad — content slide:
+
+| ❌ Assertion in title (overflows) | ✅ Concept in title + assertion in body `# H1` |
+|---|---|
+| `::title::` *Two views recover the depth one view lost* | `::title::` *Two-view geometry* + body opens with `# Two views recover the depth one view lost` |
+
+The **ghost-deck test (Rule 1)** reads the body `# H1` when present and falls back to the title slot otherwise — so the argument signal is preserved regardless of which slide-by-slide style the author picks.
+
+Why the change from the previous "assertion title" rule: Alley's research assumed the title IS the headline, but in our theme the title slot is a separate, small visual element above the body. There's room for both a concept label *and* a body H1 headline — and the visual rendering is meaningfully better.
 
 ### Rule 3 — Bullets are evidence FOR the title, not paraphrase OF it
 
@@ -139,9 +150,12 @@ If the theme's `semantic-layouts.json` declares an `intent` for the role a slide
 
 For each violation, flag with verbatim quote of the offending content + the alias's intent text + a suggested rewrite.
 
-### Rule 12 — No formulae, single uppercase letters, or operator characters in titles
+### Rule 12 — No formulae, single uppercase letters, or operator characters in titles or body H1
 
-Titles are the load-bearing element of the ghost-deck test. A title like *"K and [R\|t] compose the projection"* mixes prose with math and reads as a bullet — the audience can't parse it at a glance, and the title fails its job. Apply this rule to EVERY slide's title (the content of the first `::title::` slot block or the `title:` frontmatter field):
+Titles and body `# H1` headings are the load-bearing elements of the ghost-deck test. A heading like *"K and [R\|t] compose the projection"* mixes prose with math and reads as a bullet — the audience can't parse it at a glance, and the heading fails its job. Apply this rule to BOTH:
+
+- the content of the first `::title::` slot block (or the `title:` frontmatter field), AND
+- the first `# H1` markdown heading in the slide body, if present.
 
 Flag if the title contains:
 - A bare uppercase single letter surrounded by spaces or word boundaries: `\b[A-Z]\b` (matches `K`, `P`, `X` standalone — does NOT match `KITTI` or `XYZ` as part of words). The exception is acronyms with multiple letters (`SfM`, `SLAM`, `DLT`) — those are OK.
@@ -160,7 +174,18 @@ Why: formulae and math symbols belong in slide bodies where they can be annotate
 
 Flag each violation with `severity: minor` (titles are easily revised; not deck-breaking) and a `suggested_fix` showing an assertion form that drops the math.
 
-### Rule 13 — Blank-line-in-slot lint (renderer-bug class)
+### Rule 13 — No formulae in section divider bodies
+
+Section-role slides (`section`, `section-overview`) have a body slot that visually reads as a *second title line* (large bold uppercase in the IUG theme, comparable size to the title slot). The same no-formula constraint applies: section bodies describe the **concept** about to be covered, not the math.
+
+Detect: for any slide whose `layout:` resolves to a `section` or `section-overview` alias, check the body slot content for the same patterns as Rule 12 (bare uppercase letters, operator characters, LaTeX, bracket-matrix notation). Flag each violation with `severity: minor` and a `suggested_fix` rewriting as concept-language.
+
+| ❌ Section subtitle with math | ✅ Concept-language section subtitle |
+|---|---|
+| *"Pinhole model, K, [R\|t] — §1.3"* | *"Pinhole model, intrinsics, and extrinsics — §1.3"* |
+| *"Estimating K and [R\|t] — §1.4"* | *"Estimating intrinsics and extrinsics from correspondences — §1.4"* |
+
+### Rule 14 — Blank-line-in-slot lint (renderer-bug class)
 
 For any slide using Flavour-A named slots: check whether any `slot` value contains a blank line (`\n\n`). Blank lines close Slidev's MDC slot block early, causing the second paragraph to leak into the slide root with no slot — which silently breaks the layout. The renderer now wraps such content in `<div>` and warns, but the cleaner fix is to flag the pattern in CIF and ask the author to restructure (use a single paragraph, `<br>`, or bullets).
 
