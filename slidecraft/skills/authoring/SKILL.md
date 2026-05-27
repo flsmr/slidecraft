@@ -355,13 +355,34 @@ The author maintains `<deck>/references.bib` in BibTeX format. Every cite key re
 
 ---
 
-## Step 5 — Critic & Researcher Loop (before showing the user)
+## Step 5 — Lint + Critic + Researcher Loop (before showing the user)
 
-Don't ship the first draft. The default AI failure mode is bullet-list slides that paraphrase their titles; the cheapest defense is to send the draft through a **dedicated critic agent** before the user sees it.
+Don't ship the first draft. The default AI failure mode is bullet-list slides that paraphrase their titles; the cheapest defense is to send the draft through a **lint pass + critic agent** before the user sees it.
 
-The author returned a list of slide files. The critic reads them, the researcher verifies grounding flags, you apply fixes by editing the individual slide files. No CIF, no render step — files are the canonical form.
+The author returned a list of slide files. The lint catches mechanical errors (bad layout names, bad slot names, image-in-slot, formula-in-title) at near-zero cost. The critic catches judgment-call issues (assertion vs label, evidence vs paraphrase, monotony, intent compliance). The researcher verifies specific claims. You apply fixes by editing slide files. No CIF, no render step — files are the canonical form.
 
-### 5a. Invoke the critic
+### 5a. Run the lint first
+
+Before invoking the critic, run the lint script to catch mechanical errors:
+
+```bash
+python -m slidecraft.scripts.lint_slides --deck <deck-dir>
+```
+
+Exit codes: `0` = clean; `1` = errors (must fix before continuing); `2` = warnings only (under `--strict`).
+
+The lint catches:
+- **L1** — semantic layout names that Slidev would silently fall back from to its built-in layouts
+- **L2** — semantic slot names that produce invisible slots
+- **L3** — image references inside named slot blocks that break Vite import-guard
+- **L4** — blank lines inside slot blocks that close the slot early in MDC
+- **L5** — unparseable YAML frontmatter
+- **L6** — formulae / single uppercase letters / operator characters in titles (warning; promoted to error with `--strict`)
+- **L7–L12** — soft warnings on missing speaker notes, body-over-49-words, anti-monotony, etc.
+
+For any **L1–L5 error**, fix it before invoking the critic — these are render-breaking. For **L6–L12 warnings**, fold the suggestions into the critic's findings.
+
+### 5b. Invoke the critic
 
 After the author returns, spawn the `slide-critic` agent via the Task tool:
 
@@ -386,11 +407,11 @@ The critic returns a prose summary followed by a fenced JSON block. Parse the JS
 - `findings[]` — per-slide issues, each with `severity`, `rule`, `current`, `suggested_fix`, and `needs_research`
 - `overall_verdict` — `ready` / `needs_revision` / `structural_issues`
 
-### 5b. If verdict is `structural_issues`: stop and surface
+### 5c. If verdict is `structural_issues`: stop and surface
 
 If the critic says the deck has structural issues (ghost-deck test fails, argument drift, wildly off pacing), don't try to fix slide-by-slide — the storyline itself is broken. Bring the critic's diagnosis to the user, propose a restructure, and wait for their direction. Don't burn cycles patching individual slides on a broken skeleton.
 
-### 5c. For each `needs_research: true` finding: spawn the researcher
+### 5d. For each `needs_research: true` finding: spawn the researcher
 
 The critic doesn't verify claims itself; it flags them. For each finding with `needs_research: true`, spawn the `source-researcher` agent via Task:
 
@@ -414,21 +435,21 @@ The researcher returns a verdict (`supported` / `partial` / `unsupported`) with 
 
 Allow web fallback only if the user has previously authorized internet research in this session.
 
-### 5d. Apply the critic's other fixes
+### 5e. Apply the critic's other fixes
 
 For each finding without `needs_research`, apply the `suggested_fix` by **editing the individual slide file** the finding names. Edits follow the standard pattern: copy the current `slides/<name>.md` to `.slidecraft/history/<name>-YYYYMMDD-HHMMSS.md`, modify the slide file in place, and you're done — Slidev hot-reloads.
 
 If a fix is **structural** (e.g. the critic wants a comparison-table slide but the theme has no `two-cols` alias in `semantic-layouts.json`), flag it to the user as a separate question rather than degrade the slide silently.
 
-### 5e. Re-invoke the critic — at most once
+### 5f. Re-invoke the critic — at most once
 
 After applying fixes, re-invoke `slide-critic` once. If the verdict is now `ready` or there are only minor findings, proceed to Step 7. If major findings remain, accept them as known caveats and hand off to the user with a brief note; don't loop a third time.
 
-### 5f. Persist the critique
+### 5g. Persist the critique
 
 Save the final critic JSON to `.slidecraft/history/critique-YYYYMMDD-HHMMSS.json`. This makes the critic's reasoning auditable later when the user asks "why is slide 12 like this?".
 
-### 5g. Don't show the user the raw critique
+### 5h. Don't show the user the raw critique
 
 The user evaluating the deck for the first time should see your best work, not a confession. Show them the rendered preview only. The critique is for you, not for them — unless they explicitly ask "what did the critic say?", in which case summarise.
 

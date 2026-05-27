@@ -139,7 +139,28 @@ If the theme's `semantic-layouts.json` declares an `intent` for the role a slide
 
 For each violation, flag with verbatim quote of the offending content + the alias's intent text + a suggested rewrite.
 
-### Rule 12 — Blank-line-in-slot lint (renderer-bug class)
+### Rule 12 — No formulae, single uppercase letters, or operator characters in titles
+
+Titles are the load-bearing element of the ghost-deck test. A title like *"K and [R\|t] compose the projection"* mixes prose with math and reads as a bullet — the audience can't parse it at a glance, and the title fails its job. Apply this rule to EVERY slide's title (the content of the first `::title::` slot block or the `title:` frontmatter field):
+
+Flag if the title contains:
+- A bare uppercase single letter surrounded by spaces or word boundaries: `\b[A-Z]\b` (matches `K`, `P`, `X` standalone — does NOT match `KITTI` or `XYZ` as part of words). The exception is acronyms with multiple letters (`SfM`, `SLAM`, `DLT`) — those are OK.
+- Mathematical operator characters: `=`, `≠`, `·`, `×`, `÷`, `∂`, `∑`, `∫`, `∞`. Hyphens and en-dashes are OK (`Unit 1.3–1.5` is fine).
+- LaTeX delimiters: `$$`, `\(`, `\)`, `\[`, `\]`, `\\frac`, `\\underbrace`, etc.
+- Markdown image / link syntax: `![`, `](` at the start.
+- Bracket-matrix notation: `[R|t]`, `[R | t]`, `[A | b]`.
+
+Why: formulae and math symbols belong in slide bodies where they can be annotated. Titles assert *what* the slide proves; the body carries the math that proves it. Example fixes:
+
+| ❌ Title with math | ✅ Title as assertion |
+|---|---|
+| *"K and [R\|t] compose the projection"* | *"One matrix combines intrinsics and extrinsics"* |
+| *"P = K[R\|t]X is the camera equation"* | *"Every camera obeys one projection equation"* |
+| *"u = fX/Z gives perspective"* | *"Perspective projection puts depth on the denominator"* |
+
+Flag each violation with `severity: minor` (titles are easily revised; not deck-breaking) and a `suggested_fix` showing an assertion form that drops the math.
+
+### Rule 13 — Blank-line-in-slot lint (renderer-bug class)
 
 For any slide using Flavour-A named slots: check whether any `slot` value contains a blank line (`\n\n`). Blank lines close Slidev's MDC slot block early, causing the second paragraph to leak into the slide root with no slot — which silently breaks the layout. The renderer now wraps such content in `<div>` and warns, but the cleaner fix is to flag the pattern in CIF and ask the author to restructure (use a single paragraph, `<br>`, or bullets).
 

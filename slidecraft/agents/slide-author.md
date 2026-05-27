@@ -156,7 +156,7 @@ For each planned slide, in order:
 
 2. **Read the theme alias's `intent` for the chosen role.** Honor it strictly. Cover titles are deck names (not sentences, not formulas). End-slide titles are closing words (not recap). Section titles are sub-headings (not content). If the intent contradicts what you want to write, you've picked the wrong role for the slide, not been wronged by the theme.
 
-3. **Title** — apply the title-length-by-role rules:
+3. **Title** — apply the title-length-by-role rules AND the no-formulae rule:
 
    | Role | Length | Form |
    |---|---|---|
@@ -165,7 +165,9 @@ For each planned slide, in order:
    | `default`, `content-image`, etc. | 4–10 words | assertion sentence or rich noun phrase |
    | `end` | fixed | "Thank you" / "Questions?" — from theme defaults |
 
-   These come from the authoring SKILL's Step 3d and are enforced by `slide-critic` Rule 2.
+   **No formulae, single uppercase letters, or operator characters in titles** (slide-critic Rule 12). A title with math (`K and [R|t]…`, `P = K[R|t]X`, `u = fX/Z`) reads as a bullet, not a headline. The audience can't parse it in 5 seconds — title's job fails. Math lives in slide *bodies*, where it can be annotated. Acronyms (`SfM`, `SLAM`, `DLT`) are fine — they're words, not symbols.
+
+   These come from the authoring SKILL's Step 3d and are enforced by `slide-critic` Rules 2 and 12.
 
 4. **Layout name AND slot names use PHYSICAL names from the theme alias.** With the renderer deleted, slide files are Slidev-consumable directly — which means the `layout:` frontmatter value must be the physical layout file name (e.g. `slide5`, not `content-image`) AND the `::slot::` block names must be the physical slot names (e.g. `::body-16::`, not `::body::`). Read the alias from `<theme>/semantic-layouts.json` and use the right column:
 
@@ -230,6 +232,18 @@ If a slide cites a source not yet in `references.bib`, choose one:
 - **(c)** Soften the citation to a generic form ("standard reference"; "the canonical multi-view geometry text") and flag the slide in the context block for human follow-up. Use this only when (a) and (b) are not viable.
 
 Never fabricate a bib entry. A wrong cite key is worse than no cite key — the renderer is fine, but the audit trail is poisoned.
+
+### 5b. Bibliography slide (academic decks)
+
+For decks in `academic`-tone mode, **add a `bibliography.md` slide** as the second-to-last slide (immediately before `closing.md`). The bibliography slide:
+
+- Uses the `default` layout role (no special layout needed).
+- Title: `References` (simple noun, no formula).
+- Body: a bullet list of every cite key used anywhere in the deck, rendered in APA-7th format. Use small font via `<span style="font-size:0.7em">` wrappers so all entries fit on one slide. Each bullet's format: `**Author, A. (Year).** Title. Venue / Publisher.`
+- Filter to *unique* cite keys actually cited on slide content (not just in speaker notes) — pull them by walking each slide's `sources:` frontmatter.
+- Point to `references.bib` in a small footer (e.g. via `body-13` slot if the theme exposes one).
+
+This slide is separate from `closing.md` because the closing slot is for the "Thank you" + contact info, not bibliography. Bibliography needs the full slide canvas. Skip the bibliography slide for non-academic decks (business, keynote) — for those, route the references to speaker notes or an appendix.
 
 ### 6. Deck-level `slides.md` assembly
 
