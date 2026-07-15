@@ -27,7 +27,7 @@ const SCOPE = r.scope || 'all slides'
 const MODE = r.mode || 'parallel'
 const PASSES = Array.isArray(r.passes) && r.passes.length
   ? r.passes
-  : ['grounding-critic', 'house-style', 'slide-critic', 'image-critic', 'visual-enrichment']
+  : ['grounding-critic', 'house-style', 'slide-critic', 'didactic-critic', 'image-critic', 'visual-enrichment']
 
 const FIND_SCHEMA = {
   type: 'object',
@@ -51,6 +51,16 @@ with author initials. Each finding must give the exact fix (colon/comma, add int
   'slide-critic': `Read ${SLIDES}. For ${SCOPE}, judge each content slide: is the title a concept name and the body
 evidence (not filler paraphrasing the title)? Flag topic-label titles, >5 bullets, monotony (too many identical
 layouts in a row), and any slide carrying two ideas.`,
+  'didactic-critic': `Read slidecraft/agents/didactic-critic.md and follow it as a devil's-advocate TEACHING
+reviewer of ${SLIDES}. First read the deck's study-goals slide (hold the goals in memory). For ${SCOPE}, judge
+whether each content slide carries ONE clear, self-explanatory message a first-time student could grasp from the
+title + lead + visual ALONE (mute the presenter). Apply the full test set, especially the name-drop rule: a slide
+that names 3+ examples/people/works with no stated organizing concept is a high-severity 'name-drop-list' even if
+every name is grounded (do NOT pass a slide just because its bullets contain named entities — that heuristic
+rewards the exact failure). Reconcile against the slide's evidence sidecar (${RES}/evidence/<slug>.json) to see the
+intended message. For each finding give the extractable message (or null), the code + a concrete sentence, and a
+fix (the message-first lead, the ONE anchor example to keep, what to move to notes, and any visual to add). This
+pass is about teaching clarity, NOT fact-grounding (grounding-critic owns that) or figure hygiene (image-critic).`,
   'image-critic': `Read slidecraft/agents/image-critic.md and follow it as a devil's advocate. PRIMARY runner:
 run \`python -m slidecraft.scripts.image_critic --deck ${DECK}\` — it inspects every NON-photographic figure on the
 single vision model GPT-5.6 sol via OWUI and writes resources/image_critic_report.md + image_critic_findings.json.

@@ -19,7 +19,7 @@ export const meta = {
   description: 'Author + fact-verify augmenting slides grounded in an external academic source (book chapter)',
   phases: [
     { title: 'Author', detail: 'one author per source topic cluster, in parallel' },
-    { title: 'Verify', detail: 'grounding-critic checks every fact against the source text' },
+    { title: 'Verify', detail: 'grounding-critic checks every fact; didactic-critic checks each slide teaches a clear message' },
   ],
 }
 
@@ -81,6 +81,18 @@ content slide put "Source: [@${SOURCE_KEY}, p. NN]" where NN = the printed BOOK 
 can verify it. bib_entries = the single ${SOURCE_KEY} BibTeX @incollection/@book entry (title, eds./publisher as
 printed; leave unverifiable fields out).`
 
+const DIDACTIC = `DIDACTIC CONTRACT (teach, do not just list — this is as important as grounding): every content
+slide must carry ONE clear message a first-time student grasps from the title + lead + any figure ALONE (assume NO
+audio). (1) The lead sentence STATES the point (the assertion the slide proves), not a generic topic sentence.
+(2) TRANSFORM the source into a TEACHING structure; a book chapter is often itself a list of examples — do NOT
+mirror that as a slide of bullets. Prefer ONE example explained in depth (an anchor the student remembers) over
+several shallow name-drops; extra names/dates/proper nouns go in PRESENTER NOTES, not on the slide face.
+(3) Every bullet is self-explanatory to a newcomer and passes "so what?": it states a concept or capability the
+student learns, never a cryptic proper-noun telegram (bad: "Glueckman Plastx, laser sintered 1995"; good:
+"New forms for artists: shapes impossible to carve by hand"). (4) Each slide serves at least one study goal.
+(5) If the content is a process, sequence, comparison, hierarchy, or quantity, propose a FIGURE (a figure_proposal
+or a deterministic diagram) instead of a bullet list — dual coding beats prose.`
+
 // ---------- Phase 1: author each cluster ----------
 phase('Author')
 log(`Authoring ${CLUSTERS.length} source clusters in parallel, grounded in the extracted source text.`)
@@ -97,6 +109,7 @@ STEP 3 author ${c.target} English slides that teach ${c.covers}. Prefer clear te
 
 ${HOUSE}
 ${CITE}
+${DIDACTIC}
 
 OUTPUT: cluster="${c.name}"; slides_md = the slide blocks concatenated, each starting with its "---\\nlayout:...\\n---" frontmatter and ending with its "<!-- notes -->", dropping straight into slides.md (use /figures/<slug>.png for any proposed figure); slide_count; facts[{claim, book_page}]; figure_proposals[{slug, kind, teaching_caption, imagegen_description, based_on_book_page}]; bib_entries (the ${SOURCE_KEY} entry); evidence[] = ONE entry per slide you produced, {slide_title, claims:[{statement, locator:"p. NN", excerpt:"the verbatim source sentence the claim came from"}], figures:[{file:"<slug>.png", intended_relationships:"the correct mapping/flow/grouping in words", must_not:["traps a wrong render would fall into"]}]} — this becomes the slide's evidence sidecar; flags.`
 
@@ -133,7 +146,26 @@ OUTPUT: verdict ("clean" | "needs-fixes") and findings[{claim, issue, severity, 
     { schema: CRITIC_SCHEMA, phase: 'Verify', label: `verify:${c.name}` })
 }))
 
+// didactic critic per cluster — facts can be true and the slide still teach nothing (the name-drop
+// failure mode). Runs alongside the grounding critic; checks message clarity, not fact support.
+log('Didactic-critic: checking each authored cluster teaches a clear message (not a name-drop list).')
+const taught = await parallel(authored.map((a, i) => () => {
+  if (!a || !a.slides_md || !a.slides_md.trim()) return Promise.resolve(null)
+  const c = CLUSTERS[i]
+  return agent(`Read slidecraft/agents/didactic-critic.md and follow it as a devil's-advocate TEACHING critic.
+Below are the authored slides for cluster "${c.name}" (covers: ${c.covers}). Judge whether EACH slide carries ONE
+clear, self-explanatory message a first-time student grasps from the title + lead + figure ALONE (assume no audio).
+Apply the name-drop rule strictly: a slide naming 3+ examples/people/works with no stated organizing concept is a
+high-severity name-drop-list EVEN IF every name is grounded. Do NOT re-check fact-grounding (another critic owns
+that).
+SLIDES:\n${a.slides_md}
+OUTPUT: verdict ("clean" | "needs-fixes") and findings[{claim: the slide title, issue, severity, fix (the
+message-first lead + the one anchor to keep + what to move to notes + any figure to add)}].`,
+    { schema: CRITIC_SCHEMA, phase: 'Verify', label: `teach:${c.name}` })
+}))
+
 return {
   authored: authored.map((a, i) => a || { cluster: (CLUSTERS[i] || {}).name, error: 'null' }),
   verified,
+  taught,
 }

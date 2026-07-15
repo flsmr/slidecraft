@@ -81,6 +81,15 @@ derived from the printed Source line, e.g. "Source: Schmid, D. (2013)" -> [@schm
 Also return bib_entries: one BibTeX entry per key you cited, fields copied from the printed Source lines /
 the notes, per slidecraft/references/bibtex-guide.md (read it). Unsure about a field: leave it out.`
 
+const DIDACTIC = `DIDACTIC CONTRACT (teach, do not just list — as important as grounding): every content slide
+carries ONE clear message a first-time student grasps from the title + lead + any figure ALONE (assume NO audio).
+(1) The lead sentence STATES the point, not a generic topic sentence. (2) TRANSFORM the section notes into a
+TEACHING structure; do NOT mirror a source's list of examples as a slide of bullets. Prefer ONE example explained
+in depth (a memorable anchor) over several name-drops; extra names/dates/proper nouns go in PRESENTER NOTES, not
+on the slide face. (3) Every bullet is self-explanatory to a newcomer and passes "so what?" (a concept or
+capability learned), never a cryptic proper-noun telegram. (4) Each slide serves at least one study goal. (5) If
+the content is a process, sequence, comparison, hierarchy, or quantity, use a FIGURE, not a bullet list.`
+
 // ---------- Phase 1: author every section in parallel ----------
 phase('Author')
 log(`Authoring ${SECTIONS.length} sections in parallel, grounded in ${PREFIX} notes + figures.`)
@@ -100,6 +109,7 @@ STEP 3 author ${s.target || '2 to 4'} slides. Focus: ${s.hint || 'the core teach
 
 ${GROUND}
 ${CITE}
+${DIDACTIC}
 Presenter notes on every slide: 3-5 say-bullets, then "- Example to tell: ..." and "- Memory hook: ...".
 
 OUTPUT: section="${s.title}"; slides_md=the slide blocks concatenated, each starting with its

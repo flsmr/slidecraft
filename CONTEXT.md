@@ -98,3 +98,15 @@ evidence sidecar, and reports text / colour / shape / logic / hygiene defects. R
 runner: `scripts/image_critic.py` on a SINGLE vision model (GPT-5.6 sol via OWUI); it is the
 `image-critic` pass of the improve-deck polish chain. See `agents/image-critic.md`.
 _Avoid_: image checker, figure linter
+
+**Didactic-critic**:
+The devil's-advocate TEACHING reviewer. Where the grounding-critic checks that facts are true and the
+image-critic checks that figures are clean, the didactic-critic asks whether each content slide carries
+ONE clear, self-explanatory message a first-time student grasps from the title + lead + figure alone
+(presenter muted). It reads the deck's study goals + the evidence sidecars, and flags no-message slides,
+cryptic bullets, **name-drop lists** (3+ examples with no stated concept — even when every name is
+grounded), trivia bullets, goal-orphans, and should-be-visual slides. Report-only; it is the
+`didactic-critic` pass of improve-deck and runs in the augment Verify phase. The paired **didactic
+contract** in the author prompts (`sprint_deck.js`, `gebhardt_augment.js`) prevents the failure at
+authoring time. See `agents/didactic-critic.md`.
+_Avoid_: content reviewer (that is the orphaned CIF-era agent), slide-critic (mechanical-form pass)
