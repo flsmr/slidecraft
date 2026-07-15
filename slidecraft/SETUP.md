@@ -40,6 +40,22 @@ Same machine:
 
 Another machine: clone `flsmr/slidecraft` + the theme, do steps 1-3, then trigger as above.
 
+## Keeping the installed commands in sync
+The active `/slidecraft:*` commands are thin **wrapper** files under
+`~/.claude/commands/slidecraft/` that delegate to the canonical instructions in
+`slidecraft/commands/<name>.md` (read live at invocation time, so editing a command's *body*
+needs no re-install). Only the *set* of commands and their frontmatter drift. Regenerate the
+wrappers from the repo whenever you add, rename, or remove a command:
+
+```bash
+python -m slidecraft.scripts.install_commands            # sync (idempotent)
+python -m slidecraft.scripts.install_commands --dry-run  # preview changes
+```
+
+It adds missing wrappers, updates changed frontmatter, and prunes wrappers whose command was
+removed. New commands only load in a **fresh** Claude Code session. Run this once on each
+machine after cloning, and again after any change under `slidecraft/commands/`.
+
 ## What is proven vs new
 - **Proven on SPRINT_1/SPRINT_2:** scaffold, `extract_chapter.py`, the parallel `section-author` phase,
   `gen_mindmap.py`, assembly, build/verify.
