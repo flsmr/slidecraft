@@ -52,3 +52,11 @@ rebuild-proof/
 rebuild-test/
 pptx-reference-images/
 pptx-reference-manifest.json
+
+# Scratch artifacts from deck-generation test runs (may contain deck content — never commit)
+*_prompt.txt
+slide_plan.json
+slide_plan_raw.txt
+concept_prompt.txt
+figure_content_prompt.txt
+cards_prompt.txt

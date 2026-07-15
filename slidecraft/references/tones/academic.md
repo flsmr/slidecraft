@@ -25,7 +25,12 @@ The instructions below are grounded in pedagogy literature (Ausubel, Bligh, Swel
 
 Lectures cite *less* than research talks. The convention:
 
-- **Bottom-right inline citation** for any non-original claim or specific number, format `(Author Year)`. E.g. *"the calibration matrix has 5 degrees of freedom (Hartley & Zisserman 2003)"*.
+- **Canonical footer citation format (single source of truth): `Author (Year, p. XX)`.** This is the exact string that goes in a slide's citation slot.
+  - **Author**: surname only; two authors → `A & B`; three or more → `First et al.`
+  - **Year** in parentheses; **page/locator** after a comma as `p. XX` (or `pp. XX–YY`, or `§X.Y` / `ch. N` when a page number doesn't apply).
+  - **Page is optional — include it only when it can be extracted for the specific claim; otherwise omit it and write `Author (Year)`.** Never invent a page.
+  - **Multiple sources** on one slide are separated by `"; "`, e.g. `Reid (1979, p. 843); Kuhn (1955); Blackman (2004)`.
+  - **Derive it from the slide's `sources:` frontmatter** (`key` → author + year from `references.bib`; `locator` → the page/section). Keep the rendered footer and the frontmatter in lock-step so it is automatically correct. (Auto-composition is the job of the future `Cite` skill; until then the author writes the string per this rule.)
 - **Full bibliographic detail only on the References slide** at the end (one slide, alphabetised, hanging indent).
 - **Reading-path hint in speaker notes**, not on the slide: *"For Tsai's method see Szeliski §11.1.4 or the 1987 paper directly"*.
 - A literature-pointer slide (e.g. "Further reading") is OK if the deck is recap-style and the goal is to nudge students toward the bibliography.

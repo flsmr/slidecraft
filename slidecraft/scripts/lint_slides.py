@@ -465,6 +465,13 @@ def rule_l1_layout_is_physical(slide: SlideFile,
     if theme is None or not slide.layout:
         return []
     layout = slide.layout
+    # Deck-local layouts (<deck>/layouts/*.vue) are merged by Slidev with
+    # the theme's and are first-class: the ILSE decks define slidefigure,
+    # gallery, agenda, and a slide1 override there. Anything with a local
+    # .vue file is valid by construction.
+    deck_dir = slide.path.parent.parent
+    if (deck_dir / "layouts" / f"{layout}.vue").is_file():
+        return []
     # The intended-physical case: matches a ``slideN`` file directly.
     if re.fullmatch(r"slide\d+", layout):
         if layout not in theme.physical_layouts:
@@ -572,17 +579,25 @@ def rule_l3_no_image_in_slot(slide: SlideFile) -> list[Finding]:
         for i, raw_line in enumerate(block.body_lines):
             line_no = block.body_start + i
             md_match = _IMG_MD_RE.search(raw_line)
-            html_match = _IMG_HTML_RE.search(raw_line)
-            if md_match or html_match:
+            # RELATIVE srcs are the failure mode (./public/... resolved
+            # against the slide file's location breaks the moment slides
+            # move into slides/ — SPRINT_2's migration proved it with 55
+            # build errors). Absolute /figures/... paths served from
+            # public/ are the working convention across three decks.
+            html_rel = re.search(
+                r'<img\s+[^>]*src="(?!https?://)(?!/)', raw_line,
+                re.IGNORECASE)
+            md_rel = md_match and not re.search(
+                r"!\[[^\]]*\]\((?:https?://|/)", raw_line)
+            if html_rel or md_rel:
                 findings.append(Finding(
                     severity=ERROR, file=slide.path, line=line_no, rule="L3",
-                    message=(f"image reference inside slot '::{block.name}::' "
-                             f"triggers Slidev's import-guard "
-                             f"(Vite fs.allow fails on Windows)"),
-                    fix=("leave the slot empty (theme's default image will "
-                         "render); OR place the image OUTSIDE any slot "
-                         "block; OR use a Vue SFC with <script setup> "
-                         "explicit import. See slide-author.md §4."),
+                    message=(f"RELATIVE image path inside slot "
+                             f"'::{block.name}::' breaks once slides live "
+                             f"in slides/ (Vite resolves it against the "
+                             f"slide file)"),
+                    fix=("reference public assets absolutely: "
+                         "src=\"/figures/<name>\" (served from public/)"),
                 ))
     return findings
 
@@ -597,6 +612,11 @@ def rule_l4_no_blank_line_in_slot(slide: SlideFile) -> list[Finding]:
     lines between two non-empty content lines within a single block.
     """
     findings: list[Finding] = []
+    #: Continuation patterns that provably render after a blank line in
+    #: Slidev page-level named slots (the ILSE house style: one intro
+    #: sentence, blank line, then a list / HTML block). Three shipping
+    #: decks use exactly this shape.
+    safe_next = re.compile(r"^\s*(?:[-*]|\d+\.|<div|<table|<img|<tr|<p\b)")
     for block in slide.slots:
         body = block.body_lines
         # Find blank lines that have non-blank content both before AND after.
@@ -604,13 +624,19 @@ def rule_l4_no_blank_line_in_slot(slide: SlideFile) -> list[Finding]:
             if not body[i].strip() and body[i - 1].strip() and any(
                 l.strip() for l in body[i + 1:]
             ):
+                nxt = next((l for l in body[i + 1:] if l.strip()), "")
+                if safe_next.match(nxt):
+                    continue  # house-style intro-blank-list pattern: fine
                 line_no = block.body_start + i
                 findings.append(Finding(
-                    severity=ERROR, file=slide.path, line=line_no, rule="L4",
+                    severity=WARNING, file=slide.path, line=line_no,
+                    rule="L4",
                     message=(f"blank line inside slot '::{block.name}::' "
-                             f"closes the MDC block; subsequent lines leak"),
-                    fix=("remove the blank line, OR use <br><br> for "
-                         "vertical spacing, OR restructure as bullets"),
+                             f"before prose may close the block on "
+                             f"MDC-container themes"),
+                    fix=("if the theme uses MDC containers, remove the "
+                         "blank line or use <br><br>; Slidev page-level "
+                         "slots (ILSE) tolerate it"),
                 ))
                 break  # one finding per block is enough
     return findings
@@ -841,6 +867,129 @@ def rule_l12_consecutive_same_layout(slides_in_order: list[SlideFile],
 
 
 # ---------------------------------------------------------------------------
+# L13 — house-style characters (centre dot, em-dash)
+# ---------------------------------------------------------------------------
+
+
+def rule_l13_house_style_chars(slide: SlideFile) -> list[Finding]:
+    """No centre dot ``·`` and no em-dash ``—`` anywhere in a slide file.
+
+    The ILSE house style bans both (colon or comma instead; en-dash for
+    numeric ranges is fine). Agents keep producing em-dashes in alt texts
+    and notes despite instructions — SPRINT_2 shipped four of them before
+    a manual grep caught it. Deterministic check, ERROR severity: these
+    are always a find/replace away from fixed.
+    """
+    findings = []
+    for i, line in enumerate(slide.raw.split("\n"), start=1):
+        for ch, name in (("·", "centre dot"), ("—", "em-dash")):
+            if ch in line:
+                findings.append(Finding(
+                    severity=ERROR, file=slide.path, line=i, rule="L13",
+                    message=f"{name} '{ch}' violates the house style",
+                    fix="replace with a colon, comma, or parentheses "
+                        "(en-dash only for numeric ranges)",
+                ))
+    return findings
+
+
+# ---------------------------------------------------------------------------
+# L14 — malformed HTML attribute quoting
+# ---------------------------------------------------------------------------
+
+_TAG_RE = re.compile(r"<(img|a|div|span|figure)\b[^>]*>", re.IGNORECASE)
+
+
+def rule_l14_attribute_quoting(slide: SlideFile) -> list[Finding]:
+    """Detect HTML tags whose attribute quoting is broken.
+
+    An agent once produced ``alt="... the root "Forming" branches ..."`` —
+    a nested double quote that silently truncates the attribute and leaks
+    the rest as markup. Heuristic: inside a tag, the number of ``"`` must
+    be even AND every ``="``-opened value must close before the next
+    ``=``. We check the simpler invariant (even quote count per tag) plus
+    ``=" ... " ... "`` runs of three quotes between attribute names.
+    """
+    findings = []
+    for i, line in enumerate(slide.raw.split("\n"), start=1):
+        for m in _TAG_RE.finditer(line):
+            tag = m.group(0)
+            if tag.count('"') % 2 == 1:
+                findings.append(Finding(
+                    severity=ERROR, file=slide.path, line=i, rule="L14",
+                    message="odd number of double quotes in HTML tag "
+                            "(broken attribute)",
+                    fix="remove quotes inside attribute values",
+                ))
+                continue
+            # values themselves must not contain further quotes: after
+            # splitting on `="`, each chunk holds "value" + what follows.
+            # After the value's closing quote only whitespace+attrname (for
+            # middle chunks) or the tag end (last chunk) may appear —
+            # anything else means a stray quote truncated the value (e.g.
+            # alt="the root "Forming" branches").
+            chunks = tag.split('="')[1:]
+            ok_middle = re.compile(r'^[^"]*"\s+[\w-]+$')
+            ok_last = re.compile(r'^[^"]*"\s*/?\s*>$')
+            bad = False
+            for j, chunk in enumerate(chunks):
+                pattern = ok_last if j == len(chunks) - 1 else ok_middle
+                if not pattern.match(chunk):
+                    bad = True
+                    break
+            if bad:
+                findings.append(Finding(
+                    severity=ERROR, file=slide.path, line=i, rule="L14",
+                    message="attribute value contains a stray quote "
+                            "or is unterminated",
+                    fix="attribute values must be quote-free plain text",
+                ))
+    return findings
+
+
+# ---------------------------------------------------------------------------
+# L15 — portrait image full-width (renders unreadably small)
+# ---------------------------------------------------------------------------
+
+_IMG_SRC_RE = re.compile(r'<img[^>]*src="(/[^"]+)"', re.IGNORECASE)
+
+#: Layouts whose picture slot spans the full slide width. A portrait image
+#: there letterboxes to less than half the slide and becomes unreadable —
+#: the exact complaint that forced three re-renders in SPRINT_2.
+_FULL_WIDTH_LAYOUTS = {"slidefigure"}
+
+
+def rule_l15_portrait_on_full_width(slide: SlideFile,
+                                    deck_dir: Path) -> list[Finding]:
+    if slide.layout not in _FULL_WIDTH_LAYOUTS:
+        return []
+    try:
+        from PIL import Image  # optional dependency; skip check if absent
+    except ImportError:  # pragma: no cover
+        return []
+    findings = []
+    for i, line in enumerate(slide.raw.split("\n"), start=1):
+        for m in _IMG_SRC_RE.finditer(line):
+            img_path = deck_dir / "public" / m.group(1).lstrip("/")
+            if not img_path.is_file():
+                continue
+            try:
+                with Image.open(img_path) as im:
+                    w, h = im.size
+            except Exception:
+                continue
+            if h > w:
+                findings.append(Finding(
+                    severity=WARNING, file=slide.path, line=i, rule="L15",
+                    message=(f"portrait image ({w}x{h}) on full-width "
+                             f"layout '{slide.layout}' renders too small"),
+                    fix="rotate the image, redraw it landscape "
+                        "left-to-right, or switch to a split layout",
+                ))
+    return findings
+
+
+# ---------------------------------------------------------------------------
 # Deck walk
 # ---------------------------------------------------------------------------
 
@@ -917,6 +1066,9 @@ def lint_deck(deck_dir: Path,
         findings.extend(rule_l9_cite_keys_in_bib(slide, bib_keys))
         findings.extend(rule_l10_speaker_notes_present(slide))
         findings.extend(rule_l11_body_word_count(slide, theme))
+        findings.extend(rule_l13_house_style_chars(slide))
+        findings.extend(rule_l14_attribute_quoting(slide))
+        findings.extend(rule_l15_portrait_on_full_width(slide, deck_dir))
 
     # Deck-level (cross-slide) rules.
     ordered = _slide_order_from_deck_md(deck_dir, slide_paths)

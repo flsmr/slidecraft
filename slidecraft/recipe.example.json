@@ -1,0 +1,53 @@
+{
+  "_comment": "The reusable 'recipe' for one sprint deck. Copy to <deck>/resources/recipe.json, edit, then run /slidecraft:sprint-deck. Most 'sections' fields can be auto-filled from extract_chapter.py output; override targets/hints here.",
+
+  "deck_name": "SPRINT_3_Additive_Manufacturing",
+  "deck_location": "C:/Users/.../Präsentationen/slidecraft-decks",
+  "theme": "slidev-theme-ilse",
+  "theme_rel": "../../slidecraft-themes/ILSE-theme/slidev-theme-ilse",
+
+  "course": "Production Engineering",
+  "module": "DLBDSEAR01",
+  "chapter_number": 3,
+  "chapter_title": "Additive Manufacturing Processes",
+  "chapter_title_short": "Additive Manufacturing",
+  "presenter": "Presenter Name",
+  "date": "2026-07-04",
+  "footer": "Production Engineering, DLBDSEAR01",
+
+  "sources": {
+    "chapter_pdf": "course_book_chapter_3.pdf",
+    "prefix": "ch3",
+    "template_pptx": "TEMPLATE_DLBDSEAR01_Session 3.pptx",
+    "exam_catalogue": "Production Engineering Question Catalogue/catalogue-23626-enriched.json"
+  },
+
+  "agenda": {
+    "chapters": [
+      "Introduction to Manufacturing Technology",
+      "Main Manufacturing Groups According to DIN 8580",
+      "Additive Manufacturing Processes",
+      "Rapid Prototyping",
+      "Rapid Tooling",
+      "Direct / Rapid Manufacturing",
+      "Cyber-Physical Production Plants"
+    ],
+    "active": 3
+  },
+
+  "sections": "AUTO — filled from extract_chapter.py (title, text_file, figure page-range per TOC section). Override an entry to set target_slides or an authoring hint, e.g.:",
+  "sections_override_example": [
+    { "key": "overview", "target_slides": "2", "hint": "start from the DIN 8580 additive branch; do not repeat chapter-2 content" }
+  ],
+
+  "enrich": {
+    "mindmap": true,
+    "galleries": "search",
+    "galleries_reuse_from": null,
+    "exam_focus": true,
+    "diagram_polish_slides": []
+  },
+
+  "house_style": "references/ilse-author-guide.md",
+  "improve_passes": ["grounding-critic", "house-style", "slide-critic"]
+}

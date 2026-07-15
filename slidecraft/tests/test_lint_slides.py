@@ -175,12 +175,15 @@ def test_l2_semantic_slot_name_errors(tmp_path):
     assert all(f.severity == ERROR for f in l2)
 
 
-def test_l3_image_inside_slot_errors(tmp_path):
+def test_l3_relative_image_inside_slot_errors(tmp_path):
+    # RELATIVE paths break once slides live in slides/ (Vite resolves them
+    # against the slide file). Absolute /figures/... is the working
+    # convention (SPRINT_2/3) and must NOT be flagged.
     deck = _make_deck(tmp_path)
     content = (
         "---\nid: with-img\nlayout: slide5\nsources: []\n---\n\n"
-        "::title::\nA slide with image inside slot\n\n"
-        "::picture-14::\n![alt](/figures/foo.png)\n\n"
+        "::title::\nA slide with relative image inside slot\n\n"
+        "::picture-14::\n![alt](./public/figures/foo.png)\n\n"
         + LONG_NOTES
     )
     _write_slide(deck, "with-img", content)
@@ -191,7 +194,7 @@ def test_l3_image_inside_slot_errors(tmp_path):
     assert "picture-14" in l3[0].message
 
 
-def test_l3_html_img_inside_slot_errors(tmp_path):
+def test_l3_absolute_image_inside_slot_passes(tmp_path):
     deck = _make_deck(tmp_path)
     content = (
         "---\nid: html-img\nlayout: slide5\nsources: []\n---\n\n"
@@ -201,12 +204,21 @@ def test_l3_html_img_inside_slot_errors(tmp_path):
     )
     _write_slide(deck, "html-img", content)
     findings, _, _ = lint_deck(deck)
+    assert not any(f.rule == "L3" for f in findings)
+    # but a relative html src IS flagged
+    content2 = content.replace('src="/figures/foo.png"',
+                               'src="./public/figures/foo.png"'
+                               ).replace("id: html-img", "id: html-img2")
+    _write_slide(deck, "html-img2", content2)
+    findings, _, _ = lint_deck(deck)
     assert any(f.rule == "L3" for f in findings)
 
 
-def test_l4_blank_line_in_slot_errors(tmp_path):
+def test_l4_blank_line_before_prose_warns_but_list_pattern_passes(tmp_path):
     deck = _make_deck(tmp_path)
-    # Two-paragraph slot body: MDC closes the block at the blank line.
+    # Blank line before PROSE: warn (may close MDC containers on other
+    # themes). Blank line before a LIST (the ILSE intro-blank-bullets
+    # house pattern, proven on three shipping decks): no finding.
     content = (
         "---\nid: blank-slot\nlayout: slide5\nsources: []\n---\n\n"
         "::title::\nBlank line inside slot test\n\n"
@@ -217,7 +229,49 @@ def test_l4_blank_line_in_slot_errors(tmp_path):
     _write_slide(deck, "blank-slot", content)
     findings, _, _ = lint_deck(deck)
     l4 = [f for f in findings if f.rule == "L4"]
-    assert len(l4) == 1 and l4[0].severity == ERROR
+    assert len(l4) == 1 and l4[0].severity == WARNING
+
+    content_list = (
+        "---\nid: intro-list\nlayout: slide5\nsources: []\n---\n\n"
+        "::title::\nIntro then bullets\n\n"
+        "::body-16::\nOne short intro sentence here.\n\n"
+        "- first item\n- second item\n\n"
+        + LONG_NOTES
+    )
+    _write_slide(deck, "intro-list", content_list)
+    findings, _, _ = lint_deck(deck)
+    assert not any(f.rule == "L4" and "intro-list" in str(f.file)
+                   for f in findings)
+
+
+def test_l13_house_style_chars(tmp_path):
+    deck = _make_deck(tmp_path)
+    content = (
+        "---\nid: styley\nlayout: slide5\nsources: []\n---\n\n"
+        "::title::\nStyle test\n\n"
+        "::body-16::\nA line with an em-dash — right here.\n\n"
+        "- item · with centre dot\n\n"
+        + LONG_NOTES
+    )
+    _write_slide(deck, "styley", content)
+    findings, _, _ = lint_deck(deck)
+    l13 = [f for f in findings if f.rule == "L13"]
+    assert len(l13) == 2
+    assert all(f.severity == ERROR for f in l13)
+
+
+def test_l14_attribute_quoting(tmp_path):
+    deck = _make_deck(tmp_path)
+    content = (
+        "---\nid: quoted\nlayout: slide5\nsources: []\n---\n\n"
+        "::title::\nQuote test\n\n"
+        "::picture-14::\n"
+        "<img src=\"/figures/a.png\" alt=\"the root \"Forming\" branches\" style=\"x\" />\n\n"
+        + LONG_NOTES
+    )
+    _write_slide(deck, "quoted", content)
+    findings, _, _ = lint_deck(deck)
+    assert any(f.rule == "L14" and f.severity == ERROR for f in findings)
 
 
 def test_l5_bad_yaml_errors(tmp_path):

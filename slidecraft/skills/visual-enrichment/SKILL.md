@@ -195,9 +195,17 @@ xychart-beta
 ```
 ````
 
-### 3d. Hierarchy → Mermaid Mindmap or Graph Tree
+### 3d. Hierarchy → Mind map (delegate) or Mermaid Graph Tree
 
-Use `mindmap` for concept maps with one root and radiating branches. Use `graph TD` for strict top-down org-chart style hierarchies.
+**Delegate genuine concept/mind maps to the [`mind-map`](../mind-map/SKILL.md) skill
+(→ [`mind-map-expert`](../../agents/mind-map-expert.md) agent).** When a slide is a
+true mind map — one root, radiating branches, and especially any cross-branch links
+or a need for curved/organic styling or a non-tree layout (radial, fishbone, org) —
+hand it off: that path uses `simple-mind-map` (live Vue component) and looks far
+better than a Mermaid stub. The Mermaid `mindmap` below is only a low-fidelity
+fallback for a quick throwaway tree with no cross-links.
+
+Use `graph TD` for strict top-down org-chart style hierarchies.
 
 **Mindmap rules:**
 - Root node is at the top level (no indentation).

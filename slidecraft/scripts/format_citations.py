@@ -389,6 +389,16 @@ def _load_bibliography(bib_path: Path, style: str):
     # files, which fails on any entry with non-ASCII characters (German
     # umlauts, en-dashes, etc.). Real-world references.bib files are
     # almost always UTF-8.
+    #
+    # citeproc-py's BibTeX parser only knows the classic entry types and
+    # raises KeyError('online') on biblatex types — and ONE unknown type
+    # aborts the whole parse (every key then reports as missing, which is
+    # maddening to debug; found retrofitting SPRINT_3). Extend its type
+    # map with the biblatex web types our bibtex-guide.md recommends.
+    from citeproc.source.bibtex.bibtex import BibTeX as _BibTeXClass
+    for _btype, _csl in (("online", "webpage"), ("electronic", "webpage"),
+                         ("www", "webpage")):
+        _BibTeXClass.types.setdefault(_btype, _csl)
     source = cp.BibTeX(str(bib_path), encoding="utf-8")
     biblio = cp.CitationStylesBibliography(style_obj, source,
                                             cp.formatter.plain)

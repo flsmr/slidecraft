@@ -1,69 +1,64 @@
 ---
-description: Scaffold a new Slidev presentation that consumes an existing theme
+description: Front door for creating a deck — theme pack + skeleton interview, scaffold, then the autonomous build
 argument-hint: [deck-name]
 ---
 
-# New Deck
+# New Deck (the front door)
 
-Thin wrapper around `python -m slidecraft.scaffold.new_deck`. The script
-does all the mechanics (mkdir, render templates, compute portable relative
-path, npm install). Your job is just to gather three inputs from the user
-and invoke it once.
+Creates a deck from a **theme pack skeleton** (see `/CONTEXT.md` + ADR-0001/0002): interview →
+scaffold → autonomous build. The interview derives everything it can from the sources FIRST and
+asks the user to confirm ONCE (workflow-design decisions 6/7). After the confirm round the build
+is fully autonomous.
 
-## Steps
+## Step 1 — Pick pack + skeleton
+- Read `~/.slidecraft/packs.json`. If missing or empty: ask the user for the theme-pack folder and
+  register it there (`{"packs":[{"name":"...","path":"..."}]}`).
+- Read `<pack>/pack.json` and each `<pack>/skeletons/<name>/skeleton.json`.
+- AskUserQuestion (skip whatever is unambiguous): theme pack (if several), skeleton (if several),
+  deck name (`$ARGUMENTS` if given) + deck parent folder (default: where the previous decks live).
 
-1. **Gather inputs.** Three pieces of information are needed:
+## Step 2 — Sources in, derive everything
+- `mkdir <deck>/resources`; ask the user to drop (or point you at) the chapter PDF, optional
+  template PPTX, optional exam catalogue; copy them in.
+- Extract: `python -m slidecraft.scripts.extract_chapter --deck "<deck>" --pdf "<chapter_pdf>" --prefix "chN"`.
+- Derive the skeleton's `decision_points` values (each carries a `derive` hint): chapter
+  number/title from the TOC, agenda chapters from the template PPTX Topic Outline,
+  presenter/course/module from the previous deck's recipe, date = today, divider lines from the
+  short title. Build the draft `recipe.json` (schema: `recipe.example.json`) including the
+  auto-filled `sections`. **Never ask what the sources can answer.**
 
-   - **`DECK_NAME`** — Use the argument if provided, else ask:
-     > What should the new deck be called?
+## Step 3 — ONE confirm round
+AskUserQuestion with the pre-filled values; judgment calls only:
+- title / short-title / presenter / date corrections,
+- framing-slide opt-outs (multiSelect over the skeleton's `optout: true` slides),
+- enrichment toggles pre-set from `skeleton.json.workflow` (mindmap, galleries mode, exam focus,
+  citation style), and section slide-target overrides if offered.
+Record every answer in `recipe.json` (`slide_optouts`, `workflow`, plain fields).
 
-     The deck folder name preserves what the user typed (so a name like `2026-05-26_ILSE` becomes the literal folder name they expect to see). The scaffolder lowercases it internally for the npm `name` field. If the user-supplied name still contains characters npm rejects after lowercasing (spaces, punctuation, leading `.`/`_`), ask the user to revise — the scaffolder will raise `ValueError` otherwise.
+## Step 4 — Scaffold (deterministic)
+```
+python -m slidecraft.scripts.scaffold_deck --recipe "<deck>/resources/recipe.json"
+```
+Renders the framing slides from the skeleton templates, copies deck files + deck-local layouts,
+writes `slides.md` with the CONTENT insertion marker, copies the skeleton's `author-guide.md` +
+`diagram-style.md` into `<deck>/resources/`, and records provenance. Then `npm install` in the deck.
 
-   - **`DECK_LOCATION`** — Where the deck folder will be created (the folder itself is `DECK_LOCATION/DECK_NAME`). Default to the current working directory:
-     > Where should the deck folder be created? (default: current directory)
+## Step 5 — Build
+Continue with [sprint-deck.md](sprint-deck.md) **from Step 4** (author + enrich workflow, images,
+per-slide assembly into the manifest marker, citations, verify, DONE report). The author agents
+receive `<deck>/resources/author-guide.md`; diagram prompts follow
+`<deck>/resources/diagram-style.md`; `render_references` takes `--style` and pagination from
+`recipe.workflow.citations`.
 
-   - **`THEME_DIR`** — Discover existing themes, present candidates, let the user pick. Search in this order:
-     1. Sibling directories of `DECK_LOCATION` matching `slidev-theme-*`
-     2. Parent directory of `DECK_LOCATION` matching `slidev-theme-*`
-     3. (Only if 1–2 yielded nothing) shallow search ≤ 2 levels deep under the user's home
+## Rules
+- The skeleton defines structure; the plugin defines control flow. Never invent framing slides or
+  extension points that are not in `skeleton.json` (ADR-0002).
+- `filled_by: "author"` templates (study-goals, summary, exam-focus) contain `AUTHOR:` markers —
+  the build MUST replace them all; a finished deck may not contain the string `AUTHOR:`.
+- Exam focus stays concept-level; never actual exam questions or scores on slides.
+- Decks are independent artifacts: skeleton updates never propagate to existing decks; the recipe
+  records which skeleton version created the deck.
 
-     For each candidate, verify it contains `package.json` with a `"slidev"` key. Then present:
-     > Found these themes:
-     >   1. `<name>` at `<absolute-path>`
-     >   2. …
-     > Pick one, enter a custom absolute path, or press Enter for Slidev's built-in default.
-
-     Store the chosen absolute path as `THEME_DIR`, or `null` if the user chose the default.
-
-2. **Invoke the scaffolder.** One subprocess call does everything — directory creation, template rendering, portable forward-slash relative-path computation, and `npm install`:
-
-   ```bash
-   python -m slidecraft.scaffold.new_deck \
-     --name "<DECK_NAME>" \
-     --location "<DECK_LOCATION>" \
-     --theme "<THEME_DIR>"
-   ```
-
-   Omit `--theme` entirely if the user chose Slidev's default.
-
-   **Default behaviour is gallery mode.** When a theme exposes layouts (`<theme>/layouts/*.vue`), the scaffolder emits **one starter slide per layout** with the correct `layout: slideN` frontmatter. This matters: a slide without an explicit `layout:` frontmatter uses Slidev's **built-in default layout**, NOT the theme's — so a deck full of un-tagged slides would render with zero theme styling. Gallery mode guarantees the theme actually loads on first `npx slidev`, and it doubles as a layout reference the user can browse and delete from.
-
-   Useful flags:
-   - `--minimal` — opt out of gallery mode; emit a 2-slide starter pinned to the first available theme layout. Use when the user already knows which layouts they want and prefers a blank slate.
-   - `--no-install` — skip `npm install`.
-   - `--overwrite` — allow writing into an existing directory.
-
-   The script prints a key/value summary on stdout (`deck_dir`, `deck_name`, `theme_name`, `theme_dir`, `theme_rel`, `mode`, `slide_count`, `installed`, `preview`). It exits 0 on success, 1 with an `error:` stderr line on validation failure.
-
-3. **Ensure the theme has a semantic-layout mapping.** The `authoring` skill drafts content by **role** (`cover`, `default`, `section`, …), which only works when the theme has a `<theme-dir>/semantic-layouts.json` describing which numbered layout plays which role. Brand-new imports include this step automatically (see `/slidecraft:import-template` step 9); older imported themes may be missing it.
-
-   Check whether the chosen theme has the file:
-   - If `<THEME_DIR>/semantic-layouts.json` exists: proceed.
-   - If `THEME_DIR` is `null` (user picked Slidev's built-in default theme): no mapping needed — Slidev's defaults already cover semantic role names. Proceed.
-   - Otherwise: **walk the user through the mapping interview now** using the same flow as `/slidecraft:import-template` step 9 (sub-steps 9a through 9g). Don't skip — this is one-time, and a deck without it can't be authored by role.
-
-4. **Report to the user.** Echo the scaffolder's summary, then point them at the preview command from the `preview:` line (always of the form `cd "<deck_dir>" && npx slidev`). Mention the two scaffolded folders:
-   - `public/` — runtime-served by Slidev; drop here any image/video referenced from a slide as `/file.ext`.
-   - `resources/` — source material the deck is based on (papers, raw images, outlines, meeting notes). NOT served by Slidev; this is the user's input archive. A `README.md` inside explains the convention.
-
-That's it — no manual file creation, no per-step orchestration. Every detail of layout, templates, and dependency wiring lives in `slidecraft/scaffold/new_deck.py` (and is covered by its tests).
+## Fallback — no pack fits
+For a quick generic Slidev deck outside any theme pack (no skeleton, no build workflow), the old
+scaffolder still works: `python -m slidecraft.scaffold.new_deck --name ... --location ... [--theme <dir>]`.

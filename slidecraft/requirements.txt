@@ -1,2 +1,4 @@
 pymupdf>=1.24
 citeproc-py>=0.7
+pillow>=10          # image checks (lint L15), pixel edits, downscaling
+rispy>=0.9          # optional: RIS import for academic sources (import_ris.py)
