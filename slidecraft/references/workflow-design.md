@@ -12,6 +12,20 @@ revisiting the decision, not by drift.
 > points) replaces the type-collection bootstrap; registered pack links live in user-local
 > config. Decks remain independent artifacts, now with full provenance in recipe.json.
 
+> **2026-07-15 grounding + figure-review addendum (extends decisions 6, 9, 10; see `/CONTEXT.md`
+> glossary + `references/evidence-sidecars.md` + `agents/image-critic.md`):** (a) **Evidence sidecars**
+> — every slide gets `resources/evidence/<slug>.json` (each claim's source key+locator+verbatim
+> excerpt; each figure's intended labels/relationships/`must_not`), emitted by the authoring workflows
+> and persisted by `scripts/write_evidence.py`; it makes decision 6's grounding machine-checkable per
+> slide. (b) The improve loop (decision 9) gains an **`image-critic`** pass — a devil's-advocate vision
+> reviewer for non-photographic figures that reads what is actually rendered and checks it against the
+> slide + sidecar; it runs on a SINGLE model (GPT-5.6 sol via OWUI, `scripts/image_critic.py`), a
+> multi-model panel having been rejected as too costly. (c) A skeleton's `diagram-style.md` now carries a
+> **consistency contract** that `scripts/gen_figure.py` pastes into every image prompt AND the
+> image-critic enforces — one contract, both sides (extends decision 10's backend convention). (d) The
+> theme pack `slidev-theme-ilse` is now its own git repo (local; remote TBD) — migration note below is
+> in progress.
+
 ---
 
 ## The 15 decisions
