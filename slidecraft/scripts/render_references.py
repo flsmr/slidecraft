@@ -191,8 +191,13 @@ def image_entry_html(fields: dict[str, str]) -> str:
     org = fields.get("organization") or fields.get("howpublished") or ""
     url = fields.get("url", "")
     note = fields.get("note", "")
-    kind = ("AI-generated image" if "ai-generated" in fields.get("keywords", "")
-            else "Photograph")
+    kw = fields.get("keywords", "")
+    if "ai-generated" in kw:
+        kind = "AI-generated image"
+    elif "diagram" in kw:
+        kind = "Vector diagram"
+    else:
+        kind = "Photograph"
     parts = [f"{author}. ({year}). <em>{title}</em> [{kind}]."]
     if org:
         parts.append(f"{org}.")
@@ -294,14 +299,21 @@ def main(argv=None) -> int:
             (deck / "slides" / f"{slug}.md").write_text(
                 page_md(title, body, footer, date), encoding="utf-8", newline="\n")
 
-    # ---- image-sources pages (ALL image entries; photos then AI) ----
+    # ---- image-sources pages (ALL image entries; photos, diagrams, then AI) ----
     img_items = [(k, f) for k, f in fields_by_key.items() if is_image_entry(f)]
-    photos = [(k, f) for k, f in img_items if "ai-generated" not in f.get("keywords", "")]
-    ai = [(k, f) for k, f in img_items if "ai-generated" in f.get("keywords", "")]
+    def _kw(f): return f.get("keywords", "")
+    diagrams = [(k, f) for k, f in img_items
+                if "diagram" in _kw(f) and "ai-generated" not in _kw(f)]
+    ai = [(k, f) for k, f in img_items if "ai-generated" in _kw(f)]
+    photos = [(k, f) for k, f in img_items
+              if "ai-generated" not in _kw(f) and "diagram" not in _kw(f)]
     blocks: list[str] = []
     if photos:
         blocks.append('<p class="sh"><strong>Photographs</strong></p>')
         blocks += [image_entry_html(f) for _, f in photos]
+    if diagrams:
+        blocks.append('<p class="sh"><strong>Author-drawn figures</strong></p>')
+        blocks += [image_entry_html(f) for _, f in diagrams]
     if ai:
         blocks.append('<p class="sh"><strong>AI-generated figures</strong></p>')
         blocks += [image_entry_html(f) for _, f in ai]
