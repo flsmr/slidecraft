@@ -51,12 +51,13 @@ with author initials. Each finding must give the exact fix (colon/comma, add int
   'slide-critic': `Read ${SLIDES}. For ${SCOPE}, judge each content slide: is the title a concept name and the body
 evidence (not filler paraphrasing the title)? Flag topic-label titles, >5 bullets, monotony (too many identical
 layouts in a row), and any slide carrying two ideas.`,
-  'image-critic': `Read slidecraft/agents/image-critic.md and follow it as a devil's advocate: discover every
-<img> in ${SLIDES}, skip photographic ones, and deep-inspect each NON-photographic image (diagram, infographic,
-mind map, chart, redrawn figure) by opening it with vision and cross-checking it against its slide's title,
-bullets, alt text, caption, and the grounding in ${RES}. Run the full A–G checklist (text integrity, colour and
-accent discipline, shape and layout, logical structure and semantics, figure-slide coherence, rendering
-artefacts, legibility). Quote the exact rendered text as evidence for every text finding.`,
+  'image-critic': `Read slidecraft/agents/image-critic.md and follow it as a devil's advocate. PRIMARY runner:
+run \`python -m slidecraft.scripts.image_critic --deck ${DECK}\` — it inspects every NON-photographic figure on the
+single vision model GPT-5.6 sol via OWUI and writes resources/image_critic_report.md + image_critic_findings.json.
+Read those findings and RECONCILE each against the slide's evidence sidecar (${RES}/evidence/<slug>.json): drop any
+text/label claim the sidecar's intended_labels/relationships confirm, and raise a finding to high if it hits a
+\`must_not\`. If OWUI is unavailable (script errors), inspect the figures yourself with vision using the A–H
+checklist. Quote the exact rendered text as evidence for every text finding.`,
   'visual-enrichment': `Read ${SLIDES}. For ${SCOPE}, name slides that are text-heavy and would teach better as a
 diagram, a split image slide, or a real-photo gallery. Suggest the specific visual per slide. Suggestions only, no
 invented content.`,

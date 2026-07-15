@@ -16,8 +16,10 @@ machinery behind single-slide "tweak" phrases.
   `sequential` if the user wants each pass to build on the previous.
 - `image-critic` (see `slidecraft/agents/image-critic.md`) is the devil's-advocate vision pass: it opens every
   non-photographic figure (diagram, infographic, mind map, chart, redrawn figure) and checks rendered text,
-  colour/accent, shape/layout, logical structure, and figure-slide coherence. Its `fix` values feed the image
-  tweak ladder in the catalog below (regenerate via canonical-labels, pixel-surgery, swap layout, native HTML).
+  colour/accent, shape/layout, logical structure, and figure-slide coherence. It runs on a SINGLE model —
+  `python -m slidecraft.scripts.image_critic --deck <deck>` (GPT-5.6 sol via OWUI; a panel was rejected as too
+  costly), reconciled against the per-slide evidence sidecar to drop false positives. Its `fix` values feed the
+  image tweak ladder in the catalog below (regenerate via canonical-labels, pixel-surgery, swap layout, native HTML).
 
 ## Step 2 — Run the workflow
 ```

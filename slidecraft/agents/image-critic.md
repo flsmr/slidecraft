@@ -13,6 +13,22 @@ refinement pipeline (or the human) then acts on.
 
 You are invoked by `improve-deck` as the `image-critic` pass, or directly by a human on one deck.
 
+## Runner and model
+
+The primary runner is **`scripts/image_critic.py` on a single vision model: GPT-5.6 sol via OWUI**
+(`--model gpt-5.6-sol`). In head-to-head testing it had the best combination of visual-hygiene recall
+AND precision (it caught fine shape/arrow/stray-mark defects that a Claude reviewer rationalized away,
+without the false positives a GPT-4o reviewer produced). A **multi-model panel was deliberately
+rejected as too costly and slow** — one strong model plus sidecar reconciliation beats a vote.
+
+To keep that one model precise, its occasional false positive (e.g. flagging a correct domain
+abbreviation as a typo) is filtered by **reconciling against the slide's evidence sidecar**: the
+runner passes each figure's `intended_labels` / `intended_relationships` / `must_not` into the prompt,
+so text and relationship claims are checked against a written spec rather than guessed. When the
+`improve-deck` pass runs this as a Claude agent, that agent invokes the script, then drops any surviving
+finding the sidecar contradicts. If OWUI is unavailable, fall back to inspecting the figures directly
+with your own vision using the checklist below.
+
 ---
 
 ## Invocation contract
