@@ -225,19 +225,29 @@ findings most-severe first. Prefer specific, quotable evidence (the exact garble
 nodes an arrow wrongly joins) over vague impressions.
 
 Severity rubric:
-- **high** — a viewer will believe something false or be unable to read a key element: a garbled
-  or wrong label, a wrong number, an arrow/grouping that encodes the wrong relationship, a missing
-  promised element, a figure that does not match its slide.
+**high is for CORRECTNESS defects only** — the viewer will believe something FALSE or cannot read a
+key element: a garbled or wrong label, a wrong number, an arrow/grouping that encodes the wrong
+RELATIONSHIP (wrong node connected, wrong direction, wrong grouping), a missing promised element, or
+a figure that does not match its slide. A relationship drawn correctly but whose *junction is not
+marked with an explicit node*, or whose connector gap is a few pixels uneven, is NOT high — the
+relationship is right; that is hygiene (med at most).
 - **med** — quality/consistency defect that does not change the meaning: off-palette or misplaced
-  accent, overlap, size/shape inconsistency, alt-text drift, mild clipping, an individual
-  visual-hygiene issue (H-group). A **cluster** of visual-hygiene findings on one figure escalates:
-  when a figure trips several H-checks (mixed shapes AND stray marks AND wasted canvas), record an
-  extra summary finding "figure reads as untidy, regenerate for consistency" at **med** (raise to
-  high if the untidiness undermines credibility in a teaching context).
+  accent, overlap, size/shape inconsistency, alt-text drift, mild clipping, or any individual
+  visual-hygiene issue (H-group), INCLUDING imperfect merge-junction drawing and non-uniform
+  connector gaps. AI-rendered diagrams never have pixel-perfect junctions; do not escalate that to
+  high. A cluster of hygiene findings may add one summary finding "reads as untidy, regenerate" at med.
 - **low** — cosmetic polish: slight misalignment, aspect letterboxing, minor single-spot spacing.
 
-Do not let the sheer number of small H-findings be an excuse to under-report them: list each one
-(they are individually cheap to fix in a regeneration) AND the summary tidiness finding.
+Two calibration guards, so a correct figure is not failed on pedantry:
+- The **base palette is not "multiple accents"**: one primary fill (teal) + one secondary fill
+  (grey-blue) + white background is the CONTRACT, not an accent violation. Only an ADDITIONAL hue
+  beyond the contract palette, or the coral used on more than one element, is an accent finding.
+- A **correctly drawn merged connector** (several sources into one arrowhead) is correct even if the
+  junction lacks an explicit dot or the two lines meet at slightly different angles — med hygiene, not
+  a high LOGIC defect.
+
+Do not let the sheer number of small H-findings be an excuse to under-report them: list each one AND
+the summary tidiness finding.
 
 For each finding give: `image`, `slide`, `category` (A1…G2 or a new slug), `severity`,
 `issue` (one sentence), `evidence` (what you actually saw — quote rendered text verbatim),
@@ -245,9 +255,16 @@ For each finding give: `image`, `slide`, `category` (A1…G2 or a new slug), `se
 swap layout / correct the alt text / replace with a native HTML build), and `confidence`
 (high|med|low — say so when a label is too small to be sure).
 
-Also give each image a `verdict`: `pass` (ship it) | `minor` (ship with low/med fixes) |
-`fail` (a high-severity defect; regenerate or replace before shipping), and an overall
-`deck_image_verdict`.
+Also give each image a `verdict`, by this HARD rule (do not fail a figure on hygiene alone):
+- `fail` — ONLY when there is at least one **high-severity CORRECTNESS** finding (wrong/garbled
+  label, wrong number, wrong relationship/grouping/direction, missing promised element, figure-slide
+  mismatch). Regenerate or replace before shipping.
+- `minor` — no high-severity correctness defect, but one or more med/low findings (hygiene, accent,
+  spacing, alt-text drift). Shippable; apply the cheap fixes when convenient.
+- `pass` — nothing above low.
+
+A figure whose labels, numbers and relationships are all correct is at worst `minor`, however many
+tidiness nits remain. Then give an overall `deck_image_verdict`.
 
 ## Constraints
 - **Report only.** Never edit slides, images, or the manifest. You produce findings; the

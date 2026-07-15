@@ -37,7 +37,18 @@ H HYGIENE: one connector style (weight + arrowhead); merged lines share ONE arro
   uniform padding, no overflow; one annotation rule for peers; charts use one encoding for every series.
 
 Return findings as lines: [severity high|med|low] <category> - <issue> - <evidence: quote/point precisely>.
-Then a one-line verdict: pass | minor | fail. Be specific and exhaustive."""
+
+SEVERITY CALIBRATION (do not fail a correct figure on pedantry):
+- high is for CORRECTNESS ONLY: a wrong/garbled label, wrong number, wrong relationship/grouping/direction,
+  a missing promised element, or a figure that does not match its slide. A relationship drawn correctly but
+  whose merge-junction lacks an explicit node, or whose connector gap is a few pixels uneven, is NOT high --
+  the relationship is right; that is med hygiene. AI-rendered diagrams never have pixel-perfect junctions.
+- The base palette is NOT multiple accents: one teal primary fill + one grey-blue secondary fill + white
+  background is the intended contract. Only an ADDITIONAL hue, or coral on more than one element, is an accent finding.
+
+Then a one-line verdict by this HARD rule: 'fail' ONLY if there is at least one high-severity CORRECTNESS
+finding; otherwise 'minor' if any med/low findings remain; 'pass' if nothing above low. A figure whose labels,
+numbers and relationships are all correct is at worst 'minor', however many tidiness nits remain."""
 
 
 def load_slides(deck):
