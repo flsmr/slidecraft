@@ -97,8 +97,10 @@ _Avoid_: framing slide, non-content slide, scaffolding slide, template slide
 **Decision point**:
 Claude Code's structured option-list question (the AskUserQuestion mechanism) put to the
 user. The `/init-deck` interview is a sequence of decision points — topic, audience,
-language, theme location, length, deck type, setting — whose answers become the deck
-context. (No output-folder question — the deck root is the working directory, D25.)
+language, theme location, length (**max duration**; slides derived at ~1.5 min/slide, D38),
+deck type, setting — whose answers become the deck context. (No output-folder question — the
+deck root is the working directory, D25. Theme is asked early so the Slidev install can run in
+the background during the rest of the interview, D38.)
 _Avoid_: prompt, dialog, free-form question
 
 **Deck context**:
