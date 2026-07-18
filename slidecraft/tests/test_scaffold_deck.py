@@ -164,3 +164,150 @@ def test_footer_derived_from_presenter_only(tmp_path):
     scaffold_deck.scaffold(deck, ans)
     ctx = json.loads((deck / "deck-context.json").read_text(encoding="utf-8"))
     assert ctx["injection"]["slide-composer"]["FOOTER"] == "Jane Roe"
+
+
+# ---------------------------------------------------------------------------
+# D38 — duration → slides pacing (max_slides derived when not given)
+# ---------------------------------------------------------------------------
+
+
+def test_max_slides_derived_from_duration_at_1_5_min(tmp_path):
+    deck = tmp_path / "deck"
+    deck.mkdir()
+    # 45 min lecture at the default 1.5 min/slide -> 30 slides.
+    ans = _answers({"type": "builtin", "source": "default"},
+                   max_duration_minutes=45)
+    ans.pop("max_slides")
+    scaffold_deck.scaffold(deck, ans)
+    ctx = json.loads((deck / "deck-context.json").read_text(encoding="utf-8"))
+    assert ctx["deck"]["max_slides"] == 30
+    assert ctx["injection"]["storyteller"]["MAX-SLIDES"] == "30"
+
+
+def test_explicit_max_slides_overrides_duration(tmp_path):
+    deck = tmp_path / "deck"
+    deck.mkdir()
+    ans = _answers({"type": "builtin", "source": "default"},
+                   max_duration_minutes=45, max_slides=12)
+    scaffold_deck.scaffold(deck, ans)
+    ctx = json.loads((deck / "deck-context.json").read_text(encoding="utf-8"))
+    assert ctx["deck"]["max_slides"] == 12
+
+
+def test_pacing_varies_by_deck_type():
+    # Pitch is faster (0.75 min/slide) than a lecture (1.5), so the same
+    # duration yields more slides.
+    assert scaffold_deck.minutes_per_slide("lecture") == 1.5
+    assert scaffold_deck.minutes_per_slide("pitch") == 0.75
+    # Unknown type falls back to the 1.5 default.
+    assert scaffold_deck.minutes_per_slide("mystery") == 1.5
+    assert scaffold_deck.derive_max_slides(
+        {"max_duration_minutes": 30, "deck_type": "pitch"}) == 40
+
+
+# ---------------------------------------------------------------------------
+# D38 — local theme localized into ./theme (self-contained deck)
+# ---------------------------------------------------------------------------
+
+
+def test_local_theme_copied_into_deck_and_referenced_relatively(tmp_path):
+    theme_dir = _make_theme(tmp_path / "brand-theme", styleguide=True)
+    deck = tmp_path / "deck"
+    deck.mkdir()
+    ans = _answers({"type": "local", "source": str(theme_dir)})
+
+    scaffold_deck.scaffold(deck, ans)
+
+    # The theme is copied into the deck's theme/ subfolder...
+    assert (deck / "theme" / "layouts" / "slide1.vue").is_file()
+    assert (deck / "theme" / "styleguide.md").is_file()
+
+    ctx = json.loads((deck / "deck-context.json").read_text(encoding="utf-8"))
+    # ...and referenced by the portable ./theme path in the context + slides.md.
+    assert ctx["theme"]["type"] == "local"
+    assert ctx["theme"]["source"] == "./theme"
+    assert "theme: ./theme" in (deck / "slides.md").read_text(encoding="utf-8")
+    # Capabilities are scanned from the *copied* theme (alias contract intact).
+    assert ctx["theme"]["capabilities"]["layouts"][0]["alias"] == "cover"
+
+
+def test_localize_theme_idempotent_when_theme_dir_exists(tmp_path):
+    theme_dir = _make_theme(tmp_path / "brand-theme")
+    deck = tmp_path / "deck"
+    deck.mkdir()
+    # Pre-create theme/ (as a prewarm would) with a marker file; localize must
+    # not overwrite it.
+    (deck / "theme").mkdir()
+    (deck / "theme" / "MARKER").write_text("kept", encoding="utf-8")
+
+    portable, scan_source = scaffold_deck.localize_theme(
+        deck, {"type": "local", "source": str(theme_dir)})
+
+    assert portable == {"type": "local", "source": "./theme"}
+    assert (deck / "theme" / "MARKER").read_text(encoding="utf-8") == "kept"
+    assert not (deck / "theme" / "layouts").exists()  # copy skipped
+
+
+def test_builtin_theme_not_localized(tmp_path):
+    deck = tmp_path / "deck"
+    deck.mkdir()
+    portable, scan_source = scaffold_deck.localize_theme(
+        deck, {"type": "builtin", "source": "default"})
+    assert portable == {"type": "builtin", "source": "default"}
+    assert scan_source == "default"
+    assert not (deck / "theme").exists()
+
+
+# ---------------------------------------------------------------------------
+# D38 — prewarm phase (folders + theme copy + package.json, no deck-context)
+# ---------------------------------------------------------------------------
+
+
+def test_prewarm_lays_down_npm_project_without_deck_context(tmp_path):
+    theme_dir = _make_theme(tmp_path / "brand-theme")
+    deck = tmp_path / "deck"
+    deck.mkdir()
+    ans = {"topic": "Object Tracking",
+           "theme": {"type": "local", "source": str(theme_dir)}}
+
+    summary = scaffold_deck.prewarm(deck, ans)
+
+    assert summary["phase"] == "prewarm"
+    assert summary["node_modules_present"] is False
+    # Physical scaffold present...
+    assert (deck / "package.json").is_file()
+    assert (deck / ".gitignore").is_file()
+    assert (deck / "theme" / "layouts" / "slide1.vue").is_file()
+    assert (deck / "input" / "processed").is_dir()
+    # ...but NOT the full-phase artifacts.
+    assert not (deck / "deck-context.json").exists()
+    assert not (deck / "slides.md").exists()
+
+
+def test_full_scaffold_after_prewarm_is_idempotent(tmp_path):
+    theme_dir = _make_theme(tmp_path / "brand-theme")
+    deck = tmp_path / "deck"
+    deck.mkdir()
+    prewarm_ans = {"topic": "Object Tracking",
+                   "theme": {"type": "local", "source": str(theme_dir)}}
+    scaffold_deck.prewarm(deck, prewarm_ans)
+
+    # Then the full scaffold with the same (localized) theme completes the deck.
+    full_ans = _answers({"type": "local", "source": str(theme_dir)},
+                        max_duration_minutes=30)
+    full_ans.pop("max_slides")
+    summary = scaffold_deck.scaffold(deck, full_ans)
+
+    assert summary["phase"] == "full"
+    ctx = json.loads((deck / "deck-context.json").read_text(encoding="utf-8"))
+    assert ctx["theme"]["source"] == "./theme"
+    assert ctx["deck"]["max_slides"] == 20  # 30 min / 1.5
+
+
+def test_prewarm_refuses_existing_deck(tmp_path):
+    deck = tmp_path / "deck"
+    deck.mkdir()
+    (deck / "deck-context.json").write_text("{}", encoding="utf-8")
+    ans = {"topic": "X", "theme": {"type": "builtin", "source": "default"}}
+    with pytest.raises(SystemExit):
+        scaffold_deck.prewarm(deck, ans)
