@@ -1,274 +1,462 @@
-# -*- coding: utf-8 -*-
-"""Scaffold a new deck from a THEME-PACK SKELETON (ADR-0001/0002).
+#!/usr/bin/env python
+"""Scaffold a fresh Slidecraft deck in the current working directory.
 
-Reads a theme pack (pack.json + skeletons/<name>/skeleton.json), renders the
-skeleton's framing-slide templates with @@KEY@@ placeholders from recipe.json,
-copies the deck-files (package.json, vite config, deck-local layouts, launcher),
-writes the slides.md manifest with a CONTENT insertion marker, copies the
-skeleton's author-guide.md + diagram-style.md into <deck>/resources/, and
-records full provenance in <deck>/resources/recipe.json.
+``/init-deck`` runs this after the interview. The deck root is the CWD (D25):
+the user creates the target folder, launches Claude inside it, and this script
+lays down the empty deck skeleton — folders, ``deck-context.json`` (interview
+answers + derived per-agent injection blocks + scanned theme capabilities),
+``slides.md`` headmatter, a minimal npm project so Slidev can render it, and the
+double-click launchers.
 
-Usage:
-  python -m slidecraft.scripts.scaffold_deck --recipe <recipe.json> \
-      [--pack <path-or-registered-name>] [--skeleton sprint] [--force]
+Deterministic, no LLM. Refuses to clobber an existing deck (a
+``deck-context.json`` already in CWD).
 
-Pack resolution order: --pack as a path; --pack as a name in the user-local
-registry ~/.slidecraft/packs.json; recipe["provenance"]["pack_path"].
-The deck target is <recipe.deck_location>/<recipe.deck_name>. resources/ may
-already exist (extraction runs before scaffolding); slides/ must not, unless
---force is given.
+Two phases (D38 — cut the first-view wait):
+
+* ``--prewarm`` runs the parts that only need **topic + theme**, as early in the
+  interview as possible: create folders, **copy a local theme into the deck's
+  ``theme/`` subfolder** (self-containment), write ``package.json`` + ``.gitignore``
+  + the launchers. ``/init-deck`` then kicks off ``npm install`` **in the
+  background** while the rest of the interview runs, so Slidev is already
+  installed by the time the user previews.
+* the default (full) phase writes everything: ``deck-context.json``,
+  ``slides.md``, ``associations.json`` (and re-runs the prewarm steps
+  idempotently, so a standalone full run still produces a complete deck).
+
+CLI:  python scaffold_deck.py --answers PATH [--prewarm]
+
+``answers`` JSON:
+  {topic, audience, language, deck_type, setting, max_duration_minutes,
+   max_slides?, theme,
+   presenter?, institution?, course?, date?}
+where ``theme`` = {type: "builtin"|"local"|"npm"|"github",
+                   source: "<name-or-path-or-url>"}.
+
+``max_slides`` is **optional** (D38): when absent it is derived from
+``max_duration_minutes`` via the deck's slide-to-time pacing (default
+1.5 min/slide; per-deck-type table below). An explicit ``max_slides`` always
+wins, so the user can override the estimate.
+
+``presenter``/``institution``/``course``/``date`` are optional deck metadata
+(ticket 10, T6): the fields the old skeleton substituted into cover / footer /
+thank-you slots. They land in ``deck-context.deck`` and are exposed to the
+slide-composer so structural slides can be authored; a ``FOOTER`` is derived as
+``presenter · date``. Absent fields become empty strings.
 """
-import argparse
-import datetime
-import io
-import json
-import os
-import re
-import shutil
-import sys
+import argparse, json, shutil, sys
+from pathlib import Path
 
-REGISTRY = os.path.expanduser("~/.slidecraft/packs.json")
-MARKER = "<!-- ===== CONTENT SECTIONS (inserted by the build workflow) ===== -->"
+# Same-directory import (scripts are referenced by absolute path, D27/D33).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import scan_theme  # noqa: E402
+
+# 0.5: prewarm phase + local-theme localization to ``theme/`` + duration→slides
+# pacing (D38). 0.4 added theme.styleguide + enriched slot-role capabilities +
+# composer STYLE-GUIDE injection + optional deck metadata (T3/T6).
+SCHEMA_VERSION = "0.5"
+
+FOLDERS = [
+    "input/processed",
+    "sources",
+    "slides",
+    "nuggets",
+    "public/extracted",
+    "public/generated",
+    "assets",
+    "logs",
+]
+
+# The interview fields the *full* scaffold needs. ``max_slides`` is intentionally
+# absent — it is derived from ``max_duration_minutes`` when not supplied (D38).
+REQUIRED_ANSWER_FIELDS = [
+    "topic", "audience", "language", "deck_type", "setting",
+    "max_duration_minutes", "theme",
+]
+# The prewarm phase only needs enough to lay down the npm project + theme copy.
+REQUIRED_PREWARM_FIELDS = ["topic", "theme"]
+
+# ---------------------------------------------------------------------------
+# Slide-to-time pacing (D38)
+# ---------------------------------------------------------------------------
+# Minutes of speaking time per slide, used to turn the interview's *duration*
+# answer into a slide budget. Default 1.5 min/slide (user preference,
+# 2026-07-18) — also the academic/lecture value. The per-deck-type table is
+# derived from the legacy "Slide-to-Time Ratios" (best-practices.md): the
+# min/slide figure is 1 / slides-per-minute for each deck kind. Unknown types
+# fall back to the 1.5 default.
+MINUTES_PER_SLIDE_DEFAULT = 1.5
+MINUTES_PER_SLIDE_BY_TYPE = {
+    "lecture": 1.5, "academic": 1.5, "academic lecture": 1.5,
+    "pitch": 0.75, "keynote": 0.75,
+    "executive meeting": 1.25, "executive": 1.25,
+    "status report": 1.25, "business": 1.25,
+    "conference talk": 1.0,
+    "workshop": 2.0,
+    "technical": 2.5,
+}
+
+# Local themes are copied here so the deck is self-contained (D38).
+THEME_SUBDIR = "theme"
+# Don't drag a theme's build detritus into the deck when copying it in.
+_THEME_COPY_IGNORE = shutil.ignore_patterns(
+    "node_modules", ".git", ".hg", ".svn", "dist", ".cache", "*.log")
 
 
-def fail(msg: str) -> None:
-    print("ERROR:", msg)
-    sys.exit(2)
+def minutes_per_slide(deck_type: str) -> float:
+    """Speaking minutes per slide for a deck type (default 1.5, D38)."""
+    return MINUTES_PER_SLIDE_BY_TYPE.get(
+        (deck_type or "").strip().lower(), MINUTES_PER_SLIDE_DEFAULT)
 
 
-def load_json(path: str) -> dict:
-    with io.open(path, encoding="utf-8") as f:
-        return json.load(f)
+def derive_max_slides(ans: dict) -> int:
+    """The slide budget: an explicit ``max_slides`` wins; else duration ÷ pace.
+
+    A duration answer (minutes) is converted with the deck-type pace
+    (``minutes_per_slide``), rounded to the nearest whole slide, floored at 1.
+    """
+    explicit = ans.get("max_slides")
+    if explicit not in (None, "", 0, "0"):
+        return int(explicit)
+    dur = ans.get("max_duration_minutes")
+    if dur in (None, "", 0, "0"):
+        sys.exit("ERROR: answers need either max_slides or max_duration_minutes")
+    try:
+        dur = float(dur)
+    except (TypeError, ValueError):
+        sys.exit(f"ERROR: max_duration_minutes must be a number, got {dur!r}")
+    pace = minutes_per_slide(ans.get("deck_type", ""))
+    return max(1, round(dur / pace))
 
 
-def resolve_pack(pack_arg: str | None, recipe: dict) -> str:
-    candidates = []
-    if pack_arg:
-        if os.path.isdir(pack_arg):
-            return os.path.abspath(pack_arg)
-        candidates.append(pack_arg)
-    prov = recipe.get("provenance") or {}
-    if prov.get("pack_path") and os.path.isdir(prov["pack_path"]):
-        return os.path.abspath(prov["pack_path"])
-    if os.path.isfile(REGISTRY):
-        reg = load_json(REGISTRY)
-        packs = reg.get("packs", [])
-        if candidates:
-            for p in packs:
-                if p.get("name") == candidates[0]:
-                    return os.path.abspath(p["path"])
-            fail(f"pack '{candidates[0]}' not in {REGISTRY}")
-        if len(packs) == 1:
-            return os.path.abspath(packs[0]["path"])
-        if packs:
-            fail(f"several packs registered in {REGISTRY}; pass --pack <name>")
-    fail("no theme pack found: pass --pack <path> or register one in ~/.slidecraft/packs.json")
-
-
-def build_values(recipe: dict) -> dict:
-    req = ["deck_name", "deck_location", "course", "module", "chapter_number",
-           "chapter_title", "chapter_title_short", "presenter", "date"]
-    missing = [k for k in req if not recipe.get(k)]
+def load_answers(path: str, *, prewarm: bool = False) -> dict:
+    p = Path(path)
+    if not p.exists():
+        sys.exit(f"ERROR: answers file {path} does not exist")
+    try:
+        ans = json.loads(p.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        sys.exit(f"ERROR: answers file is not valid JSON: {exc}")
+    required = REQUIRED_PREWARM_FIELDS if prewarm else REQUIRED_ANSWER_FIELDS
+    missing = [f for f in required if f not in ans]
     if missing:
-        fail("recipe is missing required keys: " + ", ".join(missing))
-    ch = int(recipe["chapter_number"])
-    short = str(recipe["chapter_title_short"]).strip()
-    divider = recipe.get("divider") or {}
-    parts = short.split(" ", 1)
-    prefix = (recipe.get("sources") or {}).get("prefix", f"ch{ch}")
-    agenda = recipe.get("agenda") or {}
-    chapters = agenda.get("chapters") or []
-    chapters_js = "\n".join(
-        "  '{}',".format(str(c).replace("\\", "\\\\").replace("'", "\\'")) for c in chapters)
+        sys.exit(f"ERROR: answers missing field(s): {', '.join(missing)}")
+    theme = ans["theme"]
+    if not isinstance(theme, dict) or "type" not in theme or "source" not in theme:
+        sys.exit('ERROR: theme must be {"type": ..., "source": ...}')
+    if theme["type"] not in ("builtin", "local", "npm", "github"):
+        sys.exit('ERROR: theme.type must be builtin|local|npm|github')
+    return ans
+
+
+# ---------------------------------------------------------------------------
+# Theme handling
+# ---------------------------------------------------------------------------
+
+def localize_theme(root: Path, theme: dict) -> tuple[dict, str]:
+    """Make a *local* theme part of the deck so the deck is self-contained (D38).
+
+    Copies the theme folder into ``<deck>/theme/`` and returns a theme dict
+    rewritten to reference it by the deck-relative path ``./theme`` (which is
+    what ``slides.md`` and the deck context record, so the deck folder is
+    portable). ``builtin`` / ``npm`` / ``github`` themes are returned unchanged
+    — they resolve via Slidev's registry / ``node_modules`` and are already
+    portable after ``npm install``.
+
+    Returns ``(portable_theme, scan_source)``: ``scan_source`` is the path to
+    hand to ``scan_theme`` — the **absolute** path of the copied folder for a
+    local theme (so the scan is CWD-independent), else the original source.
+
+    Idempotent: if ``theme/`` already exists (prewarm ran, or a re-run), the
+    copy is skipped and the existing copy is reused.
+    """
+    if theme.get("type") != "local":
+        return dict(theme), theme["source"]
+    dest = root / THEME_SUBDIR
+    if not dest.exists():
+        src = Path(theme["source"]).expanduser()
+        if not src.is_dir():
+            sys.exit(f"ERROR: local theme path is not a directory: {theme['source']}")
+        shutil.copytree(src, dest, ignore=_THEME_COPY_IGNORE)
+    portable = {"type": "local", "source": f"./{THEME_SUBDIR}"}
+    return portable, str(dest.resolve())
+
+
+def theme_name(theme: dict) -> str:
+    """Value for ``theme:`` in slides.md headmatter.
+
+    Source for builtin/npm/github; the local ``./theme`` path for a (localized)
+    local theme (Slidev resolves ``./`` | ``../`` | ``/`` paths directly).
+    """
+    return theme["source"]
+
+
+def theme_package(theme: dict):
+    """(pkg_name, version) to add to package.json dependencies, or None.
+
+    * builtin  -> the @slidev/theme-<name> package (default -> theme-default).
+    * npm      -> the npm package name as given.
+    * local    -> None (resolved by path in slides.md; nothing to install).
+    * github   -> None offline (best-effort; add by hand if needed).
+    """
+    t = theme["type"]
+    if t == "builtin":
+        return (f"@slidev/theme-{theme['source']}", "latest")
+    if t == "npm":
+        return (theme["source"], "latest")
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Injection / deck blocks
+# ---------------------------------------------------------------------------
+
+def derive_footer(presenter: str, date: str) -> str:
+    """A running-footer string from deck metadata: ``presenter · date``.
+
+    Either part may be empty; the separator only appears when both are present.
+    """
+    parts = [p for p in (presenter.strip(), date.strip()) if p]
+    return " · ".join(parts)
+
+
+def build_injection(ans: dict, styleguide: str = "") -> dict:
+    """Per-agent placeholder values derived from the interview (SPEC §4/§7.1).
+
+    ``ans`` must already carry the resolved ``max_slides`` (see
+    ``derive_max_slides``). ``styleguide`` is the theme's ``styleguide.md`` path
+    (empty if none); it is injected as ``STYLE-GUIDE`` into both composers so
+    figures + structural slides respect the theme's visual contract (T3).
+    """
+    topic = ans["topic"]
+    miner = {"FOCUS-TOPIC": topic}
+    presenter = str(ans.get("presenter", ""))
+    institution = str(ans.get("institution", ""))
+    course = str(ans.get("course", ""))
+    date = str(ans.get("date", ""))
     return {
-        "COURSE": recipe["course"],
-        "MODULE": recipe["module"],
-        "CHAPTER_NUMBER": str(ch),
-        "CHAPTER_NUMBER_2D": f"{ch:02d}",
-        "CHAPTER_TITLE": recipe["chapter_title"],
-        "CHAPTER_TITLE_SHORT": short,
-        "PRESENTER": recipe["presenter"],
-        "DATE": str(recipe["date"]),
-        "FOOTER": recipe.get("footer") or f"{recipe['course']}, {recipe['module']}",
-        "PREFIX": prefix,
-        "DECK_SLUG": re.sub(r"[^a-z0-9_]+", "_", str(recipe["deck_name"]).lower()).strip("_"),
-        "DECK_TITLE": f"{recipe['course']}: Sprint {ch}",
-        "AGENDA_CHAPTERS_JS": chapters_js,
-        "AGENDA_ACTIVE": str(agenda.get("active", ch)),
-        "DIVIDER_LINE1": divider.get("line1") or parts[0],
-        "DIVIDER_LINE2": divider.get("line2") or (parts[1] if len(parts) > 1 else ""),
-        "INSTITUTION": recipe.get("institution", "IU International University of Applied Sciences"),
+        "knowledge-miner": dict(miner),
+        "image-miner": dict(miner),
+        "storyteller": {
+            "MAX-SLIDES": str(ans["max_slides"]),
+            "MAX-DURATION-MINUTES": str(ans.get("max_duration_minutes", "")),
+            "DECK-TYPE": ans["deck_type"],
+            "AUDIENCE": ans["audience"],
+            "SETTING": ans["setting"],
+            "LANGUAGE": ans["language"],
+            "TOPIC": topic,
+        },
+        "slide-composer": {
+            "AUDIENCE": ans["audience"],
+            "DECK-TYPE": ans["deck_type"],
+            "LANGUAGE": ans["language"],
+            "STYLE-GUIDE": styleguide,
+            # Deck metadata for structural slides (cover / footer / thank-you), T6.
+            "PRESENTER": presenter,
+            "INSTITUTION": institution,
+            "COURSE": course,
+            "DATE": date,
+            "FOOTER": derive_footer(presenter, date),
+        },
+        "image-composer": {
+            "AUDIENCE": ans["audience"],
+            "DECK-TYPE": ans["deck_type"],
+            "LANGUAGE": ans["language"],
+            "STYLE-GUIDE": styleguide,
+            "MAX-ATTEMPTS": 3,
+        },
     }
 
 
-def render(text: str, values: dict, origin: str) -> str:
-    out = text
-    for k, v in values.items():
-        out = out.replace(f"@@{k}@@", v)
-    left = sorted(set(re.findall(r"@@([A-Z0-9_]+)@@", out)))
-    if left:
-        fail(f"{origin}: unresolved placeholders {left}")
-    return out
+def build_deck_block(ans: dict) -> dict:
+    return {
+        "topic": ans["topic"],
+        "type": ans["deck_type"],
+        "audience": ans["audience"],
+        "setting": ans["setting"],
+        "language": ans["language"],
+        "max_slides": ans["max_slides"],
+        "max_duration_minutes": ans.get("max_duration_minutes", None),
+        # Optional deck metadata (T6); empty string when not captured.
+        "presenter": str(ans.get("presenter", "")),
+        "institution": str(ans.get("institution", "")),
+        "course": str(ans.get("course", "")),
+        "date": str(ans.get("date", "")),
+    }
 
 
-def write_placeholder_png(path: str, label: str) -> None:
-    """Neutral 16:9 placeholder so the deck builds before enrichment runs."""
-    try:
-        from PIL import Image, ImageDraw, ImageFont
-        img = Image.new("RGB", (1792, 1024), "#F2F4F5")
-        d = ImageDraw.Draw(img)
-        try:
-            font = ImageFont.load_default(size=44)
-        except TypeError:  # older Pillow: no size kwarg
-            font = ImageFont.load_default()
-        box = d.textbbox((0, 0), label, font=font)
-        d.text(((1792 - box[2]) / 2, (1024 - box[3]) / 2), label, fill="#575E62", font=font)
-        img.save(path)
-    except Exception:
-        import base64  # 1x1 light-grey PNG, keeps the build green without Pillow
-        io.open(path, "wb").write(base64.b64decode(
-            b"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4"
-            b"//79fwAJewN9tuKfZQAAAABJRU5ErkJggg=="))
+# ---------------------------------------------------------------------------
+# Idempotent scaffold steps
+# ---------------------------------------------------------------------------
+
+def _guard(root: Path):
+    """Refuse to clobber an already-initialized deck."""
+    if (root / "deck-context.json").exists():
+        sys.exit("ERROR: deck-context.json already exists in "
+                 f"{root} — refusing to clobber an existing deck.")
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--recipe", required=True)
-    ap.add_argument("--pack", default=None, help="theme-pack path or registered name")
-    ap.add_argument("--skeleton", default=None)
-    ap.add_argument("--force", action="store_true")
-    args = ap.parse_args()
+def ensure_folders(root: Path, created: list):
+    for rel in FOLDERS:
+        d = root / rel
+        if not d.exists():
+            created.append(rel + "/")
+        d.mkdir(parents=True, exist_ok=True)
 
-    recipe_path = os.path.abspath(args.recipe)
-    recipe = load_json(recipe_path)
-    pack_dir = resolve_pack(args.pack, recipe)
-    pack = load_json(os.path.join(pack_dir, "pack.json"))
-    skel_name = args.skeleton or (recipe.get("provenance") or {}).get("skeleton") \
-        or (pack["skeletons"][0] if len(pack.get("skeletons", [])) == 1 else None)
-    if not skel_name:
-        fail("several skeletons in pack; pass --skeleton <name>: " + ", ".join(pack.get("skeletons", [])))
-    skel_dir = os.path.join(pack_dir, "skeletons", skel_name)
-    skel = load_json(os.path.join(skel_dir, "skeleton.json"))
 
-    values = build_values(recipe)
-    deck = os.path.join(recipe["deck_location"], recipe["deck_name"])
-    slides_dir = os.path.join(deck, "slides")
-    if os.path.isdir(slides_dir) and os.listdir(slides_dir) and not args.force:
-        fail(f"{slides_dir} already has slides; use --force to overwrite the framing slides")
+def write_package_json(root: Path, ans: dict, theme: dict, created: list):
+    deps = {"@slidev/cli": "latest"}
+    pkg = theme_package(theme)
+    if pkg:
+        deps[pkg[0]] = pkg[1]
+    package = {
+        "name": scan_theme_slug(ans["topic"]),
+        "private": True,
+        "type": "module",
+        "dependencies": deps,
+    }
+    (root / "package.json").write_text(
+        json.dumps(package, indent=2, ensure_ascii=False), encoding="utf-8")
+    created.append("package.json")
 
-    theme_pkg_dir = os.path.join(pack_dir, pack["theme"]["path"])
-    if not os.path.isdir(theme_pkg_dir):
-        fail(f"theme package not found at {theme_pkg_dir}")
-    try:
-        theme_path = os.path.relpath(theme_pkg_dir, deck).replace("\\", "/")
-    except ValueError:  # different drive
-        theme_path = theme_pkg_dir.replace("\\", "/")
-    values["THEME_PATH"] = theme_path
 
-    optouts = set(recipe.get("slide_optouts") or [])
-    known = {f["id"] for f in skel["framing_slides"] if not f.get("insertion_point")}
-    bad = optouts - known
-    if bad:
-        fail(f"unknown slide_optouts {sorted(bad)}; known framing ids: {sorted(known)}")
-    fixed = {f["id"] for f in skel["framing_slides"] if f.get("optout") is False}
-    refused = optouts & fixed
-    if refused:
-        fail(f"these framing slides cannot be opted out: {sorted(refused)}")
+def write_gitignore(root: Path, created: list):
+    # node_modules/ is heavy and reinstallable; the local theme copy (theme/)
+    # IS part of the deck, so it is deliberately NOT ignored (D38).
+    (root / ".gitignore").write_text("node_modules/\ndist/\n", encoding="utf-8")
+    created.append(".gitignore")
 
-    os.makedirs(slides_dir, exist_ok=True)
-    os.makedirs(os.path.join(deck, "resources"), exist_ok=True)
-    os.makedirs(os.path.join(deck, "public", "figures", "gallery"), exist_ok=True)
 
-    # 1. deck-files (package.json, vite config, layouts, launcher, .gitignore)
-    df_dir = os.path.join(skel_dir, "deck-files")
-    copied = []
-    for root, _dirs, files in os.walk(df_dir):
-        rel_root = os.path.relpath(root, df_dir)
-        for fn in files:
-            src = os.path.join(root, fn)
-            out_name = fn[:-5] if fn.endswith(".tmpl") else fn
-            if out_name == "gitignore":
-                out_name = ".gitignore"
-            dst_dir = os.path.join(deck, rel_root) if rel_root != "." else deck
-            os.makedirs(dst_dir, exist_ok=True)
-            dst = os.path.join(dst_dir, out_name)
-            if fn.endswith(".tmpl"):
-                text = io.open(src, encoding="utf-8").read()
-                io.open(dst, "w", encoding="utf-8", newline="\n").write(render(text, values, fn))
-            else:
-                shutil.copyfile(src, dst)
-            copied.append(os.path.relpath(dst, deck))
+def write_launchers(root: Path, created: list):
+    """Copy the double-click launchers from the templates dir next to this script.
 
-    # 2. framing slides + manifest
-    manifest = []
-    skipped = []
-    for f in skel["framing_slides"]:
-        if f.get("insertion_point"):
-            manifest.append(MARKER)
-            continue
-        if f.get("autogen"):
-            continue  # generated later by render_references
-        if f["id"] in optouts:
-            skipped.append(f["id"])
-            continue
-        tpl = io.open(os.path.join(skel_dir, f["template"]), encoding="utf-8").read()
-        out = render(tpl, values, f["template"])
-        io.open(os.path.join(slides_dir, f["file"]), "w", encoding="utf-8", newline="\n").write(out)
-        manifest.append(f["file"])
-
-    if not manifest or manifest[0] != "title.md":
-        fail("skeleton must start with title.md (carries deck frontmatter)")
-    blocks = ["---\ntheme: {}\ntitle: \"{}\"\nsrc: ./slides/title.md\n---\n".format(
-        skel["theme"], values["DECK_TITLE"])]
-    for entry in manifest[1:]:
-        if entry == MARKER:
-            blocks.append(MARKER + "\n")
+    Windows (.cmd) + macOS/Linux (.sh) so a deck is viewable on any platform.
+    """
+    tpl_dir = Path(__file__).resolve().parent.parent / "templates"
+    for name in ("show_slide_deck.cmd", "show_slide_deck.sh"):
+        tpl = tpl_dir / name
+        if tpl.exists():
+            dest = root / name
+            shutil.copyfile(tpl, dest)
+            if name.endswith(".sh"):
+                # Make the POSIX launcher executable (double-click / ./ on mac/linux).
+                dest.chmod(dest.stat().st_mode | 0o111)
+            created.append(name)
         else:
-            blocks.append(f"---\nsrc: ./slides/{entry}\n---\n")
-    io.open(os.path.join(deck, "slides.md"), "w", encoding="utf-8", newline="\n").write(
-        "\n".join(blocks))
+            # Non-fatal: the deck is still usable, just missing this launcher.
+            created.append(f"(WARNING: launcher template not found at {tpl}; {name} not copied)")
 
-    # 2b. placeholder for images referenced by framing slides but produced later
-    #     (a Slidev production build fails on unresolved /figures/... imports)
-    if "mindmap" not in optouts:
-        ph = os.path.join(deck, "public", "figures", f"mindmap_{values['PREFIX']}.png")
-        if not os.path.exists(ph):
-            write_placeholder_png(ph, "Mind map: generated in the enrichment step")
 
-    # 3. skeleton guides -> deck resources (decks are self-contained artifacts)
-    for guide_key, fname in (("author_rules", "author-guide.md"), ("diagram_style", "diagram-style.md")):
-        src = os.path.join(skel_dir, skel["workflow"].get(guide_key, fname))
-        shutil.copyfile(src, os.path.join(deck, "resources", fname))
+def write_associations(root: Path, created: list):
+    (root / "associations.json").write_text("{}", encoding="utf-8")
+    created.append("associations.json")
 
-    # 4. provenance + workflow config back into the deck's recipe.json
-    wf = dict(skel["workflow"])
-    wf.update(recipe.get("workflow") or {})
-    recipe["workflow"] = wf
-    recipe["house_style"] = "resources/author-guide.md"
-    recipe["diagram_style"] = "resources/diagram-style.md"
-    recipe["improve_passes"] = recipe.get("improve_passes") or wf.get("polish_passes", [])
-    recipe["provenance"] = {
-        "theme_pack": pack["name"],
-        "pack_version": pack.get("version"),
-        "pack_path": pack_dir.replace("\\", "/"),
-        "skeleton": skel_name,
-        "skeleton_version": skel.get("version"),
-        "slide_optouts": sorted(optouts),
-        "scaffolded": datetime.date.today().isoformat(),
-        "answers": {k: recipe.get(k) for k in
-                    ("course", "module", "chapter_number", "chapter_title",
-                     "chapter_title_short", "presenter", "date")},
+
+def write_slides_md(root: Path, ans: dict, theme: dict, created: list):
+    slides_md = (f"---\ntheme: {theme_name(theme)}\n"
+                 f"title: {ans['topic']}\n---\n")
+    (root / "slides.md").write_text(slides_md, encoding="utf-8")
+    created.append("slides.md")
+
+
+def write_deck_context(root: Path, ans: dict, theme: dict, scan_source: str,
+                       created: list) -> dict:
+    capabilities = scan_theme.scan(theme["type"], scan_source)
+    # The theme's style-guide path (empty if the theme ships none) is recorded
+    # on the theme block and injected into both composers (ticket 10, T3).
+    styleguide = capabilities.get("styleguide", "")
+    context = {
+        "schema_version": SCHEMA_VERSION,
+        "deck": build_deck_block(ans),
+        "theme": {
+            "type": theme["type"],
+            "source": theme["source"],
+            "styleguide": styleguide,
+            "capabilities": capabilities,
+        },
+        "injection": build_injection(ans, styleguide=styleguide),
     }
-    io.open(os.path.join(deck, "resources", "recipe.json"), "w",
-            encoding="utf-8", newline="\n").write(json.dumps(recipe, indent=2, ensure_ascii=False) + "\n")
+    (root / "deck-context.json").write_text(
+        json.dumps(context, indent=2, ensure_ascii=False), encoding="utf-8")
+    created.append("deck-context.json")
+    return capabilities
 
-    print(f"scaffolded: {deck}")
-    print(f"  pack={pack['name']} skeleton={skel_name} v{skel.get('version')}")
-    print(f"  framing slides: {[m for m in manifest if m != MARKER]}")
-    if skipped:
-        print(f"  opted out: {skipped}")
-    print(f"  deck files: {copied}")
-    print("next: npm install, then run the build workflow (content sections replace the manifest marker)")
+
+# ---------------------------------------------------------------------------
+# Phases
+# ---------------------------------------------------------------------------
+
+def prewarm(root: Path, ans: dict) -> dict:
+    """Lay down everything that only needs topic + theme, so ``/init-deck`` can
+    start ``npm install`` in the background during the interview (D38).
+
+    Creates folders, localizes a local theme into ``theme/``, and writes
+    ``package.json`` / ``.gitignore`` / the launchers. Does **not** write
+    ``deck-context.json`` — that waits for the full interview.
+    """
+    _guard(root)
+    created: list = []
+    ensure_folders(root, created)
+    theme, _scan_source = localize_theme(root, ans["theme"])
+    write_package_json(root, ans, theme, created)
+    write_gitignore(root, created)
+    write_launchers(root, created)
+    return {
+        "phase": "prewarm",
+        "deck_root": str(root),
+        "theme": theme,
+        "node_modules_present": (root / "node_modules").is_dir(),
+        "created": created,
+    }
+
+
+def scaffold(root: Path, ans: dict) -> dict:
+    """Full scaffold. Idempotent over ``prewarm`` — safe to run standalone or
+    after a prewarm (it re-does the prewarm steps, all of which are no-ops when
+    already present)."""
+    _guard(root)
+    ans = dict(ans)
+    ans["max_slides"] = derive_max_slides(ans)
+    created: list = []
+
+    ensure_folders(root, created)
+    theme, scan_source = localize_theme(root, ans["theme"])
+    write_associations(root, created)
+    capabilities = write_deck_context(root, ans, theme, scan_source, created)
+    write_slides_md(root, ans, theme, created)
+    write_package_json(root, ans, theme, created)
+    write_gitignore(root, created)
+    write_launchers(root, created)
+
+    return {
+        "phase": "full",
+        "deck_root": str(root),
+        "max_slides": ans["max_slides"],
+        "max_duration_minutes": ans.get("max_duration_minutes"),
+        "minutes_per_slide": minutes_per_slide(ans.get("deck_type", "")),
+        "theme": {"type": theme["type"], "source": theme["source"],
+                  "layouts": len(capabilities.get("layouts", []))},
+        "created": created,
+    }
+
+
+def scan_theme_slug(name: str) -> str:
+    """npm-safe package name from the deck topic (lowercase, hyphenated)."""
+    import re
+    s = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    return (s or "slidecraft-deck")[:60]
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--answers", required=True)
+    ap.add_argument("--prewarm", action="store_true",
+                    help="phase 1: folders + theme copy + package.json only "
+                         "(so npm install can start during the interview)")
+    a = ap.parse_args()
+    ans = load_answers(a.answers, prewarm=a.prewarm)
+    fn = prewarm if a.prewarm else scaffold
+    summary = fn(Path.cwd(), ans)
+    print(json.dumps(summary, indent=2, ensure_ascii=False))
 
 
 if __name__ == "__main__":

@@ -13,4 +13,6 @@ gates stop being guarantees). When a real skeleton needs a new step, the plugin 
 new named extension point — generalize by extraction, same discipline as the rest of the
 project.
 
-Status: accepted (2026-07-07)
+Status: superseded (2026-07-16) — skeletons and extension points were culled with the
+agentic-framework pivot (`architecture_proposal.md`, D19); per-deck-type variation now
+comes from storytelling skills, per-deck configuration from the deck context.

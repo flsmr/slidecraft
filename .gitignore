@@ -60,3 +60,10 @@ slide_plan_raw.txt
 concept_prompt.txt
 figure_content_prompt.txt
 cards_prompt.txt
+
+# Local-only ticket system (this machine only)
+tickets/
+
+# Local agent-skills config (machine-local conventions, not part of the public plugin)
+CLAUDE.md
+docs/agents/

@@ -1,7 +1,7 @@
 {
   "name": "slidecraft",
   "version": "0.2.0",
-  "description": "Raw course material to polished Slidev decks: theme-pack skeletons, deterministic scaffold/citation/lint scripts, and autonomous author-enrich-critic workflows.",
+  "description": "Agentic presentation framework: an agent team (knowledge miners, storyteller, slide composers) turns source material into structured, traceable, reusable Slidev decks, with every mutation flowing through deterministic operations. Includes PPTX-to-Slidev theme generation and devil's-advocate review agents.",
   "author": {
     "name": "Florian Simroth",
     "email": "your.email@example.com"
@@ -15,11 +15,11 @@
     "slides",
     "pptx",
     "theme",
-    "multi-agent",
-    "visualization",
-    "mermaid",
-    "d3",
-    "excalidraw"
+    "agent-team",
+    "knowledge-nuggets",
+    "provenance",
+    "traceability",
+    "storytelling"
   ],
   "commands": "./commands",
   "skills": "./skills"

@@ -71,7 +71,7 @@ references, image-sources, thank-you/closing, and pure photo galleries.
 7. **Right medium (dual coding).** If the content is a process, sequence, comparison, hierarchy, or a
    spatial/quantitative relationship, it teaches better as a **figure** than as bullets. Flag
    `should-be-visual` and name the visual (flow chain, comparison table, annotated axis, etc.).
-   (This complements the visual-enrichment pass; here it is a didactic defect, not a nice-to-have.)
+   (Here it is a didactic defect, not a nice-to-have.)
 
 ## Calibration — do NOT over-flag
 

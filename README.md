@@ -1,16 +1,34 @@
 # slidecraft
 
-Multi-agent presentation pipeline that transforms raw material into polished Slidev decks — with corporate template import, iterative improvement, and intelligent visualization suggestions. Ships as a Claude Code plugin.
+A Claude Code **toolkit** that turns source material into structured, traceable, and reusable
+[Slidev](https://sli.dev) **decks** via a workflow of agents whose file and state mutations run
+through deterministic scripts. It also generates the Slidev **themes** those decks render with —
+including converting corporate PowerPoint templates.
 
-## Features
+Two pillars:
 
-- **Template Import**: Convert corporate PowerPoint (.pptx) templates into Slidev themes — extracting colors, fonts, logos, and layouts automatically
-- **Authoring Pipeline** *(planned)*: Analyze raw material, draft storylines, split into slides with speaker notes
-- **Visual Enrichment** *(planned)*: Per-slide visualization suggestions (Mermaid, D3.js, Excalidraw, mind maps, code blocks)
-- **Interactive Review** *(planned)*: Accept, discard, or modify suggestions one by one before rendering
-- **Multi-Agent Improvement** *(planned)*: Content, layout, style, narrative, and anti-slop agents iteratively refine decks
+- **Theme generation** *(working today)* — `/slidecraft:import-template` converts a corporate
+  `.pptx` template into a Slidev theme (colors, fonts, logos, layouts); `/slidecraft:new-theme`
+  builds a theme from any blueprint (PPTX, an existing theme, images, a website, or a plain
+  description). A theme is a plain, visuals-only `slidev-theme-<slug>/` npm package that carries
+  its own **style guide**, a **slot-role map** (`semantic-layouts.json`), and a **standard demo
+  deck** (`example.md`) — no theme packs, no skeletons (see
+  [ADR-0003](docs/adr/0003-theme-is-a-plain-slidev-theme.md); using older packs:
+  [migration note](docs/theme-pack-migration.md)).
+- **Agentic deck building** *(in development — see `SPEC.md`)* — users drop inputs (PDF,
+  Markdown, URLs) into a deck's `input/` folder; the toolkit **converts them into sources**,
+  mines atomic **knowledge nuggets** with verbatim evidence, and a workflow of agents
+  (knowledge miners, a storyteller, slide composers) assembles a deck in which **every content
+  slide stays traceable to its sources**. Deck shape comes from a per-deck-type **storytelling
+  skill** (academic lecture, pitch, …); constraints (topic, audience, language, length, …) are
+  captured once in the `/init-deck` interview.
+
+Review agents (image-critic, didactic-critic, anti-slop) guard figure correctness, teaching
+quality, and filler-free prose.
 
 ## Installation
+
+The theme-generation pillar installs today as a Claude Code plugin:
 
 ```bash
 # In Claude Code:
@@ -18,21 +36,43 @@ Multi-agent presentation pipeline that transforms raw material into polished Sli
 /plugin install slidecraft@slidecraft-marketplace
 ```
 
+*(The agentic deck-building pillar, in development, is moving to an `npx` skill-repo
+installer — no plugin required. See `SPEC.md` D33.)*
+
 ### Python dependencies
 
-The plugin's helper scripts run under your local Python (3.10+). Install
-the core runtime deps once per machine:
+The helper scripts run under your local Python (3.10+). Install the core runtime deps once
+per machine:
 
 ```bash
 pip install -r slidecraft/requirements.txt
 ```
 
-Additionally, if you plan to use `/slidecraft:import-template` to convert
-PPTX templates into Slidev themes, install the importer's extras:
+If you plan to use `/slidecraft:import-template` to convert PPTX templates into Slidev themes,
+also install the importer's extras:
 
 ```bash
 pip install -r slidecraft/importer/requirements.txt
 ```
+
+### Viewing a deck (Slidev)
+
+A deck is a minimal npm project: `/init-deck` scaffolds a `package.json` declaring
+`@slidev/cli` + the chosen theme (Slidev resolves the theme from a local `node_modules/`). To
+view a deck, from its folder run:
+
+```bash
+npm install        # first time only — creates node_modules/
+npx slidev slides.md --open
+```
+
+Every deck also contains double-clickable launchers — **`show_slide_deck.cmd`** (Windows) and
+**`show_slide_deck.sh`** (macOS/Linux; on macOS rename to `.command` for Finder double-click) —
+that do both: install on first run, print the clickable `http://localhost:3030/` link, and open
+the deck in your default browser. Requires [Node.js](https://nodejs.org) (18+). Servable images live under the deck's `public/` folder and are referenced with
+root-absolute `/…` paths (Slidev serves `public/` at the site root). `node_modules/` is heavy
+and is git-ignored / should be excluded from cloud sync — the deck's *data* travels, its build
+deps don't.
 
 ## Usage
 
@@ -40,79 +80,78 @@ pip install -r slidecraft/importer/requirements.txt
 # Import a corporate PowerPoint template as a Slidev theme
 /slidecraft:import-template path/to/company-template.pptx
 
-# Start a new presentation (Phase 2)
-/slidecraft:start
+# Build a Slidev theme from any blueprint (PPTX, images, website, description)
+/slidecraft:new-theme my-brand
 ```
+
+Deck building (`/init-deck` → `/draft-deck` → `/improve-deck`) is under construction; the design
+is in `SPEC.md` (the how) and `architecture_proposal.md` (the what/why), with the domain
+vocabulary in `CONTEXT.md`.
 
 ## Recommended Directory Layout
 
-Slidecraft uses a three-component split — **plugin**, **themes**, **decks** —
-that lets each piece be versioned, shared, and shipped independently. The
-commands (`/slidecraft:import-template`, `/slidecraft:new-theme`,
-`/slidecraft:new-deck`) prompt you for every location, so the components
-can live anywhere you like; the layout below is just the recommended
-convention.
+Slidecraft uses a three-component split — **toolkit**, **themes**, **decks** — that lets each
+piece be versioned, shared, and shipped independently. A deck is the working directory you
+launch Claude in (`/init-deck` scaffolds it in place).
 
 ```
 <your-workspace>/
-├── slidecraft/                    ← THIS REPO (cloned once; the plugin source)
-├── slidev-theme-<brand>/          ← one folder per brand/template
-│   └── …                          ← created by /slidecraft:import-template
+├── slidecraft/                    ← THIS REPO (the toolkit source)
+├── slidev-theme-<brand>/          ← one theme repo per brand/template
+│   └── …                          ← created by /slidecraft:import-template or new-theme
 └── decks/
-    └── <deck-name>/               ← one folder per presentation
-        └── …                      ← created by /slidecraft:new-deck
+    └── <deck-name>/               ← one folder per presentation (launch Claude here)
 ```
 
-`<your-workspace>` can be `~/projects/`, `D:\Work\`, `/Users/me/`, or anywhere
-else — none of the commands hard-code the path. They prompt for the base
-location and resolve everything relative to your answer.
-
 **Why split it three ways?**
-- Themes are versioned independently of decks (a theme bugfix doesn't bump every deck).
-- Decks can be shared/shipped without the plugin source.
-- New corporate templates get their own theme directory — run `/slidecraft:new-theme` or `/slidecraft:import-template`.
+- A theme is its own repository, versioned independently of decks (a theme bugfix doesn't bump every deck).
+- Decks are self-contained data folders that can be shared without the toolkit source (Slidev is fetched via `npx`).
+- The toolkit stays generic: no visuals, no theme-specific content, no course content.
 
-**Note for existing users:** earlier revisions of this README documented a
-hard-coded `D:\Archive\03_Freizeit\Projects\…` layout. That was the original
-author's local setup, not a requirement. Any layout works as long as the
-deck's `package.json` `file:` dependency resolves to a directory that
-contains a Slidev theme.
+## Deck folder (what `/init-deck` scaffolds)
+
+```
+<deck-name>/                       # = the working directory; holds deck-context.json
+├── deck-context.json             # interview answers + injection blocks + theme capabilities
+├── input/                        # drop PDFs / Markdown / text here  (processed/ once mined)
+├── sources/                      # converted sources: paged text + image-source records
+├── slides/                       # one <title>--<stamp>.md + .json (state) per slide
+├── nuggets/                      # one JSON per knowledge nugget (verbatim-anchored)
+├── associations.json             # slide → nuggets
+├── public/                       # Slidev-served assets: extracted/ (PDF images), generated/ (figures)
+├── assets/                       # non-served provenance store (if any)
+├── logs/                         # deterministic action + pipeline logs
+├── slides.md                     # the Slidev entry point (order + theme headmatter)
+├── package.json                  # @slidev/cli + theme (node_modules/ created on first view)
+├── show_slide_deck.cmd           # double-click to view (Windows)
+└── show_slide_deck.sh            # double-click to view (macOS/Linux)
+```
+
+`node_modules/` (created on first view) is git-ignored and should be excluded from cloud sync.
 
 ## Repository Structure
 
 ```
-slidecraft/
-├── .claude-plugin/
-│   └── marketplace.json          # Marketplace catalog
-├── slidecraft/                   # The plugin
-│   ├── .claude-plugin/
-│   │   └── plugin.json           # Plugin manifest
+slidecraft/                        # repo root
+├── slidecraft/                    # The toolkit
+│   ├── commands/                  # /slidecraft:import-template, /slidecraft:new-theme
 │   ├── skills/
-│   │   ├── theme-import/         # PPTX → Slidev theme conversion
-│   │   ├── authoring/            # Storyline drafting & slide splitting
-│   │   └── visual-enrichment/    # Per-slide visualization suggestions
-│   ├── commands/
-│   │   ├── import-template.md    # /slidecraft:import-template
-│   │   └── start.md              # /slidecraft:start
-│   ├── agents/
-│   │   ├── content-reviewer.md   # Content quality reviewer
-│   │   └── anti-slop.md          # Generic filler detector
-│   ├── scripts/                  # Python/JS helper scripts
-│   ├── references/               # Design guidelines & rules
-│   └── templates/                # Base Slidev project scaffolding
-├── docs/                         # Project documentation
-├── .gitignore
-├── LICENSE                       # MIT
+│   │   ├── theme-import/          # PPTX → Slidev theme conversion
+│   │   └── compose-slide/         # per-slide craft (density, layout, figures)
+│   ├── agents/                    # knowledge-miner, image-miner, storyteller, slide-composer,
+│   │                              #   image-composer, image-critic, didactic-critic, anti-slop
+│   ├── scripts/                   # km.py (knowledge manager), source_converter.py, helpers
+│   ├── importer/                  # PPTX parsing/emission package (+ tests)
+│   ├── references/                # slop blocklist, CSL styles, bibtex guide, schemas
+│   └── tests/
+├── legacy/                        # Quarantined previous-generation pipeline (NOT loaded)
+├── SPEC.md                        # Implementation spec (the how)
+├── architecture_proposal.md       # The agentic framework design (the what/why)
+├── CONTEXT.md                     # Domain glossary (ubiquitous language)
+├── docs/                          # ADRs, source-conversion-limitations, project docs
+├── LICENSE                        # MIT
 └── README.md
 ```
-
-## Roadmap
-
-- **Phase 1**: Template import (PPTX → Slidev theme) ← *current*
-- **Phase 2**: Authoring pipeline (content analysis → storyline → slide drafts)
-- **Phase 3**: Multi-agent improvement loop
-- **Phase 4**: ComfyUI integration for AI-generated visuals
-- **Phase 5**: Interactive editing and refinement
 
 ## License
 

@@ -165,7 +165,7 @@ browser.
 
     ### 9f. Capture each role's *intent* and *defaults*
 
-    For each role the user mapped, ask two follow-up questions. These produce the `intent` and `defaults` fields that downstream tooling (authoring skill, slide-critic) reads to respect the layout's design purpose — without these, a deck author can put recap content in a "Thank you" slide or a formula in a cover title, and the renderer will faithfully obey.
+    For each role the user mapped, ask two follow-up questions. These produce the `intent` and `defaults` fields that downstream deck-building tooling (the slide composer and reviewers) reads to respect the layout's design purpose — without these, a deck author can put recap content in a "Thank you" slide or a formula in a cover title, and the renderer will faithfully obey.
 
     **Intent** — a one-paragraph English description of what this layout is FOR and what should NOT go in it. Prompt:
 
@@ -206,7 +206,7 @@ browser.
     }
     ```
 
-    `intent` is free-form English; the authoring skill and slide-critic both read it. `defaults` is keyed by semantic slot name. Either field may be empty (`""` for intent, `{}` for defaults) but the field MUST be present so consumers don't have to handle the missing-key case.
+    `intent` is free-form English; deck-composition tooling reads it. `defaults` is keyed by semantic slot name. Either field may be empty (`""` for intent, `{}` for defaults) but the field MUST be present so consumers don't have to handle the missing-key case.
 
     `unmapped_layouts` = every `slideN.vue` that wasn't picked. Useful for diagnostics; those layouts remain usable by their literal name (`layout: slide17`).
 
@@ -227,4 +227,4 @@ browser.
 10. **Offer next steps**:
     - Preview the deck in the browser: `cd <output-base>/deck && npx slidev` (defaults to `slides.md` — no need to name it explicitly)
     - If corporate fonts aren't on Google Fonts, explain how to add .woff2 files under `<theme-dir>/styles/` and add `@font-face` declarations
-    - Suggest creating a fresh presentation that consumes this theme via `/slidecraft:new-deck`
+    - Suggest creating a fresh presentation that consumes this theme via the deck workflow (`/init-deck`, see `architecture_proposal.md`)

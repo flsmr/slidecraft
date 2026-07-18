@@ -212,8 +212,14 @@ def image_entry_html(fields: dict[str, str]) -> str:
 # Manifest sync
 # --------------------------------------------------------------------------
 
-def sync_manifest(deck: Path, base: str, new_slugs: list[str]) -> None:
-    """Replace the consecutive run of ``base*`` imports with ``new_slugs``."""
+def sync_manifest(deck: Path, base: str, new_slugs: list[str],
+                  anchor_file: str = "thank-you.md") -> None:
+    """Replace the consecutive run of ``base*`` imports with ``new_slugs``.
+
+    When the run is absent, the generated pages are inserted before ``anchor_file``
+    (the skeleton's closing slide: thank-you.md for sprint, closing.md for briefing).
+    Falls back to appending if that slide is not in the manifest.
+    """
     mani_p = deck / "slides.md"
     text = mani_p.read_text(encoding="utf-8")
     run_re = re.compile(
@@ -222,7 +228,7 @@ def sync_manifest(deck: Path, base: str, new_slugs: list[str]) -> None:
     if run_re.search(text):
         text = run_re.sub(block, text, count=1)
     elif new_slugs:
-        anchor = "---\nsrc: ./slides/thank-you.md\n---\n"
+        anchor = f"---\nsrc: ./slides/{anchor_file}\n---\n"
         text = (text.replace(anchor, block + anchor, 1)
                 if anchor in text else text + "\n" + block)
     mani_p.write_text(text, encoding="utf-8", newline="\n")
@@ -251,6 +257,9 @@ def main(argv=None) -> int:
     ap.add_argument("--per-page", type=int, default=7)
     ap.add_argument("--img-per-page", type=int, default=8)
     ap.add_argument("--bookfig-pattern", default=r"ch\d+_fig_")
+    ap.add_argument("--anchor", default="thank-you.md",
+                    help="closing slide the generated pages are inserted before "
+                         "(sprint: thank-you.md, briefing: closing.md)")
     ap.add_argument("--no-narrative", action="store_true")
     ap.add_argument("--check", action="store_true",
                     help="report only; write nothing")
@@ -329,8 +338,8 @@ def main(argv=None) -> int:
                 encoding="utf-8", newline="\n")
 
     if not a.check:
-        sync_manifest(deck, "references", ref_slugs)
-        sync_manifest(deck, "image-sources", img_slugs)
+        sync_manifest(deck, "references", ref_slugs, args.anchor)
+        sync_manifest(deck, "image-sources", img_slugs, args.anchor)
         removed = (cleanup_orphans(deck, "references", ref_slugs)
                    + cleanup_orphans(deck, "image-sources", img_slugs))
     else:

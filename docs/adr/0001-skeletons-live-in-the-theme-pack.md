@@ -19,4 +19,8 @@ theme package itself stays visuals-only; composition knowledge lives in the sibl
 `skeletons/` folder. Supersedes decision 5 (and amends 4/11) of
 `slidecraft/references/workflow-design.md`.
 
-Status: accepted (2026-07-07)
+Status: superseded (2026-07-16) — skeletons are abolished by the agentic framework
+(`architecture_proposal.md`, D19): deck shape now comes from plugin-level storytelling
+skills, and a theme is its own repo carrying its style guide and visual conventions
+("theme pack" culled as a term). The physical-names rule itself survives — see
+`CONTEXT.md`, "Physical name".

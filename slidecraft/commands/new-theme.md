@@ -1,33 +1,61 @@
 ---
-description: Interactive front door for building a Slidev theme (or full theme pack) from a blueprint — PPTX, an existing Slidev theme, images, a live website, or a plain description. Analyses the blueprint, writes a precise style guide, lays out the layouts + slots, and (optionally) a starter skeleton.
+description: Interactive front door for building a plain, deck-ready Slidev theme from a blueprint — PPTX, an existing Slidev theme, images, a live website, or a plain description. Analyses the blueprint, writes a precise style guide, lays out the layouts + slots, a slot-role map, and a standard demo deck.
 argument-hint: [theme-slug]
 ---
 
 # New Theme
 
-Build a **theme** (visuals-only `slidev-theme-<slug>/`) or a full **theme pack**
-(theme + `skeletons/` + `pack.json` + style guide) from whatever blueprint the user
-has. See `/CONTEXT.md` for the glossary (plugin / theme / theme pack / skeleton / deck)
-and `/docs/adr/` for the rules this command must respect.
+Build a **theme**: a plain, deck-ready `slidev-theme-<slug>/` npm package that carries its own
+**style guide** and visual conventions — from whatever blueprint the user has. A theme is
+**visuals-only plus its `styleguide.md`**; it knows nothing about how decks are composed. Deck
+*shape* (which structural slides, in what order) is the storyteller's runtime job and lives in
+storytelling skills — **never** in the theme. There are no theme packs and no skeletons.
+See `/CONTEXT.md` for the glossary (toolkit / theme / storytelling skill / deck) and
+`/docs/adr/0003-theme-is-a-plain-slidev-theme.md` for the rule this command implements.
 
-The command is **derive-first, confirm-once** (workflow-design decision 6): it ingests and
-analyses the blueprint BEFORE asking anything it can answer itself, then presents ONE
-confirmation round. It is **fully portable** — every path and the output location are
-prompted from the user; nothing about drive letters or folder layout is assumed.
+The command is **derive-first, confirm-once**: it ingests and analyses the blueprint BEFORE
+asking anything it can answer itself, then presents ONE confirmation round. It is **fully
+portable** — every path and the output location are prompted from the user; nothing about drive
+letters or folder layout is assumed.
 
 Two hard rules inherited from the architecture:
-- **Physical names only in rendered layouts** (ADR-0001): `.vue` layouts and `slides.md`
-  must use the theme's real layout/slot names (`slide4`, `::title::`, `::ph-1::`).
-  Semantic aliases (`cover`, `default`, `section`) live ONLY in `semantic-layouts.json`,
-  never in rendered files (the May-2026 render-time-failure lesson).
-- **A theme is visuals only.** Deck structure (framing-slide sequence, decision points)
-  belongs in a *skeleton* inside the theme pack, never in the theme package.
+- **Physical names only in rendered layouts** (ADR-0001, surviving rule): `.vue` layouts,
+  `example.md`, and any `slides.md` must use the theme's real layout/slot names (`slide4`,
+  `::title::`, `::ph-1::`). Semantic aliases (`cover`, `default`, `section`) live ONLY in
+  `semantic-layouts.json`, never in rendered files (the May-2026 render-time-failure lesson).
+- **A theme is visuals only, plus its `styleguide.md`.** No deck structure, no skeletons, no
+  `pack.json`. Everything that only makes sense for one theme lives in its repo; the toolkit
+  stays generic.
 
-Reference implementation to mirror for structure: the IU theme pack the user already has
-(ask them for it, or read `~/.slidecraft/packs.json`) — `pack.json`,
-`slidev-theme-ilse/` (`package.json`, `layouts/*.vue`, `assets/`, `semantic-layouts.json`),
-and `skeletons/sprint/` (`skeleton.json`, `templates/*.md`, `author-guide.md`,
-`diagram-style.md`). The root `styleguide.md` is the reference format for the style guide.
+Reference implementation to mirror for structure: the user's existing inner theme
+`slidev-theme-general/` (`package.json`, `layouts/*.vue`, `components/*.vue`,
+`semantic-layouts.json`, `styleguide.md`, `example.md`) — ask them for its path. The root
+`styleguide.md` in this repo is the reference format for the style guide.
+
+## Goal — the output tree
+
+Theme creation must output ONLY a plain, deck-ready theme:
+
+```
+slidev-theme-<slug>/
+  package.json            # name "slidev-theme-<slug>" + slidev.defaults (colorSchema,
+                          #   aspectRatio, canvasWidth, fonts.sans/weights)
+  layouts/*.vue           # one per kind; PHYSICAL names; each renderable slot is a
+                          #   <slot name="…"> so scan_theme.py can read it
+  components/*.vue        # optional
+  public/                 # theme's own served assets (logos, backgrounds)  [PPTX importer
+                          #   emits assets/ instead — either is fine]
+  styles/index.css        # optional global styles / CSS custom properties
+  semantic-layouts.json   # REQUIRED slot-role contract: alias → { layout, slots{role:physical},
+                          #   intent, defaults }. How the composer knows a cryptic physical slot
+                          #   (::body-26::, ::ph-1::, slide4) plays a ROLE, how to fill it, and
+                          #   its default value.
+  styleguide.md           # the theme's visual contract (Phase 2)
+  example.md              # STANDARD DECK exercising every layout idiomatically (Phase 3)
+  .gitignore              # node_modules/, dist/, .slidev/
+```
+
+No `pack.json`, no `skeletons/`, no `<slug>-theme-pack/` wrapper folder.
 
 ---
 
@@ -45,16 +73,12 @@ single `AskUserQuestion` call where possible (skip any part `$ARGUMENTS` already
    - `website` — a live web page or HTML/CSS template (URL)
    - `none` — no blueprint; build from a description / the base scaffold
 3. **Purpose** — what are decks in this theme for? (academic lecture / corporate briefing /
-   sales or pitch / training & workshop / other). This shapes the layout inventory, the
-   framing-slide set, and the writing-style section of the style guide. Store as `PURPOSE`.
-4. **Scope** — `theme` (visuals only + style guide + demo deck) or `pack` (also generate a
-   starter skeleton so `/slidecraft:new-deck` can consume it immediately). Store as `SCOPE`.
-5. **Output parent folder** — where should the new theme/pack be created? Suggest the folder
-   where the user's other theme packs live (from `~/.slidecraft/packs.json` if present),
-   but let them choose. Resolve to an absolute path.
-   - For `SCOPE=pack`: `OUT = <parent>/<slug>-theme-pack/`, theme at `OUT/slidev-theme-<slug>/`.
-   - For `SCOPE=theme`: `OUT` is the theme dir itself, `<parent>/slidev-theme-<slug>/`.
-   Abort and ask before overwriting an existing non-empty target.
+   sales or pitch / training & workshop / other). This shapes the layout inventory and the
+   writing-style section of the style guide. Store as `PURPOSE`.
+4. **Output parent folder** — where should the new theme be created? Suggest the folder where
+   the user's other themes live, but let them choose. Resolve to an absolute path. The theme dir
+   is `THEME_DIR = <parent>/slidev-theme-<slug>/`. Abort and ask before overwriting an existing
+   non-empty target.
 
 After Phase 0, ask for the concrete **blueprint location** (path or URL) unless it was
 already given. Store as `BLUEPRINT`.
@@ -87,16 +111,17 @@ Follow the sub-path for the chosen `BLUEPRINT` type:
 
 ### 1a. PPTX — reuse the importer (richest, pixel-accurate)
 This is the extractor already built on the PPTX XML. It emits real `.vue` layouts with
-absolute-positioned physical-name slots, extracted assets, a demo deck, and a
-`theme-manifest.json` with the resolved palette + fonts.
+absolute-positioned physical-name slots, extracted assets, a demo deck, and a theme
+`package.json`. Prefer running the proven `/slidecraft:import-template` flow, or call the
+importer directly:
 ```bash
 python -c "
 from pathlib import Path
 from slidecraft.importer.convert import convert
 r = convert(
     pptx_path=Path(r'<BLUEPRINT>'),
-    theme_dir=Path(r'<THEME_DIR>'),      # OUT/slidev-theme-<slug> (pack) or OUT (theme)
-    deck_dir=Path(r'<THEME_DIR>/deck'),  # demo deck sibling
+    theme_dir=Path(r'<THEME_DIR>'),        # <parent>/slidev-theme-<slug>
+    deck_dir=Path(r'<THEME_DIR>/deck'),    # a temporary preview deck (not shipped in the theme)
     theme_name='slidev-theme-<slug>',
 )
 print(r)
@@ -104,9 +129,8 @@ print(r)
 ```
 `ConvertResult` reports `slides_count`, `typefaces_total/substituted`, `sans_families`,
 `alias_font_faces`, `warnings` — surface these. The importer emits `package.json`,
-`layouts/*.vue`, and `assets/` (it does NOT write a `theme-manifest.json` — that belonged to
-the older `extract-pptx-theme.py` script). Fill the design observation by reading the emitted
-artifacts:
+`layouts/*.vue`, and `assets/` (it does NOT write any `theme-manifest.json` — that belonged to
+an older extractor). Fill the design observation by reading the emitted artifacts:
 - `<THEME_DIR>/package.json` → `slidev.defaults.fonts.sans` + `weights`, `colorSchema`,
   `canvasWidth`, `aspectRatio`.
 - `<THEME_DIR>/layouts/*.vue` → inline `color:` / `font-family:` / `background:` values
@@ -157,9 +181,9 @@ inventory for the chosen `PURPOSE` (see Phase 3).
 
 ## Phase 2 — Write the style guide
 
-Write `<OUT>/styleguide.md` (for a pack) or `<THEME_DIR>/styleguide.md` (theme-only), in the
-**14-section format** of the root `styleguide.md`, describing the OBSERVED style precisely —
-not a generic template. Fill every section with concrete specifics from Phase 1:
+Write `<THEME_DIR>/styleguide.md`, in the **14-section format** of the root `styleguide.md`,
+describing the OBSERVED style precisely — not a generic template. Fill every section with
+concrete specifics from Phase 1:
 
 1. Overall visual character · 2. Colour palette (every hex, with role + "use sparingly"
 notes) · 3. Typography (families, weights, casing, alignment) · 4. Image style · 5. Icons &
@@ -168,100 +192,95 @@ illustrations · 6. Charts & data-viz · 7. Layout behaviour for generated conte
 (matched to `PURPOSE`) · 12. Positive prompt template · 13. Negative prompt · 14. Practical
 generation rules.
 
-This document is the human- and AI-facing description of the theme's look. If `SCOPE=pack`
-its rules become the seed for the skeleton's `diagram-style.md` **consistency contract**
-(Phase 4) — one source of truth for both the figure generator and the image-critic.
+**The style guide MUST include a figure/diagram consistency section** (fold it into §4/§6/§8
+and the prompt templates §12–§14): the rules the **image-composer** consumes via its
+`%STYLE-GUIDE%` injection to keep generated figures consistent — **one shape per role, one
+connector style with one arrowhead, one accent, direct labels, generous whitespace, fill the
+canvas, flat vector (no gradients/shadows/3D)**. This is the single source of truth for both the
+figure generator and the image-critic; there is no separate `diagram-style.md`.
 
 Show the user the palette + font + layout-inventory summary now (the derived facts), so the
 Phase 3 confirmation is a quick check rather than data entry.
 
 ---
 
-## Phase 3 — Assemble the theme (layouts + slots + config)
+## Phase 3 — Assemble the theme (layouts + slots + config + slot-role map + standard deck)
 
-The output theme dir must end up with:
-```
-slidev-theme-<slug>/
-  package.json            # npm metadata + slidev.defaults (colorSchema, aspectRatio,
-                          #   canvasWidth, fonts.sans/weights)
-  layouts/*.vue           # one per layout kind; PHYSICAL slot names via <slot name="…">
-  assets/                 # logos, backgrounds, decorative SVG/PNG (+ manifest if extracted)
-  styles/index.css        # optional global styles / CSS custom properties
-  semantic-layouts.json   # alias → { layout, slots{alias:physical}, intent } map
-  example.md              # demo deck exercising every layout (npx slidev-runnable)
-```
+Produce the **Goal** tree above. Concretely:
 
-- **PPTX path (1a):** layouts + assets + `package.json` already emitted; your job is to
-  review them, then AUTHOR `semantic-layouts.json` by mapping each meaningful layout to a
-  semantic alias with per-slot `intent` strings (copy the ILSE `semantic-layouts.json` shape:
-  `aliases.<name> = { layout, slots{semantic:physical}, intent, defaults }`, plus
-  `unmapped_layouts`). Write `example.md`.
+- **PPTX path (1a):** layouts + assets + `package.json` already emitted; your job is to review
+  them, then AUTHOR `semantic-layouts.json` and `example.md` (below). If you ran
+  `/slidecraft:import-template`, its interactive step already writes `semantic-layouts.json` —
+  reuse it.
 - **Copied/authored paths (1b–1e):** ensure/author each layout `.vue`. Rules:
   - Root element `position: relative; overflow: hidden;` sized to the canvas (e.g.
     1280×720); slots are absolutely-positioned `<div>`s wrapping `<slot name="…">`.
+  - **Every renderable region is a `<slot name="…">` with a PHYSICAL name** — this is what
+    `scan_theme.py` reads to build the deck's theme capabilities. A layout with only a bare
+    `<slot/>` exposes a single `default` slot; name your regions when a layout has more than one.
   - Colours via CSS variables / the theme palette — no scattered hardcoded hexes.
   - Provide a **default** content layout, and the layout kinds the inventory + `PURPOSE`
     call for. Sensible starter inventory (include what fits; confirm with the user):
     `cover`, `agenda`/`section-overview`, `section` (divider), `default` (title+body),
-    `content-image` (text+figure), `two-cols`, `quote`, `facts`, `end`/`thank-you`.
+    `content-image` (text+figure), `figure` (full-bleed), `two-cols`, `quote`, `facts`,
+    `end`/`thank-you`.
   - Persistent furniture (logo, slide number, footer) → `global-bottom.vue` or per-layout
     slots, matching the blueprint.
-  Then AUTHOR `semantic-layouts.json` mapping aliases → these physical names + slot intents.
 
-**Confirmation round (the one checkpoint):** `AskUserQuestion` with the derived values —
-palette (editable), fonts, and a multiSelect of which layouts to include — plus, if
-`SCOPE=pack`, which framing slides the skeleton should offer. Apply the answers.
-
----
-
-## Phase 4 — (Only if `SCOPE=pack`) starter skeleton + pack.json
-
-Mirror the ILSE pack layout. Write:
-
-`<OUT>/pack.json`:
+### `semantic-layouts.json` — REQUIRED slot-role contract
+AUTHOR (or reuse from the importer) a `semantic-layouts.json` mapping each meaningful layout to
+a semantic alias. Shape (mirror `slidev-theme-general`):
 ```json
 {
-  "name": "<slug>-theme-pack",
-  "version": "<today>",
-  "description": "<slug> theme pack: the slidev-theme-<slug> theme plus its skeletons.",
-  "theme": { "package": "slidev-theme-<slug>", "path": "slidev-theme-<slug>" },
-  "skeletons": ["<skeleton-name>"]
+  "version": "1.1",
+  "theme": "slidev-theme-<slug>",
+  "aliases": {
+    "cover":  { "layout": "<physical>", "slots": { "title": "<physical-slot>", "meta": "<physical-slot>" },
+                "intent": "What this layout is for; per-slot roles, budgets, what must NOT go on it.",
+                "defaults": {} },
+    "end":    { "layout": "<physical>", "slots": { "title": "<physical-slot>" },
+                "intent": "Closing slide; title is 'Thank you', never recap content.",
+                "defaults": { "title": "Thank you" } }
+  },
+  "unmapped_layouts": ["<physical>", "..."]
 }
 ```
+Every `slots` value and every `layout` is a **physical** name. `intent` is free-form English the
+composer reads to fill each slot by role; `defaults` supplies fixed content for otherwise-empty
+role slots (agenda `title` → "Agenda", closing `title` → "Thank you"). Both fields must be
+present (`""` / `{}` when empty). This is what lets a composer fill a cryptic physical slot
+(`::body-26::`, `::ph-1::`) it would otherwise have no way to interpret.
 
-`<OUT>/skeletons/<skeleton-name>/`:
-- `skeleton.json` — `name`, `version`, `description`, `theme`, a `_placeholders` note
-  (templates use `@@KEY@@` markers, NOT `{{…}}` which collides with Vue;
-  `scripts/scaffold_deck.py` substitutes them from `recipe.json`), a `framing_slides[]`
-  sequence (each `{id, file, template, layout: <PHYSICAL name>, optout, filled_by}` with a
-  single `CONTENT` insertion point), `decision_points[]` (each with a `derive` hint), and a
-  `workflow` block (citations / mindmap / galleries / exam_focus toggles, `polish_passes`,
-  `author_rules`, `diagram_style`). Reference the theme's PHYSICAL layout names only, and
-  tailor the framing set to `PURPOSE` (a pitch deck ≠ a lecture).
-- `templates/*.md` — the framing-slide templates using physical `::slot::` names and
-  `@@KEY@@` placeholders.
-- `author-guide.md` — house style + per-slot writing rules for the author agents.
-- `diagram-style.md` — the **consistency contract** for AI figures, seeded from the Phase 2
-  style guide (one shape per role, one connector style, one accent, fill the canvas, etc.).
+### `example.md` — a first-class STANDARD DECK (not a stub)
+AUTHOR a realistic, well-structured **standard deck** that exercises **every** layout
+idiomatically: **cover · agenda · content · section · figure · closing** (add two-cols/quote if
+the theme has them). Write it in the theme's **physical** layout + slot names. It serves two
+jobs: it is the composer's concrete "how a deck looks in this theme" reference (it replaces the
+old per-theme skeleton templates), and it is the render sanity-check for the theme. Use realistic
+placeholder copy (a short coherent topic), not lorem ipsum; keep each slide within the density a
+real slide would carry.
 
-Keep skeletons self-contained (duplication between skeletons is accepted for independence —
-ADR-0001). Do NOT invent workflow extension points beyond the fixed set (ADR-0002).
+**Confirmation round (the one checkpoint):** `AskUserQuestion` with the derived values —
+palette (editable), fonts, and a multiSelect of which layouts to include. Apply the answers.
 
 ---
 
-## Phase 5 — Finalise & report
+## Phase 4 — Finalise & report
 
 - Write `<THEME_DIR>/.gitignore` (`node_modules/`, `dist/`, `.slidev/`, `*.log`, `.DS_Store`,
   `Thumbs.db`).
-- Offer to `git init` the theme/pack (default: ask; no by default).
-- `npm install` in the demo deck / theme so it previews.
+- Offer to `git init` the theme (default: ask; no by default).
+- Verify it renders: `cd "<THEME_DIR>" && npm install && npx slidev build example.md` should exit
+  0 (or preview with `npx slidev example.md`). Fix any layout that fails to render.
 - Report:
-  - Output path(s); whether a theme or a full pack was produced; blueprint type used.
+  - Output path (`<THEME_DIR>`); blueprint type used.
   - For PPTX: `slides_count`, `sans_families`, `warnings` from `ConvertResult`.
-  - Palette + fonts + the final layout inventory (alias → physical).
-  - Where the style guide is; where the skeleton is (if any).
-  - Preview command: `cd "<demo-deck-or-theme>" && npm install && npx slidev`.
-  - Next step: run `/slidecraft:new-deck` and point it at `<OUT>` to build a deck on it.
+  - Palette + fonts + the final layout inventory (alias → physical, from `semantic-layouts.json`).
+  - Where the style guide is (`<THEME_DIR>/styleguide.md`) and that the standard deck is
+    `example.md`.
+  - Preview command: `cd "<THEME_DIR>" && npm install && npx slidev example.md`.
+  - **Next step:** point `/init-deck` at `<THEME_DIR>` (theme type: **local**) to build a deck on
+    this theme; then drop inputs into `input/` and run `/draft-deck`.
   - If a theme repo was cloned/copied: note its licence and that attribution was preserved.
 
 ---
@@ -269,10 +288,15 @@ ADR-0001). Do NOT invent workflow extension points beyond the fixed set (ADR-000
 ## Rules
 
 - Derive before you ask; one confirmation round; never ask what the blueprint answers.
-- Rendered layouts use physical names; semantic aliases live only in `semantic-layouts.json`.
-- The theme package stays visuals-only; structure lives in skeletons (theme-pack scope).
-- Downloads (git clone, file fetch) need explicit user go-ahead; browsing declines
-  consent banners and never submits forms or logs in.
+- Rendered layouts, `example.md`, and any `slides.md` use **physical names**; semantic aliases
+  live only in `semantic-layouts.json`.
+- The theme is **visuals-only plus its `styleguide.md`**. No `pack.json`, no `skeletons/`, no
+  theme-pack wrapper. Deck shape lives in storytelling skills, not in the theme.
+- `semantic-layouts.json` and a first-class `example.md` are **required** deliverables, not
+  optional extras — the composer depends on both.
+- Downloads (git clone, file fetch) need explicit user go-ahead; browsing declines consent
+  banners and never submits forms or logs in.
 - Preserve licences/attribution of any copied theme.
-- Fast, backward-compatible path still works for a bare PPTX conversion: choose
-  `pptx` + `theme` scope and accept the defaults.
+- Keep everything portable — prompt for paths, assume no drive letters or folder layout.
+- Fast path for a bare PPTX conversion still works: choose `pptx` and accept the defaults (or run
+  `/slidecraft:import-template` directly).

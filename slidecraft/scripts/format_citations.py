@@ -1,6 +1,6 @@
 """Render citations from ``references.bib`` via citeproc-py + CSL styles.
 
-The slide-author agent should stop hand-templating APA strings into slide
+Slide-writing agents should stop hand-templating APA strings into slide
 files. Templating by hand drifts — a missing ``&``, an inconsistent comma
 before the year, ``pp.`` vs ``p.`` — and the drift only surfaces when a
 human re-reads the deck. Worse, switching tone (academic → business) means
