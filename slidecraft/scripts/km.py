@@ -8,8 +8,11 @@ Subcommands:
   create-nugget --file PATH                                 -> {"nugget_id": ...}
   create-slide  --title T --nuggets a,b --after ID|end     -> {"slide_id": ...}
   merge-slides  --slides a,b [--title T]                    -> {"slide_id": ...}
-  set-content   --slide ID --body-file PATH                 -> {"ok": true}
+  set-content   --slide ID --body-file PATH                 -> {"ok": true, ...}
   validate                                                  -> {"ok": bool, ...}
+
+set-content also fills empty presenter notes from the slide's nuggets' raw
+knowledge, verbatim (D39) — see build_presenter_notes.
 
 Deck root is resolved from --deck or by walking up from CWD for deck-context.json.
 All mutations append one line to logs/actions.jsonl.
@@ -36,7 +39,11 @@ def stamp(root: Path) -> str:
 
 def slugify(title: str) -> str:
     s = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
-    return (s or "slide")[:60]
+    # Strip AFTER truncating: a cut at 60 chars can land on a hyphen, and a
+    # trailing hyphen would join the ``--`` stamp separator into ``---``. Slidev
+    # silently drops a ``src:`` import whose path contains ``---``, so the slide
+    # would vanish from the deck. Keep slugs hyphen-clean at both ends.
+    return (s or "slide")[:60].strip("-") or "slide"
 
 def log(root: Path, agent: str, action: str, **payload):
     (root / "logs").mkdir(exist_ok=True)
@@ -69,8 +76,20 @@ def order(root: Path) -> list[str]:
 
 def write_order(root: Path, ids: list[str]):
     c = ctx(root)
-    head = f"---\ntheme: default\ntitle: {c['deck'].get('topic','Deck')}\n---\n"
-    body = "".join(f"\n---\nsrc: ./slides/{i}.md\n---\n" for i in ids)
+    theme_ref = (c.get("theme") or {}).get("source") or "default"
+    title = c["deck"].get("topic", "Deck")
+    # Import the first slide via the headmatter's own ``src`` rather than as a
+    # separate ``---`` block. A standalone headmatter block followed by the first
+    # ``src:`` import leaves the deck opening on an empty slide (the headmatter
+    # renders as a blank slide 1); folding the first import into the headmatter
+    # makes slide 1 the real cover.
+    if ids:
+        head = (f"---\ntheme: {theme_ref}\ntitle: {title}\n"
+                f"src: ./slides/{ids[0]}.md\n---\n")
+        body = "".join(f"\n---\nsrc: ./slides/{i}.md\n---\n" for i in ids[1:])
+    else:
+        head = f"---\ntheme: {theme_ref}\ntitle: {title}\n---\n"
+        body = ""
     (root / "slides.md").write_text(head + body, encoding="utf-8")
 
 def skeleton(title: str, nugget_ids: list[str]) -> str:
@@ -220,6 +239,89 @@ def A_title(root: Path, sid: str) -> str:
     p = root / "slides" / f"{sid}.json"
     return json.loads(p.read_text(encoding="utf-8"))["title"] if p.exists() else sid
 
+# ---------- presenter notes (raw-knowledge fallback, D39) ----------
+
+def load_nugget(root: Path, nid: str) -> dict | None:
+    p = root / "nuggets" / f"{nid}.json"
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+
+def nugget_raw(n: dict) -> str:
+    """A nugget's *raw knowledge* as plain text — its verbatim provenance anchor.
+
+    ``raw_text`` for a text nugget; an image nugget's ``visible_text`` (the
+    verbatim strings in the figure) joined by newlines; ``information`` only as
+    a last resort so a nugget with neither anchor still yields a note.
+    """
+    raw = n.get("raw_text")
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    vt = n.get("visible_text")
+    if isinstance(vt, list) and vt:
+        return "\n".join(str(x) for x in vt).strip()
+    if isinstance(vt, str) and vt.strip():
+        return vt.strip()
+    info = n.get("information")
+    return info.strip() if isinstance(info, str) and info.strip() else ""
+
+def nugget_locator(n: dict) -> str:
+    """A short provenance label for a note block: ``source p.N`` (``· figure``
+    for an image nugget)."""
+    loc = str(n.get("source") or "?")
+    page = n.get("page")
+    if page not in (None, ""):
+        loc += f" p.{page}"
+    if n.get("kind") == "image":
+        loc += " · figure"
+    return loc
+
+def build_presenter_notes(root: Path, sid: str) -> str:
+    """Assemble a Slidev speaker-notes comment from a slide's nuggets' raw
+    knowledge (verbatim), each labelled with its source locator.
+
+    Empty string when the slide has no associated nuggets (a structural slide)
+    or none carry usable raw text — the caller then leaves notes untouched.
+    """
+    blocks = []
+    for nid in assoc(root).get(sid, []):
+        n = load_nugget(root, nid)
+        if not n:
+            continue
+        raw = nugget_raw(n)
+        if raw:
+            blocks.append(f"[{nugget_locator(n)}]\n{raw}")
+    if not blocks:
+        return ""
+    inner = ("Source material (verbatim) — presenter reference:\n\n"
+             + "\n\n".join(blocks))
+    # A literal comment terminator in the verbatim text would close the note
+    # early; neutralise only that exact sequence (keeps the text otherwise intact).
+    inner = inner.replace("-->", "-- >")
+    return f"<!--\n{inner}\n-->\n"
+
+def has_presenter_notes(body: str) -> bool:
+    """True when a composed body already ends with speaker notes.
+
+    Slidev treats the *last* HTML comment in a slide as its notes. We look only
+    at a trailing comment, and do NOT count a ``FIGURE NEEDED`` / skeleton
+    ``awaiting composition`` placeholder as notes — so those get real notes
+    appended after them (the appended block then becomes the last comment).
+    """
+    stripped = body.rstrip()
+    if not stripped.endswith("-->"):
+        return False
+    start = stripped.rfind("<!--")
+    if start == -1:
+        return False
+    inner = stripped[start + 4:-3].strip().lower()
+    if inner.startswith("figure needed") or inner.startswith("awaiting composition"):
+        return False
+    return True
+
 def cmd_set_content(root: Path, a):
     sp = root / "slides" / f"{a.slide}.md"
     if not sp.exists():
@@ -238,12 +340,22 @@ def cmd_set_content(root: Path, a):
         if not (root / "public" / asset.lstrip("/")).exists():
             sys.exit(f"ERROR: referenced asset '{asset}' does not exist "
                      f"(expected under public/: public{asset})")
+    # Presenter notes default to the nuggets' raw knowledge (D39): when the
+    # composer left speaker notes empty, fill them verbatim from the slide's
+    # nuggets so the presenter has the full source behind the telegraphic body.
+    notes_added = False
+    if not has_presenter_notes(body):
+        notes = build_presenter_notes(root, a.slide)
+        if notes:
+            body = body.rstrip() + "\n\n" + notes
+            notes_added = True
     sp.write_text(body, encoding="utf-8")
     stp = root / "slides" / f"{a.slide}.json"
     stj = json.loads(stp.read_text(encoding="utf-8")); stj["state"] = "composed"
     stp.write_text(json.dumps(stj, indent=2), encoding="utf-8")
-    log(root, "composer", "set-content", slide=a.slide, chars=len(body))
-    print(json.dumps({"ok": True, "slide": a.slide}))
+    log(root, "composer", "set-content", slide=a.slide, chars=len(body),
+        notes_added=notes_added)
+    print(json.dumps({"ok": True, "slide": a.slide, "notes_added": notes_added}))
 
 def cmd_validate(root: Path, a):
     errs = []

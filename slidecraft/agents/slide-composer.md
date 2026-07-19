@@ -42,6 +42,10 @@ You compose the body of **one** slide, then you are done.
    exposes no named roles, put the body in its default slot.
 4. **Compose and write** through `set-content --slide %SLIDE-ID% --body-file <tempfile>`,
    exactly as the skill specifies. Never write the slide file directly.
+5. **Leave presenter notes empty** (no trailing `<!-- … -->`) unless you deliberately want a
+   delivery cue there: `set-content` fills empty notes **verbatim** from your nuggets' raw
+   knowledge, so the presenter gets the full source behind the terse body without you pasting
+   it. See the skill's *Presenter notes* section.
 
 Compose in %LANGUAGE%. When `set-content` returns `{"ok": true}`, return a one-line
 summary of what you composed. Do not create, reorder, or merge slides — that is the

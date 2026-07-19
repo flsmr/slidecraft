@@ -1,51 +1,294 @@
 ---
 name: compose-slide
 description: The craft of writing one Slidev slide body from knowledge nuggets — density limits, visual-type-first, assertion titles, evidence bullets, figure placement. Use when composing or revising a single slide's content, or when a reviewer judges a slide's form. Triggers on "compose this slide", "write the slide body", "the slide is too long / too dense", "fix this slide's content".
+
+---
+# General guidance for composing a slide
 ---
 
-# Compose a slide
+## Primary objective
+
+Create a slide that is:
+
+* understandable within a few seconds;
+* precise enough for an academic presentation;
+* readable when projected;
+* useful as support for spoken explanation;
+* compact enough to fit comfortably on a 16:9 slide.
+
+The slide must communicate **one main teaching message**.
+
+## 1. Determine the slide’s function
+
+First infer what the slide should accomplish.
+
+Typical functions include:
+
+* distinguish two concepts;
+* explain a relationship;
+* show a process;
+* motivate a problem;
+* present a finding;
+* compare alternatives;
+* explain cause and effect;
+* introduce a definition and its implication.
+
+Choose exactly **one primary function**.
+
+Do not combine several independent arguments on one slide.
+
+## 2. Identify the core message
+
+Reduce the input to one sentence:
+
+> What should the audience remember from this slide?
+
+Use this message to decide:
+
+* the title;
+* the content structure;
+* which details to keep;
+* which details to omit.
+
+Prioritize conceptual understanding over completeness.
+
+If information is secondary, repetitive, explanatory, or better delivered orally, omit it.
+
+## 3. Write a short assertion title
+
+The title must express the slide’s central message rather than merely name its topic.
+
+Prefer:
+
+* `Digitalisierung ermöglicht – Transformation verändert`
+* `Automatisierung macht digitale Prozesse skalierbar`
+* `Semantische Priors stabilisieren strukturlose Regionen`
+
+Avoid:
+
+* `Digitale Transformation`
+* `Hintergrund`
+* `Methodik`
+* `Vorteile`
+* `Definitionen`
+
+### Title constraints
+
+* Prefer **3–7 words**.
+* Keep it to one line whenever possible.
+* Do not place the entire explanation in the title.
+* Use a contrast, conclusion, or relationship when appropriate.
+
+## 4. Respect the available slide space
+
+Assume that the slide also needs margins, visual hierarchy, and sufficient font size.
+
+Use as a default:
+
+* one title;
+* two or three main content areas;
+* approximately **30–55 visible words**;
+* at most two hierarchy levels;
+* no paragraph longer than two short lines;
+* no more than four bullets in one section;
+* no bullet that wraps across several lines.
+
+Do not fill all available space. White space is part of the slide.
+
+If the source contains too much information, reduce its scope. Do not solve the problem by shrinking text or creating many short bullets.
+
+## 5. Compress by abstraction, not by truncation
+
+Do not shorten sentences into vague keywords.
+
+Bad:
+
+* `Technische Aspekte`
+* `Strategischer Wandel`
+* `Neue Möglichkeiten`
+* `Prozessoptimierung`
+
+Better:
+
+* `Einführung digitaler Technologien`
+* `Strategische Neuausrichtung des Unternehmens`
+* `Geschäftsmodelle · Organisation · Beziehungen`
+
+Use compact phrases that retain the actual meaning.
+
+A reader should not have to guess how the terms relate to one another.
+
+## 6. Choose one clear content structure
+
+Select the structure that best matches the teaching goal.
+
+### For conceptual distinctions
+
+Use a compact comparison:
+
+```markdown
+| **Concept A** | **Concept B** |
+|---|---|
+| Central characteristic | Central characteristic |
+| Scope or examples | Scope or examples |
+```
+
+### For processes
+
+Use a short sequence:
+
+```markdown
+**Input** → **Transformation** → **Outcome**
+```
+
+### For cause and effect
+
+Use:
+
+```markdown
+**Cause**
+
+→ mechanism
+
+→ **effect**
+```
+
+### For a claim with support
+
+Use:
+
+```markdown
+**Claim**
+
+- Supporting point
+- Supporting point
+```
+
+### For categories
+
+Use two or three compact labeled groups.
+
+Do not use a table, process chain, and bullet list simultaneously unless the content cannot otherwise be understood.
+
+## 7. Make relationships explicit
+
+The structure must show how the elements are connected.
+
+Use words and symbols such as (in corresponding language):
+
+* `ermöglicht`;
+* `verändert`;
+* `führt zu`;
+* `wirkt als`;
+* `im Gegensatz zu`;
+* `→`;
+* `während`.
+
+Do not place related facts next to each other without explaining the relationship.
+
+Avoid misleading process chains. Concepts that differ in scope or function must not be presented as consecutive phases unless the source explicitly supports that interpretation.
+
+## 8. Preserve academic precision
+
+Every statement must be supported by the input.
+
+Do not:
+
+* add external facts;
+* invent examples;
+* introduce unsupported causality;
+* strengthen hypotheses into findings;
+* simplify a concept until it becomes incorrect.
+
+Preserve distinctions such as:
+
+* technical versus strategic;
+* enabler versus outcome;
+* tool versus transformation;
+* hypothesis versus result;
+* correlation versus causation.
+
+Use the terminology of the source consistently.
+
+## 9. Treat automation, technologies, or methods according to their role
+
+When the input describes several related concepts, do not give them equal visual status automatically.
+
+Determine whether each concept is:
+
+* a technical enabler;
+* a strategic change;
+* an operational mechanism;
+* an outcome;
+* an example;
+* supporting evidence.
+
+Represent this hierarchy visibly.
+
+For example, if technologies enable a transformation and automation acts as an operational lever, do not present all three as equal consecutive stages.
+
+## 10. Use examples economically
+
+Keep examples only when they make an abstract concept easier to understand.
+
+Present short example groups using separators:
+
+```markdown
+**KI, Big Data, IoT**
+```
+
+Do not create a separate bullet for every example.
+
+Examples must remain subordinate to the main message.
+
+## 11. Avoid redundant takeaways
+
+Do not automatically add a separate takeaway box.
+
+Add a takeaway only when it contributes an additional conclusion that is not already clear from the title and structure.
+
+If the title already communicates the central message, use the available space for explanation rather than repetition.
+
+## 12. Handle citations unobtrusively
+
+If the input contains a source, include it as a short footer:
+
+```markdown
+*Quelle: Author, Year, p. X*
+```
+
+Do not place citations inside every content block unless specifically required.
+
+The citation does not count as a main content element.
+
+## 13. Output only visible slide content
+
+Return only Markdown that should appear on the slide.
+
+Do not include:
+
+* your analysis;
+* explanations of your decisions;
+* speaker notes;
+* layout commentary;
+* alternative versions;
+* recommendations for images;
+* YAML front matter;
+* word counts;
+* introductory or concluding remarks.
+
+
+# Compose a slide instructions
 
 You write the body of **one** slide from its assigned knowledge nuggets. Real teaching
 copy — not a paste of the nugget digest, not a wall of text.
 
 ## The one rule (provenance)
 
-**Say only what your nuggets support.** Every word traces to a nugget's `raw_text` or
+**Say only what your nuggets support.** Every claim traces to a nugget's `raw_text` or
 `visible_text` anchor. No facts, numbers, or examples from your own knowledge. Thin
 nuggets → short slide. That is correct, not a failure.
 
-## Density budget — a hard cap, not a target
-
-A content slide is a headline the speaker talks *around*, not a document. Caps for an
-academic/technical slide (tighten further for keynote):
-
-- **≤ 40 words of body total.** Count them. Over 40 = cut.
-- **3–5 bullets**, never more than 6. Fewer is better — whitespace is the speaker's room.
-- **≤ 8 words per bullet.** Telegraphic: drop articles. "Additive processes need no dies"
-  not "The additive processes do not need any forming dies".
-- **No prose paragraphs on a content slide.** One short lead line is allowed; a second
-  paragraph is the wall-of-text auto-fail. If you wrote sentences, convert to bullets or cut.
-- **One message.** A first-time reader grasps the point from title + lead alone. Two
-  unrelated points → lead with the stronger, drop or defer the other. (You cannot merge
-  slides — that is the Storyteller's job; you just compose what you were given, tightly.)
-
-## Title and assertion
-
-- **Title (frontmatter `title:`)** — a concept *name*: 1–5 words, a noun phrase. No
-  sentence, no formula, no lone capital letters or operators. "Rapid prototyping", not
-  "Rapid prototyping reaches quality sooner".
-- **Body `# H1`** — the one **assertion**, ≤ 10 words, the claim the slide proves.
-  `# Reaches high quality soonest`. This is what carries the argument; write it first,
-  then let the bullets be its evidence.
-
-## Bullets are evidence, not paraphrase
-
-Each bullet is a *separate, specific* support for the assertion — a named thing, a number,
-a mechanism. If a bullet just restates the title, delete it. **Concrete beats abstract
-every time**: "Layer thickness down to 0.05 mm" beats "high accuracy".
-
-No **name-drop lists**: if a nugget lists seven industries, state the *concept the list
-shows* and give two or three examples — never all seven as bullets.
 
 ## Pick the visual type before the words
 
@@ -63,9 +306,8 @@ failure mode.
 
 ## Figures
 
-- **Image nugget assigned** → place it: use its `asset` path, an image-bearing layout
-  (`image-right`, `two-cols`), and a one-line caption/attribution from the nugget's
-  nearest-text context. Reference only assets that exist.
+- **Image nugget assigned** → place it using its `asset` path: if the image nugget is the only assigned knowledge nugget -> show the image only, no text. If additional nuggets exist, use an image-bearing split layout
+  (e.g., `image-right`, `two-cols`), and compose text from the other nuggets (if suitable). Reference only assets that exist.
 - **A figure would help but none is assigned** → leave `<!-- FIGURE NEEDED: ... -->`.
   Never invent an image path.
 - Choose the `layout:` from the theme capabilities you were given, matched to the modality:
@@ -111,6 +353,18 @@ DLMAIEFSCVAS02
 Dr. Jane Roe · 2026-07-18
 ```
 
+## Presenter notes — leave them to the raw knowledge (default)
+
+The slide body is telegraphic on purpose; the full source behind it belongs in the
+**presenter notes**. **Do not hand-copy nugget text into notes** — when you leave the
+speaker-notes block empty, `set-content` fills it **verbatim** from your slide's nuggets'
+raw knowledge (`raw_text` / an image's `visible_text`, each with its locator). That keeps
+the notes exact; an LLM paste would risk paraphrasing them.
+
+Only write your own notes when you want something *other* than the raw source there — a
+delivery cue, a transition. If you do, add a trailing `<!-- … -->` comment at the very end
+of the slide; that suppresses the raw-knowledge fallback for this slide.
+
 ## Write through the script (never write the slide file directly)
 
 Write the complete markdown (frontmatter + body) to a temp file, then:
@@ -125,10 +379,16 @@ markdown. On `{"ok": true}` you are done; return a one-line summary.
 
 ## Self-check before you write
 
-1. Body ≤ 40 words? Bullets ≤ 6, each ≤ 8 words? No paragraph?
-2. Title a concept name; assertion in `# H1`?
-3. Every bullet concrete and non-restating?
-4. One message a novice gets from title + lead?
-5. Every claim traceable to a nugget?
+1. Does the slide communicate exactly one main message?
+2. Is the title a Concept Name, conclusion, distinction, or relationship?
+3. Can the content be understood within a few seconds?
+4. Does the slide fit comfortably without small text?
+5. Are there no more than two or three main content areas?
+6. Are relationships between concepts explicit?
+7. Has unnecessary detail been omitted?
+8. Is the slide conceptually accurate rather than merely concise?
+9. Every claim traceable to a nugget?
+10. Does the output contain only visible Markdown slide content?
+11. Every bullet concrete and non-restating?
 
 If any answer is no, cut before calling set-content.

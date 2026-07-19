@@ -248,6 +248,31 @@ def test_localize_theme_idempotent_when_theme_dir_exists(tmp_path):
     assert not (deck / "theme" / "layouts").exists()  # copy skipped
 
 
+def test_local_theme_own_deps_folded_into_package_json(tmp_path):
+    theme_dir = _make_theme(tmp_path / "brand-theme")
+    # The theme declares its own runtime dep + a self-ref + a workspace spec.
+    (theme_dir / "package.json").write_text(json.dumps({
+        "name": "slidev-theme-brand",
+        "dependencies": {
+            "slidev-theme-brand": "1.0.0",          # self-ref -> dropped
+            "@slidev/theme-default": "^0.25.0",     # real dep -> kept
+            "some-mono-pkg": "workspace:*",         # non-registry -> dropped
+        },
+    }), encoding="utf-8")
+    deck = tmp_path / "deck"
+    deck.mkdir()
+    ans = _answers({"type": "local", "source": str(theme_dir)})
+
+    scaffold_deck.scaffold(deck, ans)
+    pkg = json.loads((deck / "package.json").read_text(encoding="utf-8"))
+
+    deps = pkg["dependencies"]
+    assert deps["@slidev/cli"] == "latest"            # deck's own pin
+    assert deps["@slidev/theme-default"] == "^0.25.0"  # theme dep folded in
+    assert "slidev-theme-brand" not in deps           # self-ref dropped
+    assert "some-mono-pkg" not in deps                # workspace spec dropped
+
+
 def test_builtin_theme_not_localized(tmp_path):
     deck = tmp_path / "deck"
     deck.mkdir()

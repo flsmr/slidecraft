@@ -206,6 +206,37 @@ def theme_package(theme: dict):
     return None
 
 
+def local_theme_deps(root: Path) -> dict:
+    """Runtime dependencies a localized local theme declares in its own
+    ``theme/package.json``, so the deck's ``npm install`` pulls what the theme
+    needs to render — completing the self-containment (D38(c)).
+
+    Best-effort: returns ``{}`` when the theme ships no ``package.json`` / no
+    ``dependencies``. Skips the theme's self-reference and any non-registry
+    specifier (``workspace:`` / ``file:`` / ``link:``) that a plain deck install
+    couldn't resolve.
+    """
+    pkg = root / THEME_SUBDIR / "package.json"
+    if not pkg.is_file():
+        return {}
+    try:
+        data = json.loads(pkg.read_text(encoding="utf-8", errors="replace"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    deps = data.get("dependencies")
+    if not isinstance(deps, dict):
+        return {}
+    self_name = data.get("name")
+    out = {}
+    for name, spec in deps.items():
+        if name == self_name:
+            continue
+        if isinstance(spec, str) and spec.split(":", 1)[0] in ("workspace", "file", "link"):
+            continue
+        out[name] = spec
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Injection / deck blocks
 # ---------------------------------------------------------------------------
@@ -308,6 +339,11 @@ def write_package_json(root: Path, ans: dict, theme: dict, created: list):
     pkg = theme_package(theme)
     if pkg:
         deps[pkg[0]] = pkg[1]
+    # A localized local theme may need its own deps to render; fold them in
+    # (without overriding the deck's own @slidev/cli pin).
+    if theme.get("type") == "local":
+        for name, spec in local_theme_deps(root).items():
+            deps.setdefault(name, spec)
     package = {
         "name": scan_theme_slug(ans["topic"]),
         "private": True,
