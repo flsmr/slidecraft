@@ -24,6 +24,7 @@ def make_theme(root: Path) -> Path:
         "slide1": ["body-26", "body-12"],
         "content": ["heading", "body-1"],
         "cols": ["heading", "col-a", "col-b"],
+        "media": ["heading", "body-2", "fig-2"],
         "figure": ["heading", "fig-1"],
         "closing": ["body-26"],
         "plain": [],  # no semantic entry, no named slots — bare layout
@@ -46,8 +47,13 @@ def make_theme(root: Path) -> Path:
             "two-cols": {"layout": "cols",
                          "slots": {"title": "heading",
                                    "left": "col-a", "right": "col-b"},
-                         "intent": "Comparison or image+text split.",
+                         "intent": "Comparison of two concepts.",
                          "defaults": {}},
+            "image-split": {"layout": "media",
+                            "slots": {"title": "heading", "body": "body-2",
+                                      "image": "fig-2"},
+                            "intent": "A figure beside supporting text.",
+                            "defaults": {}},
             "figure": {"layout": "figure",
                        "slots": {"title": "heading", "image": "fig-1"},
                        "intent": "One figure with a headline; no body text.",
@@ -111,3 +117,39 @@ def converted_deck(deck, capsys):
     source_converter.cmd_convert(deck, None)
     capsys.readouterr()  # drop the converter's report from captured output
     return deck
+
+
+# ---------------------------------------------------------------------------
+# Scripted fake executor (seam 2 — the invoke shim's `cmd` executor)
+# ---------------------------------------------------------------------------
+
+FAKE_EXECUTOR = """\
+import pathlib, sys
+d = pathlib.Path(sys.argv[1])
+counter = d / "count"
+i = int(counter.read_text()) if counter.exists() else 0
+counter.write_text(str(i + 1))
+files = sorted(d.glob("resp-*.txt"))
+sys.stdout.write(files[min(i, len(files) - 1)].read_text(encoding="utf-8"))
+"""
+
+
+def wire_fake_executor(deck: Path, tmp_path: Path, role: str,
+                       responses: list[str]) -> Path:
+    """Point one role's executor at a scripted `cmd` fake that replays the
+    given responses in order (last one repeats). Returns the response dir —
+    its ``count`` file records how many invokes happened."""
+    import sys as _sys
+    respdir = tmp_path / f"responses-{role}"
+    respdir.mkdir()
+    for i, resp in enumerate(responses):
+        (respdir / f"resp-{i}.txt").write_text(resp, encoding="utf-8")
+    script = tmp_path / "fake_executor.py"
+    script.write_text(FAKE_EXECUTOR, encoding="utf-8")
+    ctx_path = deck / "deck-context.json"
+    ctx = json.loads(ctx_path.read_text(encoding="utf-8"))
+    executors = ctx.setdefault("executors", {})
+    executors[role] = {"executor": "cmd",
+                       "command": [_sys.executable, str(script), str(respdir)]}
+    ctx_path.write_text(json.dumps(ctx, indent=2), encoding="utf-8")
+    return respdir

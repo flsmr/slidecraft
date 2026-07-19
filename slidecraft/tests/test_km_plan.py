@@ -357,7 +357,7 @@ def test_write_plan_rejects_merge_of_structural_slides(deck, tmp_path, capsys):
 # Cap-2 exhaustion on plan validation aborts the run (seam 2)
 # ---------------------------------------------------------------------------
 
-from slidecraft.tests.test_km_mine import FAKE_EXECUTOR  # noqa: E402
+from slidecraft.tests.conftest import wire_fake_executor  # noqa: E402
 
 
 def test_plan_cap2_exhaustion_aborts_flagged_nothing_composed(deck, tmp_path,
@@ -365,17 +365,7 @@ def test_plan_cap2_exhaustion_aborts_flagged_nothing_composed(deck, tmp_path,
     _add_nugget(deck, "n1")
     bad_plan = json.dumps({"plan": [
         {"action": "create", "title": "X", "nuggets": ["ghost"]}]})
-    respdir = tmp_path / "responses"
-    respdir.mkdir()
-    (respdir / "resp-0.txt").write_text(bad_plan, encoding="utf-8")
-    script = tmp_path / "fake_executor.py"
-    script.write_text(FAKE_EXECUTOR, encoding="utf-8")
-    ctx_path = deck / "deck-context.json"
-    ctx = json.loads(ctx_path.read_text(encoding="utf-8"))
-    ctx["executors"] = {"storyteller": {
-        "executor": "cmd",
-        "command": [sys.executable, str(script), str(respdir)]}}
-    ctx_path.write_text(json.dumps(ctx, indent=2), encoding="utf-8")
+    wire_fake_executor(deck, tmp_path, "storyteller", [bad_plan])
 
     brief = tmp_path / "brief.md"
     km.cmd_plan_brief(deck, Namespace(out=str(brief)))

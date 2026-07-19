@@ -16,14 +16,14 @@ from __future__ import annotations
 import json
 import re
 import sys
-import textwrap
 from argparse import Namespace
 from pathlib import Path
 
 import pytest
 
 from slidecraft.scripts import invoke_shim, km
-from slidecraft.tests.conftest import SOURCE_FILE, SOURCE_SLUG
+from slidecraft.tests.conftest import (SOURCE_FILE, SOURCE_SLUG,
+                                       wire_fake_executor)
 
 # A verbatim passage from conftest.SOURCE_TEXT (guard-clean).
 VERBATIM = ("the material from which the prototypes are created is generally "
@@ -190,33 +190,9 @@ def test_mark_mined_is_idempotent(converted_deck, capsys):
 # The mine step end to end over the shim (seam 2, fake cmd executor)
 # ---------------------------------------------------------------------------
 
-FAKE_EXECUTOR = textwrap.dedent("""\
-    import pathlib, sys
-    d = pathlib.Path(sys.argv[1])
-    counter = d / "count"
-    i = int(counter.read_text()) if counter.exists() else 0
-    counter.write_text(str(i + 1))
-    files = sorted(d.glob("resp-*.txt"))
-    sys.stdout.write(files[min(i, len(files) - 1)]
-                     .read_text(encoding="utf-8"))
-""")
-
-
 def _wire_fake_executor(deck: Path, tmp_path: Path, responses: list[str]):
     """Point the deck's knowledge-miner at a scripted cmd executor."""
-    respdir = tmp_path / "responses"
-    respdir.mkdir()
-    for i, resp in enumerate(responses):
-        (respdir / f"resp-{i}.txt").write_text(resp, encoding="utf-8")
-    script = tmp_path / "fake_executor.py"
-    script.write_text(FAKE_EXECUTOR, encoding="utf-8")
-    ctx_path = deck / "deck-context.json"
-    ctx = json.loads(ctx_path.read_text(encoding="utf-8"))
-    ctx["executors"] = {"knowledge-miner": {
-        "executor": "cmd", "command": [sys.executable, str(script),
-                                       str(respdir)]}}
-    ctx_path.write_text(json.dumps(ctx, indent=2), encoding="utf-8")
-    return respdir
+    return wire_fake_executor(deck, tmp_path, "knowledge-miner", responses)
 
 
 def _run_mine_step(deck: Path, tmp_path: Path) -> tuple[int, dict]:

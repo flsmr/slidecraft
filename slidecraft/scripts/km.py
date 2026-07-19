@@ -11,6 +11,8 @@ Subcommands:
   mark-mined      --source SLUG                             -> {"ok": true, ...}
   plan-brief    --out PATH                                  -> {"ok": true, ...}
   write-plan    --file PATH                                 -> {"ok": true, "steps": [...]}
+  compose-brief --slide ID --out PATH                       -> {"ok": true, ...}
+  write-slide   --slide ID --file PATH                      -> {"ok": true, ...}
   create-slide  --title T --nuggets a,b --after ID|end
                 [--parked] [--intended-function F]          -> {"slide_id": ...}
   associate-nuggets --slide ID --nuggets a,b                -> {"slide_id": ...}
@@ -577,6 +579,317 @@ def cmd_write_plan(root: Path, a):
                       "active_after": n_active}))
 
 
+# ---------- compose brief + slide persist (D42/D43, ticket 16) ----------
+
+def layout_catalog(root: Path) -> dict[str, dict]:
+    """Layouts by their OFFERED name: the semantic alias when the theme ships
+    one, else the physical layout name. The composer only ever sees offered
+    names + role names; ``write-slide`` maps back to physical (ADR-0001)."""
+    caps = ctx(root)["theme"]["capabilities"]
+    catalog: dict[str, dict] = {}
+    for entry in caps.get("layouts", []):
+        offered = entry.get("alias") or entry["name"]
+        catalog.setdefault(offered, entry)
+    return catalog
+
+
+def layouts_section(root: Path) -> str:
+    """The layout capabilities for a composer brief: offered name, intent,
+    ROLE names, and defaults — never a physical slot name."""
+    lines = []
+    for offered, entry in layout_catalog(root).items():
+        intent = entry.get("intent", "")
+        lines.append(f"- **{offered}**" + (f" — {intent}" if intent else ""))
+        roles = entry.get("roles") or {}
+        if roles:
+            lines.append("  roles: " + ", ".join(roles.keys()))
+        else:
+            lines.append("  roles: title, body (single content area)")
+        defaults = entry.get("defaults") or {}
+        if defaults:
+            lines.append("  defaults: " + "; ".join(
+                f'{k} = "{v}"' for k, v in defaults.items()))
+    return "\n".join(lines)
+
+
+def style_contract_section(root: Path) -> str:
+    """Inline the theme's style guide CONTENT (a pure function cannot read
+    the file the old composer was pointed at)."""
+    sg = (ctx(root).get("theme") or {}).get("styleguide") or ""
+    if not sg:
+        return ""
+    p = Path(sg)
+    if not p.is_file():
+        return ""
+    body = strip_frontmatter(
+        p.read_text(encoding="utf-8-sig", errors="replace")).strip()
+    return "\n\n---\n\n## Theme style contract\n\n" + body + "\n"
+
+
+def slide_type(nuggets: list[dict]) -> str:
+    """The D42 slide type from the associated nuggets' kinds."""
+    if not nuggets:
+        return "structural"
+    kinds = {n.get("kind", "text") for n in nuggets}
+    if kinds == {"text"}:
+        return "text-only"
+    if kinds == {"image"}:
+        return "image-only"
+    return "image-text"
+
+
+def cmd_compose_brief(root: Path, a):
+    """Render the self-contained composer brief for ONE slide by slide type
+    (D40/D42): unified role+craft template + theme style contract + the
+    slide's routed nugget fields + layout roles/intents/defaults + deck
+    metadata. The two briefs read opposite fields of the same nugget: the
+    composer gets verbatim ``raw_text`` (never the ``information`` digest,
+    never ``visible_text``)."""
+    sid = a.slide
+    stj = load_state(root, sid)
+    if not stj:
+        sys.exit(f"ERROR: slide {sid} does not exist")
+    A = assoc(root)
+    if sid not in A:
+        sys.exit(f"ERROR: slide {sid} has no association entry")
+    nugs = []
+    for nid in A[sid]:
+        n = load_nugget(root, nid)
+        if not n:
+            sys.exit(f"ERROR: nugget {nid} missing")
+        nugs.append(n)
+    stype = slide_type(nugs)
+
+    c = ctx(root)
+    inj = c.get("injection", {}).get("slide-composer", {})
+    deckb = c["deck"]
+    values = {
+        "AUDIENCE": inj.get("AUDIENCE", deckb.get("audience", "")),
+        "DECK-TYPE": inj.get("DECK-TYPE", deckb.get("type", "")),
+        "LANGUAGE": inj.get("LANGUAGE", deckb.get("language", "")),
+    }
+    brief = render_template(load_template("slide-composer"), values)
+    brief += style_contract_section(root)
+
+    sec = ["\n\n---\n\n## Your slide\n"]
+    sec.append(f'- Working title: "{stj.get("title", sid)}"')
+    sec.append(f"- Slide type: {stype}")
+    hint = stj.get("intended_function")
+    if hint:
+        sec.append(f"- Intended didactic function (hint): **{hint}** — "
+                   "honor it unless the raw material clearly demands "
+                   "otherwise.")
+
+    text_nuggets = [n for n in nugs if n.get("kind", "text") == "text"]
+    image_nuggets = [n for n in nugs if n.get("kind") == "image"]
+
+    if stype == "structural":
+        sec.append("")
+        sec.append("This is a **structural** slide (cover, agenda, section "
+                   "divider, or closing). Compose it from the deck metadata "
+                   "and the layout defaults only — there is no source "
+                   "material.")
+        sec.append("")
+        sec.append("Deck metadata:")
+        sec.append(f"- Topic: {deckb.get('topic', '')}")
+        for label, key in (("Presenter", "PRESENTER"),
+                           ("Institution", "INSTITUTION"),
+                           ("Course", "COURSE"), ("Date", "DATE"),
+                           ("Footer", "FOOTER")):
+            v = inj.get(key, deckb.get(key.lower(), ""))
+            if v:
+                sec.append(f"- {label}: {v}")
+
+    if stype in ("text-only", "image-text"):
+        sec.append("")
+        sec.append("## Raw source material")
+        sec.append("")
+        sec.append("Compose the slide from these verbatim excerpts ONLY."
+                   + (" The figure below rides alongside — place it, never "
+                      "paraphrase it into body text." if stype == "image-text"
+                      else ""))
+        for i, n in enumerate(text_nuggets, 1):
+            sec.append("")
+            sec.append(f"### Excerpt {i} — {n.get('source', '?')}, "
+                       f"p. {n.get('page', '?')}")
+            sec.append("")
+            sec.append(str(n.get("raw_text", "")).strip())
+
+    if stype == "image-text":
+        n = image_nuggets[0]
+        sec.append("")
+        sec.append("## Figure to place")
+        sec.append("")
+        sec.append(f"- asset: {n.get('asset', '')}")
+        sec.append(f"- what it shows: {n.get('description', '')}")
+        sec.append(f"- citation: {n.get('source', '?')}, "
+                   f"p. {n.get('page', '?')}")
+        sec.append("")
+        sec.append('Place this figure via the "image" output field on an '
+                   "image-capable layout. Compose the body from the text "
+                   "excerpts above only.")
+
+    if stype == "image-only":
+        n = image_nuggets[0]
+        sec.append("")
+        sec.append("## Figure")
+        sec.append("")
+        sec.append(f"- asset: {n.get('asset', '')}")
+        sec.append(f"- what it shows: {n.get('description', '')}")
+        ctxt = str(n.get("context_text", "")).strip()
+        if ctxt:
+            sec.append(f"- nearby text in the source (headline material): "
+                       f"{ctxt}")
+        sec.append(f"- citation: {n.get('source', '?')}, "
+                   f"p. {n.get('page', '?')}")
+        sec.append("")
+        sec.append("This figure speaks for itself: compose a HEADLINE ONLY "
+                   "(from what the figure shows and the nearby text), place "
+                   'the figure via the "image" output field, and return '
+                   "**no body text**.")
+
+    sec.append("")
+    sec.append("## Layouts you may use")
+    sec.append("")
+    sec.append(layouts_section(root))
+    brief += "\n".join(sec) + "\n"
+
+    write_brief(root, a.out, brief)
+    log(root, "km", "compose-brief", slide=sid, type=stype, chars=len(brief))
+    print(json.dumps({"ok": True, "brief": a.out, "slide": sid,
+                      "type": stype, "chars": len(brief)}))
+
+
+def build_slide_markdown(root: Path, sid: str, obj) -> tuple[str, dict]:
+    """The composer's semantic role-keyed JSON (D43) → physical Slidev
+    markdown. Raises :class:`Rejection` on every model-fixable problem."""
+    if not isinstance(obj, dict):
+        raise Rejection("composer output must be a single JSON object")
+    catalog = layout_catalog(root)
+    layout = obj.get("layout")
+    if not isinstance(layout, str) or layout not in catalog:
+        raise Rejection(f"layout {layout!r} is not one of the offered "
+                        f"layouts: {sorted(catalog)}")
+    entry = catalog[layout]
+    physical_layout = entry["name"]
+    concept = obj.get("concept_type")
+    if concept not in CONCEPT_TYPES:
+        raise Rejection(f"concept_type {concept!r} not in "
+                        f"{list(CONCEPT_TYPES)}")
+    content = obj.get("content") or {}
+    if (not isinstance(content, dict)
+            or not all(isinstance(v, str) for v in content.values())):
+        raise Rejection('"content" must map role names to markdown strings')
+    roles = entry.get("roles") or {}
+    allowed = set(roles) - {"image"} if roles else {"title", "body"}
+    unknown = sorted(set(content) - allowed)
+    if unknown:
+        raise Rejection(f"unknown content role(s) {unknown} for layout "
+                        f"{layout!r} — allowed roles: {sorted(allowed)}")
+    image = obj.get("image") or None
+    if image is not None:
+        if not isinstance(image, dict) or not image.get("asset"):
+            raise Rejection('"image" must be an object with an "asset" path')
+        if roles and "image" not in roles:
+            raise Rejection(f"layout {layout!r} has no image slot — choose "
+                            "an image-capable layout or return no image")
+
+    defaults = entry.get("defaults") or {}
+    filled = {}
+    for role in allowed:
+        v = (content.get(role) or "").strip() or str(defaults.get(role, "")).strip()
+        if v:
+            filled[role] = v
+
+    title = filled.get("title") or load_state(root, sid).get("title", sid)
+    parts = [f"---\nlayout: {physical_layout}\n"
+             f"title: {json.dumps(title, ensure_ascii=False)}\n---\n"]
+    img_tag = ""
+    if image is not None:
+        alt = str(image.get("alt", "")).replace('"', "'")
+        img_tag = f'<img src="{image["asset"]}" alt="{alt}">'
+    if roles:
+        for role, slot in roles.items():
+            if role == "image":
+                if img_tag:
+                    # No blank line INSIDE an image slot (breaks MDC parsing).
+                    parts.append(f"\n::{slot}::\n{img_tag}\n")
+                continue
+            if role in filled:
+                parts.append(f"\n::{slot}::\n{filled[role]}\n")
+    else:
+        if "title" in filled:
+            parts.append(f"\n# {filled['title']}\n")
+        if "body" in filled:
+            parts.append(f"\n{filled['body']}\n")
+        if img_tag:
+            parts.append(f"\n{img_tag}\n")
+
+    figure_needed = str(obj.get("figure_needed") or "").strip()
+    if figure_needed:
+        parts.append(f"\n<!-- FIGURE NEEDED: {figure_needed} -->\n")
+    body = "".join(parts)
+
+    # Same asset rule as set-content: every root-absolute reference must
+    # exist under public/ (covers the image field AND markdown-authored img).
+    for asset in re.findall(r'src=["\'](/[^"\']+)["\']', body):
+        if not (root / "public" / asset.lstrip("/")).exists():
+            raise Rejection(f"referenced asset '{asset}' does not exist "
+                            f"(expected under public/: public{asset})")
+
+    notes = str(obj.get("notes") or "").strip()
+    notes_added = False
+    if notes:
+        body = (body.rstrip()
+                + f"\n\n<!--\n{notes.replace('-->', '-- >')}\n-->\n")
+    else:
+        auto = build_presenter_notes(root, sid)      # D39 verbatim fill
+        if auto:
+            body = body.rstrip() + "\n\n" + auto
+            notes_added = True
+    return body, {"layout": physical_layout, "concept_type": concept,
+                  "notes_added": notes_added}
+
+
+def cmd_write_slide(root: Path, a):
+    """Persist a composer's semantic output (D43): roles → physical slots
+    via the theme's roles map, defaults applied, layout + assets validated,
+    empty notes filled verbatim (D39), ``concept_type`` stamped into the
+    slide state file, ``figure_needed`` rendered as the FIGURE NEEDED
+    marker. Rejection = exit 1 (shim retry; cap-2 = park terminal, D44).
+    Once the D36 hand-edit guard hook exists, this subcommand is on its
+    hooked list (SPEC §5)."""
+    sid = a.slide
+    stp = root / "slides" / f"{sid}.json"
+    sp = root / "slides" / f"{sid}.md"
+    if not stp.exists() or not sp.exists():
+        # Not model-fixable — a gate, not a retryable rejection.
+        print(f"ERROR: slide {sid} does not exist", file=sys.stderr)
+        sys.exit(2)
+    p = Path(a.file)
+    if not p.exists():
+        print(f"ERROR: composer output file {a.file} does not exist",
+              file=sys.stderr)
+        sys.exit(2)
+    try:
+        obj = json.loads(p.read_text(encoding="utf-8-sig"))
+    except json.JSONDecodeError as exc:
+        sys.exit(f"ERROR: composer output is not valid JSON: {exc}")
+    try:
+        body, meta = build_slide_markdown(root, sid, obj)
+    except Rejection as exc:
+        sys.exit(f"ERROR: {exc}")
+    sp.write_text(body, encoding="utf-8")
+    stj = json.loads(stp.read_text(encoding="utf-8"))
+    stj["state"] = "composed"
+    stj["concept_type"] = meta["concept_type"]
+    stp.write_text(json.dumps(stj, indent=2, ensure_ascii=False),
+                   encoding="utf-8")
+    log(root, "composer", "write-slide", slide=sid, layout=meta["layout"],
+        concept_type=meta["concept_type"], notes_added=meta["notes_added"])
+    print(json.dumps({"ok": True, "slide": sid, **meta}))
+
+
 # ---------- nugget validation + persist core ----------
 
 class Rejection(Exception):
@@ -1022,6 +1335,8 @@ def main():
     mm = sub.add_parser("mark-mined"); mm.add_argument("--source", required=True)
     pb = sub.add_parser("plan-brief"); pb.add_argument("--out", required=True)
     wp = sub.add_parser("write-plan"); wp.add_argument("--file", required=True)
+    cb = sub.add_parser("compose-brief"); cb.add_argument("--slide", required=True); cb.add_argument("--out", required=True)
+    ws = sub.add_parser("write-slide"); ws.add_argument("--slide", required=True); ws.add_argument("--file", required=True)
     c = sub.add_parser("create-slide"); c.add_argument("--title", required=True); c.add_argument("--nuggets", default=""); c.add_argument("--after", default="end"); c.add_argument("--parked", action="store_true"); c.add_argument("--intended-function", dest="intended_function", default=None)
     an = sub.add_parser("associate-nuggets"); an.add_argument("--slide", required=True); an.add_argument("--nuggets", required=True)
     m = sub.add_parser("merge-slides"); m.add_argument("--slides", required=True); m.add_argument("--title", default="")
@@ -1034,6 +1349,7 @@ def main():
     {"create-nugget": cmd_create_nugget, "persist-nuggets": cmd_persist_nuggets,
      "mine-brief": cmd_mine_brief, "mark-mined": cmd_mark_mined,
      "plan-brief": cmd_plan_brief, "write-plan": cmd_write_plan,
+     "compose-brief": cmd_compose_brief, "write-slide": cmd_write_slide,
      "create-slide": cmd_create, "associate-nuggets": cmd_associate,
      "merge-slides": cmd_merge, "park-slide": cmd_park,
      "unpark-slide": cmd_unpark,
