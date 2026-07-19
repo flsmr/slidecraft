@@ -18,8 +18,11 @@ from slidecraft.importer.inheritance import (
     _extract_ppr,
     _merge_run,
     _merge_para,
+    _read_clr_map_override,
     _txstyles_defaults,
     _theme_run_defaults,
+    get_clr_map,
+    get_effective_clr_map,
     resolve_placeholder,
     diff_run,
     diff_para,
@@ -545,3 +548,102 @@ class TestThemeDefaults:
         )
         # txStyles (level 4) wins over theme (level 5)
         assert run.font_family == "Georgia"
+
+
+# ---------------------------------------------------------------------------
+# Test: color-map override cascade (<p:clrMapOvr>)
+# ---------------------------------------------------------------------------
+
+def _clr_map_ovr(kind: str, **override) -> etree._Element:
+    """Build a <p:clrMapOvr>. kind='override' → <a:overrideClrMapping>; kind='master'
+    → <a:masterClrMapping/>."""
+    ovr = etree.Element(f"{{{_P_NS}}}clrMapOvr")
+    if kind == "override":
+        etree.SubElement(
+            ovr, f"{{{_A_NS}}}overrideClrMapping",
+            attrib={k: str(v) for k, v in override.items()},
+        )
+    else:
+        etree.SubElement(ovr, f"{{{_A_NS}}}masterClrMapping")
+    return ovr
+
+
+def _root_with_ovr(tag_local: str, ovr: etree._Element | None) -> etree._Element:
+    """Build a <p:sld>/<p:sldLayout> root, optionally with a clrMapOvr first child."""
+    root = etree.Element(f"{{{_P_NS}}}{tag_local}")
+    if ovr is not None:
+        root.append(ovr)
+    return root
+
+
+def _master_with_clrmap(**attrs) -> etree._Element:
+    root = etree.Element(f"{{{_P_NS}}}sldMaster")
+    etree.SubElement(root, f"{{{_P_NS}}}clrMap", attrib={k: str(v) for k, v in attrs.items()})
+    return root
+
+
+# A dark "title"/cover layout flips bg1<->tx1 and bg2<->tx2.
+_FLIP = dict(bg1="dk1", tx1="lt1", bg2="dk2", tx2="lt2")
+# The standard (non-flipped) master mapping.
+_STD = dict(bg1="lt1", tx1="dk1", bg2="lt2", tx2="dk2")
+
+
+class TestReadClrMapOverride:
+    def test_override_returns_mapping_dict(self):
+        root = _root_with_ovr("sldLayout", _clr_map_ovr("override", **_FLIP))
+        assert _read_clr_map_override(root) == _FLIP
+
+    def test_master_clr_mapping_returns_none(self):
+        root = _root_with_ovr("sld", _clr_map_ovr("master"))
+        assert _read_clr_map_override(root) is None
+
+    def test_no_clr_map_ovr_returns_none(self):
+        root = _root_with_ovr("sld", None)
+        assert _read_clr_map_override(root) is None
+
+    def test_none_root_returns_none(self):
+        assert _read_clr_map_override(None) is None
+
+
+class TestEffectiveClrMap:
+    """get_effective_clr_map resolves slide → layout → master, honoring clrMapOvr."""
+
+    def test_no_overrides_uses_master_clr_map(self):
+        slide = _root_with_ovr("sld", None)
+        layout = _root_with_ovr("sldLayout", None)
+        master = _master_with_clrmap(**_STD)
+        assert get_effective_clr_map(slide, layout, master) == _STD
+
+    def test_layout_override_applies_when_slide_defers(self):
+        """The cover bug: slide says <a:masterClrMapping/>, layout flips bg1/tx1.
+
+        The effective map must be the LAYOUT's flip, not the master's standard
+        map — otherwise every bg1/tx1 fill and font color on the cover inverts.
+        """
+        slide = _root_with_ovr("sld", _clr_map_ovr("master"))
+        layout = _root_with_ovr("sldLayout", _clr_map_ovr("override", **_FLIP))
+        master = _master_with_clrmap(**_STD)
+        eff = get_effective_clr_map(slide, layout, master)
+        assert eff["bg1"] == "dk1"
+        assert eff["tx1"] == "lt1"
+
+    def test_layout_override_applies_when_slide_has_no_ovr(self):
+        slide = _root_with_ovr("sld", None)
+        layout = _root_with_ovr("sldLayout", _clr_map_ovr("override", **_FLIP))
+        master = _master_with_clrmap(**_STD)
+        assert get_effective_clr_map(slide, layout, master) == _FLIP
+
+    def test_slide_override_wins_over_layout(self):
+        slide = _root_with_ovr("sld", _clr_map_ovr("override", **_STD))
+        layout = _root_with_ovr("sldLayout", _clr_map_ovr("override", **_FLIP))
+        master = _master_with_clrmap(**_FLIP)
+        # Slide's explicit override takes precedence over both layout and master.
+        assert get_effective_clr_map(slide, layout, master) == _STD
+
+    def test_section_layout_without_override_stays_standard(self):
+        """A content/section layout with no clrMapOvr must NOT be flipped — this
+        is why section slides extract correctly while the cover did not."""
+        slide = _root_with_ovr("sld", _clr_map_ovr("master"))
+        layout = _root_with_ovr("sldLayout", None)
+        master = _master_with_clrmap(**_STD)
+        assert get_effective_clr_map(slide, layout, master) == _STD

@@ -311,6 +311,9 @@ def _build_text_shape(
         return None
 
     # Defaults via the OOXML-spec-correct otherStyle cascade.
+    # include_slide_paragraph=False: text shapes may come from layout/master
+    # spTrees too, and their runs carry explicit rPr that the per-run diff
+    # already preserves — defaults stay lstStyle-only here.
     default_run, default_para = resolve_placeholder(
         slide_sp=sp_el,
         layout_ph=None,
@@ -320,6 +323,7 @@ def _build_text_shape(
         ph_type=None,
         level=0,
         clr_map=clr_map,
+        include_slide_paragraph=False,
     )
 
     # Body — only parse when text is present. Decorative-only shapes don't

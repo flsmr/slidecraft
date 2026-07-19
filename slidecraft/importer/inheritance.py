@@ -87,6 +87,66 @@ def get_clr_map(master_el: Optional[etree._Element]) -> Optional[dict[str, str]]
     return dict(clr_map_el.attrib)
 
 
+def _read_clr_map_override(root_el: Optional[etree._Element]) -> Optional[dict[str, str]]:
+    """Return the ``<a:overrideClrMapping>`` remap from a slide / slideLayout root.
+
+    A ``<p:clrMapOvr>`` wraps a choice of exactly one child:
+
+      - ``<a:overrideClrMapping bg1="dk1" tx1="lt1" …/>`` — a *full* replacement
+        color map for this slide/layout. Returned as a ``{logical: scheme}`` dict.
+      - ``<a:masterClrMapping/>`` — "no override at this level; inherit". Returns
+        ``None`` so the caller falls through to the next level in the cascade.
+
+    Returns ``None`` when the root carries no ``<p:clrMapOvr>`` at all, or when it
+    uses ``<a:masterClrMapping/>``.
+    """
+    if root_el is None:
+        return None
+    ovr = root_el.find(_x("p:clrMapOvr"))
+    if ovr is None:
+        return None
+    override = ovr.find(_x("a:overrideClrMapping"))
+    if override is not None:
+        return dict(override.attrib)
+    # <a:masterClrMapping/> (or an empty clrMapOvr) → defer to the next level.
+    return None
+
+
+def get_effective_clr_map(
+    slide_root: Optional[etree._Element],
+    layout_root: Optional[etree._Element],
+    master_root: Optional[etree._Element],
+) -> Optional[dict[str, str]]:
+    """Resolve the color map that governs *all* scheme-color resolution on a slide.
+
+    The color map is a slide-level property: every ``<a:schemeClr>`` displayed on
+    the slide — whether it comes from a slide, layout, or master shape — resolves
+    through this one map. Precedence (highest first):
+
+      1. Slide's ``<a:overrideClrMapping>``   (``<p:clrMapOvr>`` on ``<p:sld>``)
+      2. Layout's ``<a:overrideClrMapping>``  (``<p:clrMapOvr>`` on ``<p:sldLayout>``)
+      3. Master's ``<p:clrMap>``
+
+    A slide or layout that carries ``<a:masterClrMapping/>`` (or no
+    ``<p:clrMapOvr>`` at all) defers to the next level down.
+
+    This is what makes a dark "title" / cover layout render correctly: such
+    layouts flip ``bg1``↔``tx1`` (and ``bg2``↔``tx2``) via an
+    ``overrideClrMapping`` so a title box filled with ``schemeClr bg1`` paints
+    dark and its ``schemeClr tx1`` text paints light. A slide built on that
+    layout usually declares ``<a:masterClrMapping/>`` and thus inherits the
+    layout's flip. Resolving only the master's ``<p:clrMap>`` (ignoring the
+    override) inverts every ``bg1``/``tx1`` fill and font color on the cover.
+    """
+    slide_ovr = _read_clr_map_override(slide_root)
+    if slide_ovr is not None:
+        return slide_ovr
+    layout_ovr = _read_clr_map_override(layout_root)
+    if layout_ovr is not None:
+        return layout_ovr
+    return get_clr_map(master_root)
+
+
 _SYS_COLOR_FALLBACK: dict[str, str] = {
     "windowText": "000000", "window": "FFFFFF",
     "btnText": "000000", "btnFace": "F0F0F0",
@@ -624,6 +684,7 @@ def resolve_placeholder(
     ph_type: Optional[str] = None,
     level: int = 0,
     clr_map: Optional[dict[str, str]] = None,
+    include_slide_paragraph: bool = True,
 ) -> tuple[Run, Paragraph]:
     """Resolve the default Run and Paragraph props for a placeholder by walking the cascade.
 
@@ -644,6 +705,17 @@ def resolve_placeholder(
         correct txStyles entry and theme font.
     level:
         List level for which defaults are resolved (0 = top-level paragraph).
+    include_slide_paragraph:
+        When True (default), ``slide_sp``'s FIRST ``<a:p>``'s explicit pPr and
+        first ``<a:r>``'s rPr also fold into the resolved defaults — the
+        slide's authored formatting wins over layout/master defaults, and an
+        author-overridden slot keeps the look the template slide actually
+        showed. Only the slide-level leaf reads paragraph content; layout and
+        master shapes contribute lstStyle blocks exclusively (their first
+        paragraphs are prompt text — see :func:`_apply_sp_defaults`). Pass
+        False when ``slide_sp`` is not real slide content (an inherited
+        layout/master shape standing in as the leaf) or when resolving
+        level>0 defaults (the first paragraph is level-0 content).
 
     Returns
     -------
@@ -667,9 +739,14 @@ def resolve_placeholder(
     if layout_ph is not None:
         base_run, base_para = _apply_sp_defaults(layout_ph, base_run, base_para, level, theme_el, clr_map)
 
-    # Level 1: slide-level shape's txBody
+    # Level 1: slide-level shape's txBody. Only this leaf may also read the
+    # first paragraph's explicit pPr/rPr — real authored content, unlike the
+    # prompt text on layout/master shapes.
     if slide_sp is not None:
-        base_run, base_para = _apply_sp_defaults(slide_sp, base_run, base_para, level, theme_el, clr_map)
+        base_run, base_para = _apply_sp_defaults(
+            slide_sp, base_run, base_para, level, theme_el, clr_map,
+            include_paragraph_content=include_slide_paragraph,
+        )
 
     return base_run, base_para
 
@@ -681,23 +758,28 @@ def _apply_sp_defaults(
     level: int,
     theme_el: Optional[etree._Element] = None,
     clr_map: Optional[dict[str, str]] = None,
+    include_paragraph_content: bool = False,
 ) -> tuple[Run, Paragraph]:
     """Apply the txBody-level lstStyle defaults from a <p:sp> element.
 
     Per ECMA-376 §19.3.1.49, the per-level defaults for a placeholder live
-    in ``<p:txBody>/<a:lstStyle>/<a:lvlNpPr>``. The first ``<a:p>``'s pPr /
-    first run's rPr / endParaRPr are PARAGRAPH CONTENT, not defaults — but
-    a previous version of this code merged them in here. That bug
-    explains:
+    in ``<p:txBody>/<a:lstStyle>/<a:lvlNpPr>``. For layout/master shapes
+    ONLY those blocks may contribute: their first ``<a:p>`` is prompt text
+    ("Click to edit Master title style"), and a previous version of this
+    code merged it in unconditionally. That bug explains:
 
-      - slide 9 (all-bold): first run b="1" → leaked to default_run →
-        every run in the placeholder rendered bold
       - slides 12/14 (titles as bullets): master's first-`<a:p>` carried
         an `<a:pPr>` with `<a:buChar/>` that leaked
       - slide 41 ph_13 (text 1.333 px): endParaRPr sz="100" (= 1 pt)
         leaked into default_run.font_size_pt
 
-    Only `<a:lstStyle>/<a:lvlNpPr>` blocks contribute to defaults here.
+    ``include_paragraph_content=True`` (passed by resolve_placeholder for
+    the SLIDE-level leaf only) additionally merges the first ``<a:p>``'s
+    explicit pPr and first ``<a:r>``'s rPr: on a slide those are real
+    authored formatting, and the slide must win over layout/master defaults
+    (slide algn="r" beats layout algn="ctr"; slide cap="none" beats master
+    txStyles cap="all"). endParaRPr never contributes at any level — it
+    styles a paragraph mark, not content.
     """
     tx_body = sp_el.find(_x("p:txBody"))
     if tx_body is None:
@@ -722,6 +804,20 @@ def _apply_sp_defaults(
             if def_rpr is not None:
                 rpr_override = _extract_rpr(def_rpr, theme_el, clr_map)
                 base_run = _merge_run(base_run, rpr_override)
+
+    if include_paragraph_content:
+        first_p = tx_body.find(_x("a:p"))
+        if first_p is not None:
+            ppr_el = first_p.find(_x("a:pPr"))
+            if ppr_el is not None:
+                ppr_override = _extract_ppr(ppr_el, theme_el, clr_map)
+                base_para = _merge_para(base_para, ppr_override)
+            first_r = first_p.find(_x("a:r"))
+            if first_r is not None:
+                rpr_el = first_r.find(_x("a:rPr"))
+                if rpr_el is not None:
+                    rpr_override = _extract_rpr(rpr_el, theme_el, clr_map)
+                    base_run = _merge_run(base_run, rpr_override)
 
     return base_run, base_para
 

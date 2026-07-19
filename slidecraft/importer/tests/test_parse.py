@@ -520,6 +520,121 @@ class TestLayoutFillCascade:
 
 
 # ---------------------------------------------------------------------------
+# Test: color-map override cascade (<p:clrMapOvr>) — cover-slide inversion bug
+# ---------------------------------------------------------------------------
+
+# Full override map. A dark "title"/cover layout flips bg1<->tx1 and bg2<->tx2;
+# CT_ColorMapping requires all twelve names, so we spell them all out.
+_FLIP_OVERRIDE = {
+    "bg1": "dk1", "tx1": "lt1", "bg2": "dk2", "tx2": "lt2",
+    "accent1": "accent1", "accent2": "accent2", "accent3": "accent3",
+    "accent4": "accent4", "accent5": "accent5", "accent6": "accent6",
+    "hlink": "hlink", "folHlink": "folHlink",
+}
+
+
+def _build_pptx_with_scheme_fill(tmp_path: Path, *, flip_layout: bool) -> Path:
+    """Build a .pptx whose layout ph_1 is filled with ``schemeClr val="bg1"``.
+
+    When ``flip_layout`` is True, the slide layout also carries a
+    ``<p:clrMapOvr><a:overrideClrMapping bg1="dk1" tx1="lt1" …/></p:clrMapOvr>``
+    that swaps bg1<->tx1 — exactly how the MS-Tutorium "Titelfolie" cover is
+    built. The slide's ph_1 has an empty spPr so the fill cascades from the
+    layout, and the fill's scheme color resolves through the slide's *effective*
+    color map (which must honour the layout override).
+
+    In the default Office theme dk1 resolves to #000000 and lt1 to #FFFFFF, and
+    the master clrMap is the standard bg1=lt1 / tx1=dk1. So a bg1 fill resolves:
+      - flip_layout=False → lt1 → #FFFFFF (white)   [section / content slides]
+      - flip_layout=True  → dk1 → #000000 (black)   [cover, override applied]
+    """
+    prs = PptxPresentation()
+    layout = prs.slide_layouts[1]
+    slide = prs.slides.add_slide(layout)
+    slide.shapes.title.text = "Scheme Fill Test"
+
+    pptx_path = tmp_path / "scheme_fill.pptx"
+    prs.save(str(pptx_path))
+
+    edited_path = tmp_path / f"scheme_fill_{'flip' if flip_layout else 'plain'}.pptx"
+    ns_map = {"a": _A, "p": _P}
+    with zipfile.ZipFile(pptx_path, "r") as zin, \
+            zipfile.ZipFile(edited_path, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if "slideLayout" in item.filename and item.filename.endswith(".xml"):
+                try:
+                    root = etree.fromstring(data)
+                    # Inject a schemeClr bg1 fill on the idx=1 placeholder.
+                    sp_tree = root.find(".//p:spTree", ns_map)
+                    if sp_tree is not None:
+                        for sp in sp_tree.findall("p:sp", ns_map):
+                            ph = sp.find(".//p:ph", ns_map)
+                            if ph is not None and ph.get("idx") == "1":
+                                sp_pr = sp.find("p:spPr", ns_map)
+                                if sp_pr is None:
+                                    sp_pr = etree.SubElement(sp, f"{{{_P}}}spPr")
+                                for tag in ("a:noFill", "a:solidFill", "a:gradFill"):
+                                    el = sp_pr.find(tag, ns_map)
+                                    if el is not None:
+                                        sp_pr.remove(el)
+                                solid = etree.SubElement(sp_pr, f"{{{_A}}}solidFill")
+                                etree.SubElement(solid, f"{{{_A}}}schemeClr", val="bg1")
+                    # Optionally flip the layout's color map via clrMapOvr.
+                    if flip_layout:
+                        ovr = etree.Element(f"{{{_P}}}clrMapOvr")
+                        etree.SubElement(
+                            ovr, f"{{{_A}}}overrideClrMapping", attrib=_FLIP_OVERRIDE
+                        )
+                        root.insert(0, ovr)  # must precede <p:cSld>
+                    data = etree.tostring(
+                        root, xml_declaration=True, encoding="UTF-8", standalone=True
+                    )
+                except Exception:
+                    pass
+            zout.writestr(item, data)
+
+    return edited_path
+
+
+class TestClrMapOverrideCascade:
+    """Regression: a cover layout's <p:clrMapOvr> must flip bg1/tx1 fills.
+
+    See slidev-theme-ms-tutorium slide1 (the "Titelfolie"): the title boxes are
+    filled with schemeClr bg1 and the cover layout overrides bg1->dk1, so they
+    render dark. Ignoring the override resolved bg1->lt1 (white) — inverting the
+    cover while leaving non-override section slides correct.
+    """
+
+    def test_layout_override_flips_bg1_fill_to_dark(self, tmp_path):
+        pptx_path = _build_pptx_with_scheme_fill(tmp_path, flip_layout=True)
+        result = parse(pptx_path)
+        body_phs = [p for p in result.slides[0].placeholders if p.idx == 1]
+        assert body_phs, "Expected body placeholder idx=1"
+        fill = body_phs[0].fill
+        assert isinstance(fill, SolidFill), f"Expected SolidFill, got {fill!r}"
+        # bg1 -> dk1 (#000000) under the flip; the bug produced lt1 (#FFFFFF).
+        assert (fill.color.r, fill.color.g, fill.color.b) == (0, 0, 0), (
+            f"clrMapOvr flip not applied: bg1 fill resolved to "
+            f"#{fill.color.r:02X}{fill.color.g:02X}{fill.color.b:02X}, expected #000000"
+        )
+
+    def test_no_override_keeps_bg1_fill_light(self, tmp_path):
+        """Control: without a clrMapOvr, bg1 resolves to lt1 (white) via the
+        master map — section/content slides must NOT be inverted by the fix."""
+        pptx_path = _build_pptx_with_scheme_fill(tmp_path, flip_layout=False)
+        result = parse(pptx_path)
+        body_phs = [p for p in result.slides[0].placeholders if p.idx == 1]
+        assert body_phs, "Expected body placeholder idx=1"
+        fill = body_phs[0].fill
+        assert isinstance(fill, SolidFill), f"Expected SolidFill, got {fill!r}"
+        assert (fill.color.r, fill.color.g, fill.color.b) == (255, 255, 255), (
+            f"bg1 fill without override should be lt1 (#FFFFFF), got "
+            f"#{fill.color.r:02X}{fill.color.g:02X}{fill.color.b:02X}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Tests for <a:fld> field element parsing
 # ---------------------------------------------------------------------------
 

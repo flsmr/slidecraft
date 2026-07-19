@@ -42,7 +42,7 @@ from slidecraft.importer.inheritance import (
     _x,
     diff_run,
     diff_para,
-    get_clr_map,
+    get_effective_clr_map,
     resolve_placeholder,
 )
 from slidecraft.importer.pictures.effects import parse_effects
@@ -300,6 +300,21 @@ _RUN_BACKFILL_FIELDS = (
 )
 
 
+class _ParsedParagraphs(list):
+    """Result of :func:`_parse_paragraph` — a ``list[Paragraph]`` with one
+    entry per hard-break segment, plus a ``runs`` view spanning them all.
+
+    ``runs`` returns every Run parsed from the original ``<a:p>`` in
+    document order, so callers can treat the result as "the paragraph's
+    content" without caring whether the hard-break split produced one
+    segment or several.
+    """
+
+    @property
+    def runs(self) -> list[Run]:
+        return [r for p in self for r in p.runs]
+
+
 def _parse_paragraph(
     p_el: etree._Element,
     default_run: Run,
@@ -307,7 +322,7 @@ def _parse_paragraph(
     theme_el: Optional[etree._Element] = None,
     clr_map: Optional[dict[str, str]] = None,
     per_level_defaults: Optional[dict[int, tuple[Run, Paragraph]]] = None,
-) -> list[Paragraph]:
+) -> "_ParsedParagraphs":
     """Parse one ``<a:p>`` into one OR MORE :class:`Paragraph` objects.
 
     A single PPT paragraph may expand into multiple model Paragraphs when
@@ -404,7 +419,7 @@ def _parse_paragraph(
             segments[-1].append(Run(text="\n"))
 
     # Materialise one Paragraph per segment, all sharing the template's pPr.
-    out: list[Paragraph] = []
+    out = _ParsedParagraphs()
     for seg in segments:
         p = Paragraph(
             runs=seg,
@@ -1016,6 +1031,9 @@ def _parse_inherited_text_placeholder(
 
     # Defaults via full cascade. slide_sp=src_sp because there's no real
     # slide-level shape; treat the inherited shape as the leaf of the chain.
+    # include_slide_paragraph=False: src_sp is a layout/master shape, so its
+    # first paragraph is prompt text, not authored content — reading it here
+    # would reintroduce the slides-12/14 leak. Only lstStyle contributes.
     # ph_type defaults to "body" when the placeholder element omits @type
     # (mirrors the slide-level normalisation in parse()).
     effective_ph_type = ph_type if ph_type is not None else "body"
@@ -1028,6 +1046,7 @@ def _parse_inherited_text_placeholder(
         ph_type=effective_ph_type,
         level=0,
         clr_map=clr_map,
+        include_slide_paragraph=False,
     )
     if default_run.font_family:
         typefaces.add(default_run.font_family)
@@ -1156,7 +1175,13 @@ def parse(pptx_path: Path) -> Presentation:
         master = layout.slide_master
         theme_el = _get_theme_el(master)
         master_tx_styles = _get_master_tx_styles(master)
-        clr_map = get_clr_map(master._element)
+        # Effective color map for THIS slide, honoring <p:clrMapOvr> on the slide
+        # and its layout. A dark "title"/cover layout flips bg1<->tx1 via an
+        # override; resolving only the master's <p:clrMap> would invert every
+        # bg1/tx1 fill and font color on that cover (see get_effective_clr_map).
+        clr_map = get_effective_clr_map(
+            slide._element, layout._element, master._element
+        )
 
         bg_fill = _resolve_background(slide, prs, theme_el, clr_map)
 
@@ -1291,6 +1316,10 @@ def parse(pptx_path: Path) -> Presentation:
                 if lvl_n == 0:
                     per_level_defaults[0] = (default_run, default_para)
                 else:
+                    # include_slide_paragraph=False: the slide's first
+                    # paragraph is level-0 content — its explicit pPr/rPr
+                    # must not bleed into level-N defaults, which come from
+                    # the per-level lstStyle cascade alone.
                     lvl_run, lvl_para = resolve_placeholder(
                         slide_sp=sp_el,
                         layout_ph=layout_sp,
@@ -1300,6 +1329,7 @@ def parse(pptx_path: Path) -> Presentation:
                         ph_type=effective_ph_type,
                         level=lvl_n,
                         clr_map=clr_map,
+                        include_slide_paragraph=False,
                     )
                     per_level_defaults[lvl_n] = (lvl_run, lvl_para)
 

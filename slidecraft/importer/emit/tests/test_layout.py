@@ -539,10 +539,10 @@ class TestPicturePlaceholderSlotErgonomics:
         ![](/my-photo.jpg)
 
     Markdown wraps that in ``<p><img></p>`` with no inline styles. The layout
-    must emit CSS that (a) resets the wrapping <p> margin so the image sits
-    at the placeholder's top edge and (b) stretches any <img>/<svg>/<video>
-    child to fill the placeholder geometry — mirroring the inline style the
-    layout's default <img> carries.
+    must emit CSS that (a) makes the wrapping <p> fill and center the box and
+    (b) sizes any <img>/<svg>/<video> child with max-width/max-height + auto so
+    the image scales to fit the placeholder — whole image, aspect preserved,
+    no crop or stretch.
     """
 
     def test_picture_placeholder_emits_p_margin_reset(self, tmp_path):
@@ -553,9 +553,13 @@ class TestPicturePlaceholderSlotErgonomics:
         )
         slide = Slide(index=1, placeholders=[], pictures=[pic])
         content = _emit_and_read(tmp_path, _make_pres([slide]))
-        assert ".slidev-layout .picture-14 :deep(p) { margin: 0; }" in content
+        assert (
+            ".slidev-layout .picture-14 :deep(p) { margin: 0; width: 100%; "
+            "height: 100%; display: flex; align-items: center; "
+            "justify-content: center; }"
+        ) in content
 
-    def test_picture_placeholder_emits_img_stretch_rule(self, tmp_path):
+    def test_picture_placeholder_emits_img_fit_rule(self, tmp_path):
         pic = _make_pic(
             asset_ref="default.png",
             is_placeholder=True,
@@ -564,13 +568,16 @@ class TestPicturePlaceholderSlotErgonomics:
         slide = Slide(index=1, placeholders=[], pictures=[pic])
         content = _emit_and_read(tmp_path, _make_pres([slide]))
         # The selector covers img + svg + video so markdown overrides and
-        # alternative content (inline SVG, embedded video) all stretch.
+        # alternative content (inline SVG, embedded video) all fit the box.
         assert ".slidev-layout .picture-14 :deep(img)" in content
         assert ".slidev-layout .picture-14 :deep(svg)" in content
         assert ".slidev-layout .picture-14 :deep(video)" in content
-        assert "object-fit: fill;" in content
-        assert "width: 100%;" in content
-        assert "height: 100%;" in content
+        # Fit-to-box (contain), not stretch-to-fill: the image scales to its
+        # limiting side, never distorted or cropped.
+        assert "max-width: 100%;" in content
+        assert "max-height: 100%;" in content
+        assert "height: auto;" in content
+        assert "object-fit: fill;" not in content
 
     def test_free_picture_does_not_emit_slot_css(self, tmp_path):
         """Free <p:pic> shapes are baked into the layout — no slot, no rule."""
@@ -594,4 +601,8 @@ class TestPicturePlaceholderSlotErgonomics:
         slide = Slide(index=1, placeholders=[], pictures=[pic])
         content = _emit_and_read(tmp_path, _make_pres([slide]))
         assert ".slidev-layout .picture-5 :deep(img)" in content
-        assert ".slidev-layout .picture-5 :deep(p) { margin: 0; }" in content
+        assert (
+            ".slidev-layout .picture-5 :deep(p) { margin: 0; width: 100%; "
+            "height: 100%; display: flex; align-items: center; "
+            "justify-content: center; }"
+        ) in content

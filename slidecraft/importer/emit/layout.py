@@ -276,16 +276,18 @@ def _placeholder_style(ph: Placeholder, frame_anchor: str = "t") -> str:
     if ph.opacity != 1.0:
         parts.append(f"opacity:{ph.opacity:.4g}")
 
-    # Vertical anchor via flex.  flex-direction:column is mandatory — without
-    # it, multi-paragraph content (e.g. the thank-you slide's contact slot:
-    # "name<br/>phone" / "email") lays out HORIZONTALLY as flex items rather
-    # than stacking vertically.  With column direction, align-items still
-    # controls cross-axis (horizontal) alignment which we want as
-    # flex-start (left); justify-content takes over the vertical anchor.
+    # Vertical anchor via flex. The wrapper is a ROW flex box whose ONLY
+    # flex item is the inner stacking <div> that _emit_layout_vue wraps
+    # around the slot, so align-items expresses the PPT anchor on the
+    # cross (vertical) axis — anchor="ctr" emits ``align-items:center``.
+    # The inner div is a plain block at width:100%: multi-paragraph slot
+    # content stacks vertically in normal flow and spans the full box
+    # (the thank-you slide's "name<br/>phone" / "email" contact slot is
+    # the case that breaks when slot children become flex items
+    # themselves and lay out horizontally).
     align_items = _ANCHOR_ALIGN.get(frame_anchor, "flex-start")
     parts.append("display:flex")
-    parts.append("flex-direction:column")
-    parts.append(f"justify-content:{align_items}")
+    parts.append(f"align-items:{align_items}")
 
     # TextFrame insets → padding (l, t, r, b → CSS order t r b l)
     tf = ph.text_frame
@@ -563,7 +565,12 @@ def _emit_layout_vue(slide: Slide, canvas_width: int, canvas_height: int) -> str
             style = _placeholder_style(ph, frame_anchor=anchor)
             slot = slot_name_for_placeholder(ph)
             lines.append(f'{_INDENT * 3}<div class="{slot}" style="{style}">')
-            lines.append(f'{_INDENT * 4}<slot name="{slot}" />')
+            # Inner stacking block — the wrapper's single flex item (see
+            # _placeholder_style: the vertical anchor rides on align-items,
+            # which needs exactly one child on the cross axis).
+            lines.append(f'{_INDENT * 4}<div style="width:100%">')
+            lines.append(f'{_INDENT * 5}<slot name="{slot}" />')
+            lines.append(f"{_INDENT * 4}</div>")
             lines.append(f"{_INDENT * 3}</div>")
         elif kind == "picture":
             pic = item  # type: ignore[assignment]
@@ -687,39 +694,41 @@ def _emit_layout_vue(slide: Slide, canvas_width: int, canvas_height: int) -> str
             f".slidev-layout .txt-{shape.shape_id} :deep(p) {{ margin: 0; }}"
         )
 
-    # Picture-placeholder slot ergonomics. The default <img> baked into a
-    # picture-placeholder <slot> carries inline ``width:100%;height:100%;
-    # object-fit:fill`` so it stretches into the placeholder geometry.
-    # When the deck author overrides the slot via markdown — e.g.
+    # Picture-placeholder slot ergonomics. When the deck author overrides the
+    # slot via markdown — e.g.
     #
-    #     ::ph_14::
+    #     ::picture-14::
     #     ![](/my-photo.jpg)
     #
     # — the markdown processor produces ``<p><img src="/my-photo.jpg"></p>``
-    # with no inline style, so the override image collapses to its native
-    # size in the top-left of the slot. Worse, the wrapping ``<p>`` adds a
-    # browser-default ~1em margin that pushes the image off-baseline.
+    # with no inline style. Two problems: the wrapping ``<p>`` has a
+    # browser-default margin, and (because that ``<p>`` has auto height) an
+    # ``<img>`` sized with ``height:100%`` falls back to its natural height and
+    # is cropped by the fixed-height, ``overflow:hidden`` placeholder box.
     #
-    # Per-picture-placeholder CSS fixes both: reset ``<p>`` margin (same
-    # idiom as the text-placeholder loop above) and stretch any ``<img>``,
-    # ``<svg>``, or ``<video>`` child to fill the placeholder box. The
-    # default <img> already has these properties inline; the CSS rule wins
-    # for override children, which is the case we care about.
+    # Per-picture-placeholder CSS fixes both: make the ``<p>`` fill the box and
+    # flex-center its child, then size any ``<img>``/``<svg>``/``<video>`` with
+    # ``max-width/max-height:100%`` + ``auto`` so the image scales to fit the
+    # box by its limiting side — whole image, aspect preserved, no crop or
+    # stretch (``contain`` behaviour, done so it survives the wrapping <p>).
     for pic in slide.pictures:
         if not pic.is_placeholder or pic.ph_idx is None:
             continue
         slot = slot_name_for_picture(pic)
         lines.append(
-            f".slidev-layout .{slot} :deep(p) {{ margin: 0; }}"
+            f".slidev-layout .{slot} :deep(p) {{ margin: 0; width: 100%; "
+            f"height: 100%; display: flex; align-items: center; "
+            f"justify-content: center; }}"
         )
         lines.append(
             f".slidev-layout .{slot} :deep(img), "
             f".slidev-layout .{slot} :deep(svg), "
             f".slidev-layout .{slot} :deep(video) {{"
         )
-        lines.append("  width: 100%;")
-        lines.append("  height: 100%;")
-        lines.append("  object-fit: fill;")
+        lines.append("  max-width: 100%;")
+        lines.append("  max-height: 100%;")
+        lines.append("  width: auto;")
+        lines.append("  height: auto;")
         lines.append("  display: block;")
         lines.append("}")
 
@@ -769,7 +778,14 @@ def _emit_layout_vue(slide: Slide, canvas_width: int, canvas_height: int) -> str
             # PPT's text-frame top.
             chain_tag = "ul" if kind == "char" else "ol"
             chain = " ".join([chain_tag] * (lvl + 1))
-            base_sel = f".slidev-layout {css_class} :deep({chain} > li)"
+            # Two selector variants per li rule: the :deep() form pierces
+            # Vue scoped-CSS so the rule reaches slotted markdown (the form
+            # that matches at runtime in Slidev), plus a plain-nesting twin
+            # scoped by the same .slidev-layout .<slot> chain — inert under
+            # scoped compilation but it keeps the rule functional wherever
+            # these layouts are consumed without it.
+            deep_li = f".slidev-layout {css_class} :deep({chain} > li)"
+            plain_li = f".slidev-layout {css_class} {chain} li"
             container_sel = f".slidev-layout {css_class} :deep({chain})"
             lines.append(f"{container_sel} {{")
             lines.append("  padding-left: 40px;")
@@ -778,22 +794,23 @@ def _emit_layout_vue(slide: Slide, canvas_width: int, canvas_height: int) -> str
             lines.append("}")
 
             if kind == "char":
-                marker_props: list[str] = []
-                if char:
-                    esc = char.replace("\\", "\\\\").replace('"', '\\"')
-                    marker_props.append(f'  content: "{esc}\\00a0";')
+                # Always pin the marker glyph at slot specificity. When the
+                # cascade resolved no buChar, fall back to the house dash —
+                # identical to the slide-root default above, but the slot
+                # keeps its PPT-modeled marker even if a deck overrides
+                # that global default.
+                esc = (char or "-").replace("\\", "\\\\").replace('"', '\\"')
+                lines.append(f"{deep_li}::marker, {plain_li}::marker {{")
+                lines.append(f'  content: "{esc}\\00a0";')
                 if color is not None:
-                    marker_props.append(f"  color: {_hex_css(color)};")
+                    lines.append(f"  color: {_hex_css(color)};")
                 if font:
-                    marker_props.append(f"  font-family: '{font}', sans-serif;")
-                if marker_props:
-                    lines.append(f"{base_sel}::marker {{")
-                    lines.extend(marker_props)
-                    lines.append("}")
+                    lines.append(f"  font-family: '{font}', sans-serif;")
+                lines.append("}")
             else:  # auto-num
                 list_style = _autonum_type_to_css(autonum)
                 if list_style:
-                    lines.append(f"{base_sel} {{")
+                    lines.append(f"{deep_li}, {plain_li} {{")
                     lines.append(f"  list-style-type: {list_style};")
                     lines.append("}")
                 # Auto-num markers: only emit color (when distinct from
@@ -804,7 +821,7 @@ def _emit_layout_vue(slide: Slide, canvas_width: int, canvas_height: int) -> str
                 # the surrounding text. Auto-num numbers look fine in
                 # the inherited text font.
                 if color is not None:
-                    lines.append(f"{base_sel}::marker {{")
+                    lines.append(f"{deep_li}::marker, {plain_li}::marker {{")
                     lines.append(f"  color: {_hex_css(color)};")
                     lines.append("}")
 
