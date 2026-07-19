@@ -5,7 +5,10 @@ Deterministic deck-state operations. Scripts move files and associations;
 they never write slide prose — that is always the Composer's job.
 
 Subcommands:
-  create-nugget --file PATH                                 -> {"nugget_id": ...}
+  create-nugget   --file PATH                               -> {"nugget_id": ...}
+  persist-nuggets --source SLUG --file PATH                 -> {"nugget_ids": [...]}
+  mine-brief      --source SLUG --out PATH                  -> {"ok": true, ...}
+  mark-mined      --source SLUG                             -> {"ok": true, ...}
   create-slide  --title T --nuggets a,b --after ID|end     -> {"slide_id": ...}
   merge-slides  --slides a,b [--title T]                    -> {"slide_id": ...}
   set-content   --slide ID --body-file PATH                 -> {"ok": true, ...}
@@ -13,6 +16,16 @@ Subcommands:
 
 set-content also fills empty presenter notes from the slide's nuggets' raw
 knowledge, verbatim (D39) — see build_presenter_notes.
+
+Assemble/persist stages of the pure-function pipeline (D40): ``mine-brief``
+renders a fully self-contained miner brief (role template + injection values
++ the source text inline — no script instructions, no paths, no IDs);
+``persist-nuggets`` is the fan-out persist wrapper for a miner's batch output
+(validates the WHOLE batch before writing anything, enriches ``kind``/
+``source`` — the miner must not invent them); ``mark-mined`` is the
+orchestrator's bookkeeping step after a successful mine (source stamped,
+input moved to processed/). Persist rejections exit 1 with the error on
+stderr — the invoke shim's retryable-rejection convention (D44).
 
 Deck root is resolved from --deck or by walking up from CWD for deck-context.json.
 All mutations append one line to logs/actions.jsonl.
@@ -127,6 +140,162 @@ def normalize(s: str) -> str:
     s = re.sub(r"\s+", " ", s).strip()
     return s
 
+# ---------- brief assembly (D40: assemble stage) ----------
+
+# Role prompt templates live next to the scripts folder (same layout in the
+# repo and in the installed toolkit, D33).
+AGENTS_DIR = Path(__file__).resolve().parent.parent / "agents"
+
+
+def strip_frontmatter(text: str) -> str:
+    m = re.match(r"^---\r?\n.*?\r?\n---\r?\n", text, re.S)
+    return text[m.end():].lstrip("\n") if m else text
+
+
+def load_template(name: str) -> str:
+    """A role's prompt template, frontmatter stripped."""
+    p = AGENTS_DIR / f"{name}.md"
+    if not p.is_file():
+        sys.exit(f"ERROR: role template not found: {p}")
+    return strip_frontmatter(p.read_text(encoding="utf-8-sig"))
+
+
+def render_template(template: str, values: dict) -> str:
+    """``%PLACEHOLDER%`` substitution; fails loudly on leftovers so template
+    drift never ships a brief with an unresolved placeholder."""
+    out = template
+    for key, value in values.items():
+        out = out.replace(f"%{key}%", str(value))
+    leftover = sorted(set(re.findall(r"%[A-Z][A-Z-]*%", out)))
+    if leftover:
+        sys.exit(f"ERROR: unresolved placeholder(s) in template: {leftover}")
+    return out
+
+
+def source_record(root: Path, slug: str) -> dict:
+    p = root / "sources" / f"{slug}.json"
+    if not p.exists():
+        sys.exit(f"ERROR: source {slug} not converted "
+                 f"(no sources/{slug}.json)")
+    return json.loads(p.read_text(encoding="utf-8"))
+
+
+def source_full_text(src: dict) -> str:
+    """All pages joined, each preceded by its ``<!-- page N -->`` marker so
+    the miner can fill the nugget ``page`` field."""
+    return "\n".join(f"<!-- page {pg.get('page')} -->\n{pg.get('text', '')}"
+                     for pg in src.get("pages", []))
+
+
+def write_brief(root: Path, out: str, brief: str):
+    path = Path(out)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(brief, encoding="utf-8")
+
+
+def cmd_mine_brief(root: Path, a):
+    """Render the self-contained text-miner brief (D40/D42): role craft +
+    injection values + the full source text inline. The miner needs no file
+    access, no scripts, no IDs — everything is in the brief."""
+    src = source_record(root, a.source)
+    c = ctx(root)
+    inj = c.get("injection", {}).get("knowledge-miner", {})
+    values = {
+        "FOCUS-TOPIC": inj.get("FOCUS-TOPIC", c["deck"].get("topic", "")),
+        "LANGUAGE": inj.get("LANGUAGE", c["deck"].get("language", "")),
+    }
+    brief = render_template(load_template("knowledge-miner"), values)
+    brief += ("\n\n---\n\n## Source text\n\n"
+              "The full text of the source follows. The `<!-- page N -->` "
+              "markers give the page numbers for the `page` field.\n\n"
+              + source_full_text(src) + "\n")
+    write_brief(root, a.out, brief)
+    log(root, "km", "mine-brief", source=a.source, chars=len(brief))
+    print(json.dumps({"ok": True, "brief": a.out, "source": a.source,
+                      "chars": len(brief)}))
+
+
+def cmd_mark_mined(root: Path, a):
+    """Bookkeeping after a successful mine step: stamp the source record and
+    move its input file to ``input/processed/``. The orchestrator calls this
+    only once the source's nuggets are persisted — a mid-source failure
+    leaves the source unmarked. Idempotent."""
+    src_path = root / "sources" / f"{a.source}.json"
+    src = source_record(root, a.source)
+    already = bool(src.get("mined_at"))
+    if not already:
+        src["mined_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        src_path.write_text(json.dumps(src, indent=2, ensure_ascii=False),
+                            encoding="utf-8")
+    moved = False
+    orig = src.get("original_file")
+    if orig:
+        inp = root / "input" / orig
+        if inp.exists():
+            dest_dir = root / "input" / "processed"
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            dest = dest_dir / orig
+            if dest.exists():
+                dest.unlink()
+            inp.replace(dest)
+            moved = True
+    log(root, "km", "mark-mined", source=a.source, input_moved=moved,
+        already_mined=already)
+    print(json.dumps({"ok": True, "source": a.source,
+                      "mined_at": src["mined_at"], "input_moved": moved}))
+
+
+# ---------- nugget validation + persist core ----------
+
+class Rejection(Exception):
+    """A retryable validation rejection (exit 1 at the CLI — the invoke
+    shim's convention for 'the model can fix this', D44)."""
+
+
+def check_nugget(root: Path, n: dict):
+    """Validate one enriched nugget dict; raise :class:`Rejection` on any
+    schema or verbatim-guard failure. Writes nothing."""
+    kind = n.get("kind")
+    if kind not in ("text", "image"):
+        raise Rejection('nugget "kind" must be "text" or "image"')
+    common = ["source", "page", "title", "information"]
+    req = common + (["raw_text"] if kind == "text" else ["visible_text"])
+    missing = [f for f in req if f not in n or n[f] in (None, "")]
+    if missing:
+        raise Rejection(
+            f"nugget missing required field(s): {', '.join(missing)}")
+    if kind == "image" and not isinstance(n["visible_text"], list):
+        raise Rejection('image nugget "visible_text" must be a list')
+
+    # ----- verbatim guard (text nuggets only) -----
+    if kind == "text":
+        slug = source_slug(n["source"])
+        src_path = root / "sources" / f"{slug}.json"
+        if not src_path.exists():
+            raise Rejection(f"source {n['source']} not converted "
+                            f"(expected sources/{slug}.json)")
+        src = json.loads(src_path.read_text(encoding="utf-8"))
+        source_text = "\n".join(pg.get("text", "") for pg in src.get("pages", []))
+        if normalize(n["raw_text"]) not in normalize(source_text):
+            raise Rejection("verbatim guard failed — raw_text is not a "
+                            f"substring of source {n['source']} (normalized). "
+                            "Fix the excerpt to match the source exactly.")
+
+
+def persist_nugget(root: Path, n: dict) -> str:
+    """Stamp + write one validated nugget; returns its id."""
+    st = stamp(root)
+    n["nugget_id"] = st
+    n["created_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+    n["created_by"] = "knowledge-miner"
+    (root / "nuggets").mkdir(exist_ok=True)
+    (root / "nuggets" / f"{st}.json").write_text(
+        json.dumps(n, indent=2, ensure_ascii=False), encoding="utf-8")
+    log(root, "knowledge-miner", "create-nugget", nugget=st,
+        kind=n["kind"], source=n["source"], page=n["page"])
+    return st
+
+
 # ---------- commands ----------
 
 def cmd_create_nugget(root: Path, a):
@@ -137,42 +306,59 @@ def cmd_create_nugget(root: Path, a):
         n = json.loads(p.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         sys.exit(f"ERROR: nugget file is not valid JSON: {exc}")
-
-    kind = n.get("kind")
-    if kind not in ("text", "image"):
-        sys.exit('ERROR: nugget "kind" must be "text" or "image"')
-    common = ["source", "page", "title", "information"]
-    req = common + (["raw_text"] if kind == "text" else ["visible_text"])
-    missing = [f for f in req if f not in n or n[f] in (None, "")]
-    if missing:
-        sys.exit(f"ERROR: nugget missing required field(s): {', '.join(missing)}")
-    if kind == "image" and not isinstance(n["visible_text"], list):
-        sys.exit('ERROR: image nugget "visible_text" must be a list')
-
-    # ----- verbatim guard (text nuggets only) -----
-    if kind == "text":
-        slug = source_slug(n["source"])
-        src_path = root / "sources" / f"{slug}.json"
-        if not src_path.exists():
-            sys.exit(f"ERROR: source {n['source']} not converted "
-                     f"(expected sources/{slug}.json)")
-        src = json.loads(src_path.read_text(encoding="utf-8"))
-        source_text = "\n".join(pg.get("text", "") for pg in src.get("pages", []))
-        if normalize(n["raw_text"]) not in normalize(source_text):
-            sys.exit("ERROR: verbatim guard failed — raw_text is not a "
-                     f"substring of source {n['source']} (normalized). "
-                     "Fix the excerpt to match the source exactly.")
-
-    st = stamp(root)
-    n["nugget_id"] = st
-    n["created_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-    n["created_by"] = "knowledge-miner"
-    (root / "nuggets").mkdir(exist_ok=True)
-    (root / "nuggets" / f"{st}.json").write_text(
-        json.dumps(n, indent=2, ensure_ascii=False), encoding="utf-8")
-    log(root, "knowledge-miner", "create-nugget", nugget=st,
-        kind=kind, source=n["source"], page=n["page"])
+    try:
+        check_nugget(root, n)
+    except Rejection as exc:
+        sys.exit(f"ERROR: {exc}")
+    st = persist_nugget(root, n)
     print(json.dumps({"nugget_id": st}))
+
+
+def cmd_persist_nuggets(root: Path, a):
+    """Fan-out persist wrapper for a miner's batch output (ticket 13).
+
+    The miner returns ``{"nuggets": [...]}`` whose items carry no ``kind``/
+    ``source`` — the orchestrator knows the source; the miner must not invent
+    it. This wrapper enriches every item, validates the WHOLE batch (schema +
+    verbatim guard) before writing anything — so a shim retry after a
+    rejection can never duplicate already-persisted nuggets — then persists
+    each item.
+    """
+    src = source_record(root, a.source)
+    p = Path(a.file)
+    if not p.exists():
+        sys.exit(f"ERROR: batch file {a.file} does not exist")
+    try:
+        batch = json.loads(p.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        sys.exit(f"ERROR: miner output is not valid JSON: {exc}")
+    if not isinstance(batch, dict) or not isinstance(batch.get("nuggets"), list):
+        sys.exit('ERROR: miner output must be an object of the form '
+                 '{"nuggets": [...]}')
+
+    enriched = []
+    errors = []
+    for i, item in enumerate(batch["nuggets"], start=1):
+        if not isinstance(item, dict):
+            errors.append(f"nugget #{i}: not an object")
+            continue
+        n = dict(item)
+        n["kind"] = "text"                      # text-miner slice: forced,
+        n["source"] = src["original_file"]      # never miner-invented
+        try:
+            check_nugget(root, n)
+        except Rejection as exc:
+            errors.append(f"nugget #{i} ({n.get('title', '?')}): {exc}")
+        enriched.append(n)
+    if errors:
+        # Atomic rejection: nothing was written; the whole corrected batch
+        # comes back through the shim retry.
+        sys.exit("ERROR: " + "; ".join(errors))
+
+    ids = [persist_nugget(root, n) for n in enriched]
+    log(root, "km", "persist-nuggets", source=a.source, count=len(ids))
+    print(json.dumps({"nugget_ids": ids, "count": len(ids),
+                      "source": a.source}))
 
 def cmd_create(root: Path, a):
     c = ctx(root)
@@ -389,15 +575,19 @@ def main():
     ap.add_argument("--deck")
     sub = ap.add_subparsers(dest="cmd", required=True)
     cn = sub.add_parser("create-nugget"); cn.add_argument("--file", required=True)
+    pn = sub.add_parser("persist-nuggets"); pn.add_argument("--source", required=True); pn.add_argument("--file", required=True)
+    mb = sub.add_parser("mine-brief"); mb.add_argument("--source", required=True); mb.add_argument("--out", required=True)
+    mm = sub.add_parser("mark-mined"); mm.add_argument("--source", required=True)
     c = sub.add_parser("create-slide"); c.add_argument("--title", required=True); c.add_argument("--nuggets", default=""); c.add_argument("--after", default="end")
     m = sub.add_parser("merge-slides"); m.add_argument("--slides", required=True); m.add_argument("--title", default="")
     s = sub.add_parser("set-content"); s.add_argument("--slide", required=True); s.add_argument("--body-file", required=True)
     sub.add_parser("validate")
     a = ap.parse_args()
     root = find_deck_root(a.deck)
-    {"create-nugget": cmd_create_nugget, "create-slide": cmd_create,
-     "merge-slides": cmd_merge, "set-content": cmd_set_content,
-     "validate": cmd_validate}[a.cmd](root, a)
+    {"create-nugget": cmd_create_nugget, "persist-nuggets": cmd_persist_nuggets,
+     "mine-brief": cmd_mine_brief, "mark-mined": cmd_mark_mined,
+     "create-slide": cmd_create, "merge-slides": cmd_merge,
+     "set-content": cmd_set_content, "validate": cmd_validate}[a.cmd](root, a)
 
 if __name__ == "__main__":
     main()

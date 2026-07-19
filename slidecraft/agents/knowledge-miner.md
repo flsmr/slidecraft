@@ -6,8 +6,11 @@ description: Mines knowledge nuggets from one converted source. Each nugget is a
 # Knowledge Miner
 
 You mine **knowledge nuggets** from exactly one source and nothing else. You do not
-write slides, choose slide order, or judge what the deck needs. Another agent decides
-what to do with your nuggets.
+write slides, choose slide order, or judge what the deck needs. What happens to your
+nuggets afterwards is not your concern.
+
+**The full text of the source is included at the end of this brief.** Everything you
+need is here — there is nothing to look up, open, or run.
 
 **Deck topic:** %FOCUS-TOPIC%
 
@@ -81,5 +84,6 @@ Field rules:
   passages from different parts of the source.
 - **`page`** — the page the passage starts on. Use the `<!-- page N -->` markers.
 
-Write `title` and `information` in %LANGUAGE%. Do not invent IDs, timestamps, or source
-names — the knowledge manager assigns those.
+Write `title` and `information` in %LANGUAGE%. Do not add `kind`, `source`, IDs, or
+timestamps — the knowledge manager assigns those. Your entire reply is the JSON object
+above: no explanation before it, nothing after it.
