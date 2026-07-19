@@ -52,6 +52,12 @@ Core guarantees:
 | D17 | **Interview additions: topic and language.** Topic feeds the `%FOCUS-TOPIC%` injection for miners; language (en/de/…) governs all composed content. |
 | D18 | **Re-run contract: mine only new inputs.** After an input is fully mined (every source derived from it, D22), it is **moved to `input/processed/`** — the filesystem is the input registry. A `/draft-deck` re-run processes only what remains in `input/`, and new nuggets flow into the existing deck. |
 
+> **Superseded (SPEC D40–D45, ticket 11): D12 is dead** — no Storyteller-spawned Composers, no
+> serial per-nugget flow; the orchestrator invokes each pure-function role via the executor shim
+> (plan-then-execute). D11's agent-team execution model and D13's SendMessage trigger channel
+> fall with it; D13's "files carry" principle survives as km-assembled briefs and persisted
+> artifacts.
+
 Deliberately deferred: full idempotency layer, approval UX, hand-edit reconciliation details, incremental-change workflows beyond D18.
 
 ### 2.3 From the domain-modeling session (2026-07-16)
@@ -150,6 +156,12 @@ Post-drafting refinement is preferably conversational ("integrate the new source
         → lead runs MCP validate_deck, reports results, team is torn down
 ```
 
+> **Superseded by SPEC D40–D45 (2026-07-19, ticket 11):** the serial per-nugget loop below is
+> replaced by **plan-then-execute** — the Storyteller is a pure planner over nugget *digests*
+> (D41/D42); the orchestrator executes the plan and invokes Composers (never the Storyteller);
+> every role is a pure function behind km-assembled briefs and a pluggable executor shim (D40/D44).
+> The create-first / budget-gate / merge/park *judgment* below survives inside the plan.
+
 ### 4.2 Storyteller per-nugget decision logic (D9, D10)
 
 For every nugget message, in arrival order:
@@ -207,6 +219,13 @@ Runs source-conversion scripts, renders agent templates and spawns the team, mon
 
 ### 6.2 Knowledge Miner (per input: one for the text source + one vision miner for the image sources)
 
+> **Superseded by SPEC D40–D45 (ticket 11):** miners are **pure functions**, not teammates —
+> `km mine-brief` assembles a self-contained brief (source text injected), the executor shim
+> invokes OWUI (`gdpr.gpt-5.6-sol`), `km create-nugget` persists (reject → re-invoke with error,
+> cap 2, then drop+flag). No SendMessage, no tool calls by the role. The image miner is **one
+> call per extracted image** (passed as a base64 data-URL); `asset` + `context_text` are
+> denormalized onto the nugget by the persist step (D45).
+
 - **Input:** its assigned sources (§7.2) + injected focus context (`%FOCUS-TOPIC%` etc.). Vision miners work through their input's image sources serially (D21).
 - **Task:** extract atomic Knowledge Nuggets — smallest self-contained units, one central idea each, one source each.
 - **Output:** nugget JSON via MCP `create_knowledge_nugget`; one SendMessage to the Storyteller per nugget; `mark_source_mined` per finished source (D22).
@@ -215,6 +234,13 @@ Runs source-conversion scripts, renders agent templates and spawns the team, mon
 
 ### 6.3 Storyteller (one teammate; the serial flow-control point)
 
+> **Superseded by SPEC D40–D45 (ticket 11):** the Storyteller is a **pure planner** — one
+> invocation over nugget *digests* (`title` + `information`; image `figure_type` + `description`
+> — never raw text or assets), returning a structured plan with optional `intended_function`
+> hints. It never drains a mailbox, never spawns Composers, never sees composed bodies — the
+> **orchestrator** executes the plan. Its brief inlines the storytelling skill (self-contained,
+> D40); it runs as a Claude subagent behind the executor shim (D44).
+
 - **On spawn:** creates the outline as real structural slides (D14), shaped by the storytelling skill for the deck type (loaded at runtime via the Skill tool — frontmatter preloading does not work for teammates, §11 F6).
 - **Steady state:** drains its mailbox per §4.2; spawns one fresh Composer subagent per composition; owns all `slides.md` ordering.
 - **Injected at spawn:** max slides/duration, deck type, audience, setting, language, topic. A resumed/idle teammate never re-injects — if the user changes the deck context, the *next* team spawn sees the new values.
@@ -222,9 +248,20 @@ Runs source-conversion scripts, renders agent templates and spawns the team, mon
 
 ### 6.4 Slide Composer (fresh foreground subagent per composition)
 
+> **Superseded by SPEC D41–D44 (ticket 11):** the Composer is invoked by the **orchestrator**
+> (never the Storyteller), receives a self-contained **brief** (routed verbatim `raw_text`, image
+> `asset`/`context_text` — never whole nugget JSON, never `visible_text`), returns **semantic
+> role-keyed JSON** (`km write-slide` does physical assembly), and runs on **OWUI
+> (`gdpr.gpt-5.6-sol`)** by default.
+
 - **Spawned by the Storyteller** with a rendered prompt: the target slide ID, its nugget IDs, deck-context values, and the theme-capabilities block.
 - **Task:** compose the slide body — headline, key message, bullets, text. May **place** an existing extracted image via its image nugget's asset path (placement ≠ generation, D23); leaves **placeholders** for images that would have to be generated (never creates images). Chooses the most appropriate layout from the theme capabilities (D16), following the slide's modality mix (image-only → figure layout; image + text → e.g. side-by-side).
-- **Write path:** MCP `update_slide_content` only (D15).
+- **Write path:** MCP `update_slide_content` only (D15) — SPEC `km set-content` in v1.
+- **Presenter notes (D39):** the composer normally leaves speaker notes empty; the write
+  path then fills them **verbatim from the slide's nuggets' raw knowledge** (`raw_text` /
+  `visible_text` + locator), so the presenter has the full source behind the telegraphic
+  body. The composer *may* author its own notes to override — deterministic fill only kicks
+  in when they are empty.
 - **Clean context guaranteed:** every spawn is a new isolated context; nothing spills between slides (D12).
 
 ### 6.5 Dynamic prompt injection (verified mechanism, D8)
@@ -384,6 +421,14 @@ The Slidev entry point; includes all slide files in presentation order. **Order 
 
 ## 8. Internal MCP: deterministic state operations
 
+> **Superseded by SPEC (no MCP — D27; pure-function roles — D40/D44, ticket 11):** there is no
+> MCP server. The deterministic layer is the plain **`km.py` CLI** (assemble:
+> `mine-brief`/`plan-brief`/`compose-brief`; persist: `create-nugget`/`write-plan`/`write-slide`;
+> plus the mutation surface), called by the **orchestrator**, never by LLM roles. The guarantees
+> below (validation, logging, referential integrity, atomic budget gate) carry over as km
+> subcommand behavior; read the function table as the km contract's ancestry and the Callers
+> column as historical.
+
 All file/state changes go through a **plugin-bundled MCP server** (auto-registered via the plugin's `.mcp.json`, available to lead, teammates, and subagents — §11 F7). Functions are deterministic scripts guaranteeing correct formats, naming, and referential integrity.
 
 **Context economy (resolved):** ONE server suffices. Per-agent `tools:` allowlists can whitelist individual MCP functions by name (`mcp__knowledge-manager__create_knowledge_nugget`), so each agent sees only its relevant functions — no server splitting needed (§11 F8). Note: plugin-shipped agent definitions cannot declare `mcpServers` frontmatter, but the server is plugin-bundled globally anyway.
@@ -398,7 +443,7 @@ Every call is logged (§9): calling agent, action, useful payload info.
 | `create_slide` | Creates slide md (title + new stamp) + empty association entry + Slide State file. **Atomic budget gate:** fails when the deck is at `max_slides` (total incl. structural, D14). | Storyteller |
 | `associate_knowledge_nugget` | Registers nugget ID under slide ID; validates both exist; no duplicates. | Storyteller |
 | `merge_slides` | Purely mechanical (D10): new slide file + stamp (new title is an input), re-links all nugget associations, **appends** the merged slides' content (slide "grows"), merges Slide State files, retires the old slides. No LLM, no recomposition. | Storyteller |
-| `update_slide_content` | Accepts full slide body; validates frontmatter, layout against theme capabilities, referenced asset paths exist (D23), stamp/filename untouched; writes + logs (D15). | Composer |
+| `update_slide_content` | Accepts full slide body; validates frontmatter, layout against theme capabilities, referenced asset paths exist (D23), stamp/filename untouched; writes + logs (D15). **Fills empty presenter notes verbatim from the slide's nuggets' raw knowledge (D39).** | Composer |
 | `insert_slide` / `update_deck_order` | Places a slide in `slides.md` / rewrites the include order; validates every slide appears exactly once. | Storyteller |
 | `mark_source_mined` | Marks one source mined; moves the parent input to `input/processed/` once all its sources are mined (D18/D22); logs. | Miner |
 | `validate_deck` | Consistency check: md↔state pairs, associations point to existing files, stamps unique, slides.md complete and duplicate-free, budget respected. | Lead |
@@ -444,6 +489,13 @@ Purpose: observability, debugging, and the raw material for later idempotency/au
 ---
 
 ## 11. Verified Platform Facts (Claude Code, 2026-07)
+
+> **Historical note (2026-07-19):** these facts motivated the now-superseded agent-team design.
+> Current execution (SPEC D40–D45, ticket 11) uses **no agent teams, no SendMessage, and no MCP
+> server** — roles are pure functions behind a pluggable executor shim (OWUI `gdpr.gpt-5.6-sol`
+> for miners/composer; the Storyteller as a Claude subagent). The facts remain accurate as
+> platform research; read the "Consequence here" column as rationale for the old design, not
+> current behavior.
 
 The grill was grounded against current docs (agent teams page + capability fact-check). Design-relevant facts:
 

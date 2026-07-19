@@ -69,14 +69,17 @@ with a precise locator. NOT a single claim or sentence — a source section or t
 one nugget; a list in the source is one nugget, never one per item (a 5-page chapter yields
 ~6–12, not dozens). The same idea in two sources yields two nuggets — deduplication is a
 slide-level concern, never a nugget-level one.
-_Avoid_: claim, fact, finding, insight, chunk, snippet, evidence sidecar
+_Avoid_ (as nugget synonyms): claim, fact, finding, insight, chunk, snippet, evidence
+sidecar — the [[concept type]] enum values `finding`/`claim-support` are unaffected
 
 **Image nugget**:
-A knowledge nugget mined from an image source: it carries the asset path, a `figure_type`,
-an `information` digest of what the figure teaches, a neutral `description` (for placement
-+ alt-text), and **`visible_text`** — every text string in the image transcribed verbatim,
-which is the image's provenance anchor. A decorative image (logo, rule, background) yields
-no nugget.
+A knowledge nugget mined from an image source: it carries a `figure_type`, an `information`
+digest of what the figure teaches, a `description` (1–2 sentences, **content first, then
+form** — for placement + alt-text, never a label inventory — D42), and **`visible_text`** —
+every text string in the image transcribed verbatim, which is the image's provenance
+anchor. At persist time the knowledge manager **denormalizes `asset` (public path) and
+`context_text` (nearest text block) onto it** from the source record (D45), so composition
+never joins across files. A decorative image (logo, rule, background) yields no nugget.
 _Avoid_: figure nugget, asset, visual
 
 **Backlog**:
@@ -118,8 +121,9 @@ _Avoid_: limit, cap, quota
 **Merge**:
 The consolidation of two content slides into a new one to free a budget slot: the knowledge
 manager mechanically **unions their nugget associations** and retires the originals, then
-the Storyteller spawns a **Composer to recompose** the merged slide (D31 — the script never
-writes prose; the Composer always runs after). Routine, not exceptional. Sibling move:
+the **Lead workflow invokes a Composer** (assemble → invoke → persist, D40/D41) to
+recompose the merged slide (D31 — the script never writes prose; the Composer always runs
+after). Routine, not exceptional. Sibling move:
 **parking** a lower-priority slide instead of merging (Triage, D34).
 _Avoid_: combine, condense, rewrite
 
@@ -130,45 +134,98 @@ against it, never chooses.
 _Avoid_: theme features, layout catalog
 
 **Injection block**:
-A per-role set of deck-specific values in the deck context (`FOCUS-TOPIC`, `AUDIENCE`, …).
-The static role/craft lives in a **registered subagent definition** loaded by the runtime
-(never in the orchestrator's context); the orchestrator passes only these values in the
-**small spawn prompt** at every spawn (D29). Context edits therefore reach the next run,
-never a running agent.
+A per-role set of deck-specific values in the deck context (`FOCUS-TOPIC`, `AUDIENCE`, …,
+plus the per-role executor/model choice — D44). The knowledge manager's **assemble**
+subcommands fill them into the role's prompt template when rendering a [[brief]] (D40).
+Context edits therefore reach the next invoke, never a running one.
 _Avoid_: template variables, parameters
+
+**Brief**:
+The fully **self-contained prompt** a role receives — role template + injection values +
+the routed data itself (source text for a miner; nugget digests for the Storyteller; one
+slide's routed fields for the Composer — D42). Rendered deterministically by the knowledge
+manager (`mine-brief` / `plan-brief` / `compose-brief`); contains no file paths to read, no
+scripts to call, no IDs to chase, so the same brief runs on any executor (D40/D44).
+_Avoid_: spawn prompt, rendered template, context package
+
+**Invoke shim**:
+The one deliberately nondeterministic seam: `invoke(role, brief, image?)` → structured
+output. Two adapters — the Open WebUI client (OpenAI-compatible chat; images as base64
+data-URL content parts) and a Claude subagent. Defaults: miners + Composer → EU-hosted
+`gdpr.gpt-5.6-sol`; Storyteller → Claude subagent (D44). Wraps the bounded rejection loop:
+persist rejects → re-invoke with the error appended, cap 2, then the per-role terminal —
+miner: drop nugget + flag; composer: park slide + flag; storyteller: abort the run with a
+flagged error (D44).
+_Avoid_: executor layer, LLM gateway, model router
+
+**Concept type**:
+The slide's declared didactic function, one enum value (`structural`, `motivate`, `define`,
+`compare`, `relationship`, `process`, `cause-effect`, `finding`, `categories`,
+`claim-support`). The Storyteller may plan it as an `intended_function` hint; the Composer
+sets the final value from the actual content; the knowledge manager stamps it into the
+slide state file, where later critics read it (D43).
+_Avoid_: slide function, teaching pattern, template type
 
 **Physical name**:
 A theme's real layout file or slot name (`slide5`, `::body-16::`) — the only names Slidev
 renders reliably. Slide files always use physical names (May lesson: runtime semantic
-aliases fail).
+aliases fail). Since D43 this is a **script guarantee**: the Composer emits semantic roles;
+the knowledge manager's `write-slide` maps them to physical names — no LLM ever emits (or
+sees) a physical slot name.
 _Avoid_: semantic alias (in rendered files)
+
+**Presenter notes**:
+The Slidev speaker notes of a slide — the trailing `<!-- … -->` comment, shown only in the
+presenter view. By default they are **not** authored by the Composer: when the composed body
+leaves them empty, the knowledge manager (`write-slide` in the composer pipeline;
+`set-content` on direct markdown writes) fills them **verbatim from the slide's nuggets' raw
+knowledge** (`raw_text` / an image's `visible_text`, each with its source locator), so the
+presenter keeps the full source behind the telegraphic body (D39). The Composer may write its
+own notes to override; a structural slide (no nuggets) gets none. A deliberate, verbatim-only
+carve-out to "the knowledge manager never writes prose" — the notes are copied provenance, not
+composed prose.
+_Avoid_: speaker comment, slide notes payload, footnotes
 
 ### Agent roles
 
-**Lead**:
-The `/draft-deck` **workflow** itself: converts inputs to sources, spawns the miners and the
-Storyteller, executes the Storyteller's plan via the knowledge manager, spawns the
-Composers, validates. Deterministic control flow; makes no content decisions.
+**Lead** (the orchestrator):
+The `/draft-deck` **workflow** itself: converts inputs to sources, runs every role through
+**assemble → invoke → persist** (D40) — miners, the Storyteller planner, then per plan step
+the Composer — and executes all mutations via the knowledge manager; the [[invoke shim]]
+wraps the cap-2 retry → park/drop/abort loop (D44). Validates at the end. Deterministic
+control flow; makes no content decisions.
 _Avoid_: manager, coordinator
 
 **Knowledge miner**:
-The teammate that mines nuggets from assigned sources: one per text source, plus one vision
-miner per input's image set. Announces every nugget to the Storyteller; never touches
-slides.
-_Avoid_: extractor, harvester
+The pure-function role that mines nuggets: one invoke per text source (the source text is
+injected into its [[brief]] — it never opens files), plus one vision invoke **per extracted
+image**, the image passed directly (D45). Returns nugget JSON; the knowledge manager
+persists it (verbatim guard, stamps, image denormalization). Runs on OWUI by default (D44).
+Never touches slides.
+_Avoid_: extractor, harvester, teammate
 
 **Storyteller**:
-The single agent that owns deck structure. It reads all nuggets and returns a **structured
-plan** — the outline (structural slides) plus, per nugget, a create / associate / merge /
-**park** (Triage, D34) decision — which the Lead workflow executes. Owns slide order.
-Emits a full plan on a fresh draft, a delta plan on an incremental/refinement run (D32).
-Skips `locked` slides (proposes instead). Never writes slide content.
+The single pure-planner role that owns deck structure. It reads all nuggets **as digests
+only** (`title` + `information`, plus an image's `figure_type`/`description` — never
+`raw_text`, `visible_text`, or assets — D42) and returns a **structured plan** — the
+outline (structural slides) plus, per nugget, a create / associate / merge / **park**
+(Triage, D34) decision and an optional `intended_function` hint ([[concept type]] enum) —
+which the Lead workflow executes. Owns slide order. Emits a full plan on a fresh draft, a
+delta plan on an incremental/refinement run (D32). Skips `locked` slides (proposes
+instead). Never writes slide content, never spawns composers, never sees composed bodies
+(D41). Runs as a Claude subagent (D44).
 _Avoid_: narrator, director
 
 **Slide composer**:
-The fresh subagent spawned per composition: writes one slide's body from its nuggets and
-the deck context, choosing the layout that fits the modality mix. One slide, then it
-returns.
+The pure-function role invoked once per composition: writes one slide from its [[brief]] —
+the verbatim `raw_text` of its slide's nuggets plus their `source`/`page` locators for the
+citation footer (never the `information` digest, never `visible_text` — D42), an image's
+`asset`/`description`, or for an image-only slide the
+`context_text` (headline only, no body). Chooses the layout that fits the modality mix and
+returns **semantic role-keyed JSON** with a final [[concept type]]; the knowledge manager's
+`write-slide` does all physical Slidev assembly (D43). Leaves the [[presenter notes]] empty
+by default — the knowledge manager fills them verbatim from the nuggets' raw knowledge
+(D39). Runs on OWUI by default (D44). One slide, then it returns.
 _Avoid_: author, writer, slide generator
 
 ### State & bookkeeping
@@ -187,8 +244,8 @@ _Avoid_: mapping, linkage
 **Slide state**:
 The per-slide lifecycle value (`slides/<title>--<stamp>.json`) governing what agents may
 change automatically. It binds agents only — the user may hand-edit any slide in any state.
-v1 enum: `pending` (skeleton, body not yet written — an in-flight-composition guard so a
-reacting Storyteller won't touch a slide mid-compose; `validate` flags any left at run
+v1 enum: `pending` (skeleton, body not yet written — marks in-flight or interrupted
+composition; `validate` flags any left at run
 end), `draft` (composed, pipeline-owned, agents may modify), `locked` (composed,
 user-owned, agents *propose* not edit — set **only by explicit user lock**). More states
 added only after testing. **Active-vs-parked is not a state** — it lives in `slides.md` as
@@ -199,17 +256,19 @@ _Avoid_: sidecar, status, lock flag
 **Hand-edit guard**:
 The protection for un-`locked` slides the user has hand-edited. The knowledge manager
 stamps a `content_hash` on every write; a deterministic pre-tool hook on `set-content` /
-`merge-slides` / `park-slide` re-hashes the target and, on a mismatch, prompts the user
+`write-slide` / `merge-slides` / `park-slide` re-hashes the target and, on a mismatch, prompts the user
 (AskUser) before letting an agent overwrite it. Separate from `locked`: `locked` is a
 persistent user intent, the hand-edit guard is a per-call safety net checked at edit time.
 _Avoid_: auto-lock, dirty flag
 
 **Knowledge manager**:
-The deterministic script suite (`km.py`, subcommands `create-nugget`, `create-slide`,
-`merge-slides`, `park-slide` / `unpark-slide`, `set-content`, `validate`) through which
-every deck mutation flows — validating, logged. Called by agents via an injected absolute
-path (`%KM%`); prose bodies are passed as files, never CLI args (D28). Agents decide; the
-knowledge manager executes. (No MCP in v1 — D27.)
+The deterministic script suite (`km.py`) through which every deck mutation **and every
+brief assembly** flows — validating, logged. Mutation subcommands: `create-nugget` (+ image
+denormalization, D45), `create-slide`, `merge-slides`, `park-slide` / `unpark-slide`,
+`set-content`, `write-slide` (semantic → physical, D43), `validate`. Assemble subcommands:
+`mine-brief`, `plan-brief`, `compose-brief` (D40). Called by the **orchestrator** — roles
+are pure functions and never call scripts themselves (D40). Payloads are passed as files,
+never CLI args (D28). Roles decide; the knowledge manager executes. (No MCP in v1 — D27.)
 _Avoid_: MCP server, state manager, file layer, backend
 
 ### Review & grounding concepts
