@@ -9,8 +9,14 @@ Subcommands:
   persist-nuggets --source SLUG --file PATH                 -> {"nugget_ids": [...]}
   mine-brief      --source SLUG --out PATH                  -> {"ok": true, ...}
   mark-mined      --source SLUG                             -> {"ok": true, ...}
-  create-slide  --title T --nuggets a,b --after ID|end     -> {"slide_id": ...}
+  plan-brief    --out PATH                                  -> {"ok": true, ...}
+  write-plan    --file PATH                                 -> {"ok": true, "steps": [...]}
+  create-slide  --title T --nuggets a,b --after ID|end
+                [--parked] [--intended-function F]          -> {"slide_id": ...}
+  associate-nuggets --slide ID --nuggets a,b                -> {"slide_id": ...}
   merge-slides  --slides a,b [--title T]                    -> {"slide_id": ...}
+  park-slide    --slide ID [--reason R]                     -> {"ok": true, ...}
+  unpark-slide  --slide ID                                  -> {"ok": true, ...}
   set-content   --slide ID --body-file PATH                 -> {"ok": true, ...}
   validate                                                  -> {"ok": bool, ...}
 
@@ -80,12 +86,30 @@ def slide_files(root: Path) -> list[Path]:
     return sorted((root / "slides").glob("*.md"))
 
 def order(root: Path) -> list[str]:
-    """Slide IDs in slides.md order (by src includes)."""
+    """ACTIVE slide IDs in slides.md order (src includes outside comments —
+    the parked block is an HTML comment, D34)."""
     md = (root / "slides.md")
     if not md.exists():
         return []
-    ids = re.findall(r"src:\s*\./slides/(.+?)\.md", md.read_text(encoding="utf-8"))
-    return ids
+    text = re.sub(r"<!--.*?-->", "", md.read_text(encoding="utf-8"), flags=re.S)
+    return re.findall(r"src:\s*\./slides/(.+?)\.md", text)
+
+def parked_ids(root: Path) -> list[str]:
+    """IDs of parked slides (state ``parked`` in the slide state file — the
+    single source of truth; the slides.md parked block mirrors it)."""
+    out = []
+    for p in sorted((root / "slides").glob("*.json")):
+        try:
+            stj = json.loads(p.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+        if stj.get("state") == "parked":
+            out.append(p.stem)
+    return out
+
+def active_count(root: Path) -> int:
+    """Slides that occupy a budget slot (D34: parked slides do not)."""
+    return len({p.stem for p in slide_files(root)} - set(parked_ids(root)))
 
 def write_order(root: Path, ids: list[str]):
     c = ctx(root)
@@ -103,7 +127,14 @@ def write_order(root: Path, ids: list[str]):
     else:
         head = f"---\ntheme: {theme_ref}\ntitle: {title}\n---\n"
         body = ""
-    (root / "slides.md").write_text(head + body, encoding="utf-8")
+    # Parked slides ride in a commented block (D34): their includes are kept
+    # (visible, un-parkable) but Slidev never renders them.
+    parked = parked_ids(root)
+    tail = ""
+    if parked:
+        inner = "".join(f"---\nsrc: ./slides/{i}.md\n---\n" for i in parked)
+        tail = f"\n<!-- parked\n{inner}-->\n"
+    (root / "slides.md").write_text(head + body + tail, encoding="utf-8")
 
 def skeleton(title: str, nugget_ids: list[str]) -> str:
     return (f"---\nlayout: default\ntitle: {title}\n---\n\n"
@@ -145,6 +176,7 @@ def normalize(s: str) -> str:
 # Role prompt templates live next to the scripts folder (same layout in the
 # repo and in the installed toolkit, D33).
 AGENTS_DIR = Path(__file__).resolve().parent.parent / "agents"
+SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
 
 
 def strip_frontmatter(text: str) -> str:
@@ -243,6 +275,306 @@ def cmd_mark_mined(root: Path, a):
         already_mined=already)
     print(json.dumps({"ok": True, "source": a.source,
                       "mined_at": src["mined_at"], "input_moved": moved}))
+
+
+# ---------- plan brief + plan persist (D40/D41/D42, ticket 15) ----------
+
+def load_state(root: Path, sid: str) -> dict:
+    p = root / "slides" / f"{sid}.json"
+    if not p.exists():
+        return {}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+
+
+def storytelling_craft_section() -> str:
+    """Inline a storytelling skill's craft into the brief when the toolkit
+    ships one (SPEC §2; the skill itself is a later ticket — absent is fine)."""
+    if not SKILLS_DIR.is_dir():
+        return ""
+    hits = sorted(SKILLS_DIR.glob("*storytelling*/SKILL.md"))
+    if not hits:
+        return ""
+    body = strip_frontmatter(hits[0].read_text(encoding="utf-8-sig")).strip()
+    return ("\n\n---\n\n## Storytelling craft (deck-type guidance)\n\n"
+            + body + "\n")
+
+
+def nugget_digests(root: Path) -> str:
+    """Every nugget's DIGEST fields (D42): id, kind, title, information —
+    plus figure_type/description for images. Never raw_text, visible_text,
+    asset paths, or context_text."""
+    A = assoc(root)
+    placed: dict[str, str] = {}
+    for sid, nugs in A.items():
+        for nid in nugs:
+            placed.setdefault(nid, sid)
+    lines = []
+    for p in sorted((root / "nuggets").glob("*.json")):
+        n = load_nugget(root, p.stem) or {}
+        nid = n.get("nugget_id", p.stem)
+        kind = n.get("kind", "text")
+        tag = kind + (f": {n['figure_type']}"
+                      if kind == "image" and n.get("figure_type") else "")
+        lines.append(f'- id: {nid} [{tag}] — "{n.get("title", "")}"')
+        lines.append(f"  placed: {'on ' + placed[nid] if nid in placed else 'no'}")
+        if kind == "image" and n.get("description"):
+            lines.append(f"  figure: {n['description']}")
+        lines.append("  digest:")
+        for ln in str(n.get("information", "")).splitlines():
+            lines.append(f"    {ln}")
+    return "\n".join(lines) if lines else "(no nuggets mined yet)"
+
+
+def deck_state_section(root: Path) -> str:
+    """The current deck for the planner: active order, parked block, budget —
+    and whether this is a fresh draft (full plan) or a re-run (delta plan)."""
+    ids = order(root)
+    parked = parked_ids(root)
+    A = assoc(root)
+    budget = int(ctx(root)["deck"]["max_slides"])
+    lines = [f"Slide budget: {len(ids)} of {budget} active slots used."]
+    if not ids and not parked:
+        lines.append("")
+        lines.append("The deck has no slides yet — this is a fresh draft: "
+                     "return a FULL plan covering the structural slides the "
+                     "deck needs and every unplaced nugget.")
+        return "\n".join(lines)
+    lines.append("")
+    lines.append("The deck already has slides — this is a re-run: return a "
+                 "DELTA plan that integrates the new material into the "
+                 "existing structure; do not recreate existing slides.")
+    if ids:
+        lines.append("")
+        lines.append("Active slides, in deck order:")
+        for i, sid in enumerate(ids, 1):
+            stj = load_state(root, sid)
+            nugs = A.get(sid, [])
+            tag = "structural" if not nugs else "nuggets: " + ", ".join(nugs)
+            lines.append(f'{i}. {sid} — "{stj.get("title", sid)}" '
+                         f'[{stj.get("state", "draft")}] ({tag})')
+    if parked:
+        lines.append("")
+        lines.append("Parked slides (content kept, not shown; un-parkable "
+                     "when a slot frees up):")
+        for sid in parked:
+            stj = load_state(root, sid)
+            reason = stj.get("parked_reason", "")
+            lines.append(f'- {sid} — "{stj.get("title", sid)}" [parked]'
+                         + (f" — reason: {reason}" if reason else ""))
+    return "\n".join(lines)
+
+
+def cmd_plan_brief(root: Path, a):
+    """Render the self-contained storyteller brief (D40/D42): planner role
+    template + deck constraints + inlined storytelling craft + all nugget
+    digests + the current deck state (incl. the parked block)."""
+    c = ctx(root)
+    inj = c.get("injection", {}).get("storyteller", {})
+    deckb = c["deck"]
+    values = {
+        "TOPIC": inj.get("TOPIC", deckb.get("topic", "")),
+        "DECK-TYPE": inj.get("DECK-TYPE", deckb.get("type", "")),
+        "AUDIENCE": inj.get("AUDIENCE", deckb.get("audience", "")),
+        "SETTING": inj.get("SETTING", deckb.get("setting", "")),
+        "LANGUAGE": inj.get("LANGUAGE", deckb.get("language", "")),
+        "MAX-SLIDES": inj.get("MAX-SLIDES", deckb.get("max_slides", "")),
+        "MAX-DURATION-MINUTES": inj.get(
+            "MAX-DURATION-MINUTES", deckb.get("max_duration_minutes") or ""),
+    }
+    brief = render_template(load_template("storyteller"), values)
+    brief += storytelling_craft_section()
+    brief += ("\n\n---\n\n## Knowledge nuggets (digests)\n\n"
+              + nugget_digests(root))
+    brief += ("\n\n---\n\n## Current deck state\n\n"
+              + deck_state_section(root) + "\n")
+    write_brief(root, a.out, brief)
+    log(root, "km", "plan-brief", chars=len(brief))
+    print(json.dumps({"ok": True, "brief": a.out, "chars": len(brief)}))
+
+
+PLAN_ACTIONS = ("create", "associate", "merge", "park", "unpark")
+
+
+def cmd_write_plan(root: Path, a):
+    """Validate the storyteller's returned plan deterministically (D41) —
+    nugget ids exist, decision types valid, structural slides well-formed,
+    budget arithmetic sound (simulated step by step over ACTIVE slides),
+    hints in the enum, locked slides untouched, no nugget left unplaced
+    (D34) — record it, and hand back an executable step list.
+
+    Rejection = exit 1 with the reasons (drives the shim retry; cap-2
+    exhaustion is the storyteller's abort terminal, D44)."""
+    p = Path(a.file)
+    if not p.exists():
+        sys.exit(f"ERROR: plan file {a.file} does not exist")
+    try:
+        obj = json.loads(p.read_text(encoding="utf-8-sig"))
+    except json.JSONDecodeError as exc:
+        sys.exit(f"ERROR: plan output is not valid JSON: {exc}")
+    if not isinstance(obj, dict) or not isinstance(obj.get("plan"), list):
+        sys.exit('ERROR: plan output must be an object of the form '
+                 '{"plan": [...], "notes": ""}')
+
+    known = {q.stem for q in (root / "nuggets").glob("*.json")}
+    A = assoc(root)
+    files = {q.stem for q in slide_files(root)}
+    states = {sid: load_state(root, sid) for sid in files}
+    locked = {sid for sid, s in states.items() if s.get("state") == "locked"}
+    structural = {sid for sid in files if not A.get(sid)}
+    parked_set = set(parked_ids(root))
+    budget = int(ctx(root)["deck"]["max_slides"])
+    n_active = len(files - parked_set)
+
+    errors: list[str] = []
+    steps: list[dict] = []
+    referenced: set[str] = set()
+
+    def check_slide(where: str, sid, *, allow_parked=False) -> bool:
+        if not isinstance(sid, str) or sid not in files:
+            errors.append(f"{where}: slide {sid!r} does not exist")
+            return False
+        if sid in locked:
+            errors.append(f"{where}: slide {sid} is locked — locked slides "
+                          "are skip-and-propose (use notes)")
+            return False
+        if not allow_parked and sid in parked_set:
+            errors.append(f"{where}: slide {sid} is parked — unpark it first")
+            return False
+        return True
+
+    for i, step in enumerate(obj["plan"], 1):
+        where = f"step #{i}"
+        if not isinstance(step, dict):
+            errors.append(f"{where}: not an object")
+            continue
+        action = step.get("action")
+        if action not in PLAN_ACTIONS:
+            errors.append(f"{where}: unknown action {action!r} "
+                          f"(valid: {list(PLAN_ACTIONS)})")
+            continue
+        where = f"{where} ({action})"
+
+        if action == "create":
+            title = step.get("title")
+            if not title or not isinstance(title, str):
+                errors.append(f"{where}: missing title")
+                continue
+            structural_flag = bool(step.get("structural"))
+            nugs = step.get("nuggets") or []
+            if structural_flag and nugs:
+                errors.append(f"{where} '{title}': a structural slide "
+                              "carries no nuggets")
+            if not structural_flag:
+                if not nugs:
+                    errors.append(f"{where} '{title}': a content slide needs "
+                                  'nuggets (or mark it "structural": true)')
+                missing = [n for n in nugs if n not in known]
+                if missing:
+                    errors.append(f"{where} '{title}': unknown nugget id(s): "
+                                  + ", ".join(str(m) for m in missing))
+                referenced.update(nugs)
+            hint = step.get("intended_function")
+            if hint is not None and hint not in CONCEPT_TYPES:
+                errors.append(f"{where}: intended_function {hint!r} not in "
+                              f"{list(CONCEPT_TYPES)}")
+            after = step.get("after")
+            if after not in (None, "end") and after not in files:
+                errors.append(f"{where}: after-target {after!r} does not exist")
+            is_parked = bool(step.get("parked"))
+            if not is_parked:
+                if n_active >= budget:
+                    errors.append(f"{where} '{title}': budget overflow — "
+                                  f"{n_active} active slides of max {budget}; "
+                                  "merge or park BEFORE this create")
+                else:
+                    n_active += 1
+            steps.append({"op": "create-slide", "title": title,
+                          "nuggets": list(nugs), "structural": structural_flag,
+                          "parked": is_parked, "after": after or "end",
+                          "intended_function": hint})
+
+        elif action == "associate":
+            sid = step.get("slide")
+            nugs = step.get("nuggets") or []
+            if not nugs:
+                errors.append(f"{where}: needs at least one nugget id")
+            if check_slide(where, sid):
+                if sid in structural:
+                    errors.append(f"{where}: slide {sid} is structural — "
+                                  "structural slides hold no nuggets")
+            missing = [n for n in nugs if n not in known]
+            if missing:
+                errors.append(f"{where}: unknown nugget id(s): "
+                              + ", ".join(str(m) for m in missing))
+            referenced.update(nugs)
+            steps.append({"op": "associate-nuggets", "slide": sid,
+                          "nuggets": list(nugs)})
+
+        elif action == "merge":
+            sids = step.get("slides") or []
+            if not isinstance(sids, list) or len(sids) < 2:
+                errors.append(f"{where}: needs >=2 slide ids")
+                continue
+            ok = True
+            for sid in sids:
+                if not check_slide(where, sid):
+                    ok = False
+                elif sid in structural:
+                    errors.append(f"{where}: slide {sid} is structural — "
+                                  "structural slides are never merge "
+                                  "candidates")
+                    ok = False
+            if ok:
+                n_active -= len(sids) - 1
+            steps.append({"op": "merge-slides", "slides": list(sids),
+                          "title": step.get("title") or ""})
+
+        elif action == "park":
+            sid = step.get("slide")
+            if check_slide(where, sid):
+                n_active -= 1
+                parked_set.add(sid)
+            steps.append({"op": "park-slide", "slide": sid,
+                          "reason": step.get("reason") or ""})
+
+        elif action == "unpark":
+            sid = step.get("slide")
+            if not isinstance(sid, str) or sid not in files:
+                errors.append(f"{where}: slide {sid!r} does not exist")
+            elif sid not in parked_set:
+                errors.append(f"{where}: slide {sid} is not parked")
+            elif sid in locked:
+                errors.append(f"{where}: slide {sid} is locked")
+            elif n_active >= budget:
+                errors.append(f"{where}: budget overflow — no free active "
+                              f"slot for {sid} (max {budget})")
+            else:
+                n_active += 1
+                parked_set.discard(sid)
+            steps.append({"op": "unpark-slide", "slide": sid})
+
+    # D34: every nugget always gets a slide — none may be left unplaced.
+    already_placed = {nid for nugs in A.values() for nid in nugs}
+    unplaced = sorted(known - already_placed - referenced)
+    if unplaced:
+        errors.append("nugget(s) left unplaced: " + ", ".join(unplaced)
+                      + " — every nugget must end on a slide (create, "
+                        'associate, or a "parked": true create)')
+
+    if errors:
+        sys.exit("ERROR: plan rejected: " + "; ".join(errors))
+
+    record = {"recorded_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+              "plan": obj["plan"], "notes": obj.get("notes", ""),
+              "steps": steps}
+    (root / "plan.json").write_text(
+        json.dumps(record, indent=2, ensure_ascii=False), encoding="utf-8")
+    log(root, "km", "write-plan", steps=len(steps))
+    print(json.dumps({"ok": True, "plan_file": "plan.json", "steps": steps,
+                      "active_after": n_active}))
 
 
 # ---------- nugget validation + persist core ----------
@@ -360,11 +692,23 @@ def cmd_persist_nuggets(root: Path, a):
     print(json.dumps({"nugget_ids": ids, "count": len(ids),
                       "source": a.source}))
 
+# The didactic concept-type enum (D43) — shared by the storyteller's
+# intended_function hint and the composer's concept_type declaration.
+CONCEPT_TYPES = ("structural", "motivate", "define", "compare", "relationship",
+                 "process", "cause-effect", "finding", "categories",
+                 "claim-support")
+
+
 def cmd_create(root: Path, a):
     c = ctx(root)
     budget = int(c["deck"]["max_slides"])
-    cur = len(slide_files(root))
-    if cur >= budget:
+    parked_flag = bool(getattr(a, "parked", False))
+    hint = getattr(a, "intended_function", None)
+    if hint and hint not in CONCEPT_TYPES:
+        sys.exit(f"ERROR: intended_function {hint!r} not in "
+                 f"{sorted(CONCEPT_TYPES)}")
+    cur = active_count(root)
+    if not parked_flag and cur >= budget:
         print(json.dumps({"error": "budget_full", "current": cur, "max": budget}))
         sys.exit(3)
     nugs = [x for x in (a.nuggets or "").split(",") if x]
@@ -373,19 +717,104 @@ def cmd_create(root: Path, a):
             sys.exit(f"ERROR: nugget {nid} does not exist")
     st = stamp(root)
     sid = f"{slugify(a.title)}--{st}"
+    state = {"slide_id": sid, "state": "parked" if parked_flag else "draft",
+             "title": a.title,
+             "created_at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+    if hint:
+        state["intended_function"] = hint
     (root / "slides" / f"{sid}.md").write_text(skeleton(a.title, nugs), encoding="utf-8")
-    (root / "slides" / f"{sid}.json").write_text(json.dumps(
-        {"slide_id": sid, "state": "draft", "title": a.title,
-         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S")}, indent=2), encoding="utf-8")
+    (root / "slides" / f"{sid}.json").write_text(json.dumps(state, indent=2), encoding="utf-8")
     A = assoc(root); A[sid] = nugs; write_assoc(root, A)
     ids = order(root)
-    if a.after in (None, "", "end") or a.after not in ids:
-        ids.append(sid)
-    else:
-        ids.insert(ids.index(a.after) + 1, sid)
+    if not parked_flag:
+        if a.after in (None, "", "end") or a.after not in ids:
+            ids.append(sid)
+        else:
+            ids.insert(ids.index(a.after) + 1, sid)
     write_order(root, ids)
-    log(root, "storyteller", "create-slide", slide=sid, nuggets=nugs, title=a.title)
-    print(json.dumps({"slide_id": sid, "nuggets": nugs}))
+    log(root, "storyteller", "create-slide", slide=sid, nuggets=nugs,
+        title=a.title, parked=parked_flag)
+    print(json.dumps({"slide_id": sid, "nuggets": nugs, "parked": parked_flag}))
+
+
+def cmd_park(root: Path, a):
+    """Move a slide out of the active order into the commented parked block
+    (D34): file + association preserved, budget slot freed."""
+    sid = a.slide
+    stp = root / "slides" / f"{sid}.json"
+    if not stp.exists():
+        sys.exit(f"ERROR: slide {sid} does not exist")
+    stj = json.loads(stp.read_text(encoding="utf-8"))
+    if stj.get("state") == "locked":
+        sys.exit(f"ERROR: slide {sid} is locked — a locked slide is "
+                 "user-owned and cannot be parked")
+    if stj.get("state") == "parked":
+        sys.exit(f"ERROR: slide {sid} is already parked")
+    reason = getattr(a, "reason", "") or ""
+    stj["state_before_park"] = stj.get("state", "draft")
+    stj["state"] = "parked"
+    stj["parked_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+    if reason:
+        stj["parked_reason"] = reason
+    stp.write_text(json.dumps(stj, indent=2, ensure_ascii=False), encoding="utf-8")
+    write_order(root, [i for i in order(root) if i != sid])
+    log(root, "km", "park-slide", slide=sid, reason=reason)
+    print(json.dumps({"ok": True, "slide": sid, "state": "parked"}))
+
+
+def cmd_unpark(root: Path, a):
+    """Return a parked slide to the active order (needs a free slot, D34)."""
+    sid = a.slide
+    stp = root / "slides" / f"{sid}.json"
+    if not stp.exists():
+        sys.exit(f"ERROR: slide {sid} does not exist")
+    stj = json.loads(stp.read_text(encoding="utf-8"))
+    if stj.get("state") != "parked":
+        sys.exit(f"ERROR: slide {sid} is not parked")
+    budget = int(ctx(root)["deck"]["max_slides"])
+    cur = active_count(root)          # the slide itself is parked, not counted
+    if cur >= budget:
+        print(json.dumps({"error": "budget_full", "current": cur, "max": budget}))
+        sys.exit(3)
+    stj["state"] = stj.pop("state_before_park", "draft")
+    stj.pop("parked_reason", None)
+    stj.pop("parked_at", None)
+    stp.write_text(json.dumps(stj, indent=2, ensure_ascii=False), encoding="utf-8")
+    write_order(root, order(root) + [sid])
+    log(root, "km", "unpark-slide", slide=sid)
+    print(json.dumps({"ok": True, "slide": sid, "state": stj["state"]}))
+
+
+def cmd_associate(root: Path, a):
+    """Attach nuggets to an existing content slide (the plan's ``associate``
+    decision, D34/D41). The slide needs recomposition afterwards — the
+    orchestrator's concern."""
+    sid = a.slide
+    nugs = [x for x in (a.nuggets or "").split(",") if x]
+    if not nugs:
+        sys.exit("ERROR: associate needs at least one nugget id")
+    stp = root / "slides" / f"{sid}.json"
+    if not stp.exists():
+        sys.exit(f"ERROR: slide {sid} does not exist")
+    stj = json.loads(stp.read_text(encoding="utf-8"))
+    if stj.get("state") == "locked":
+        sys.exit(f"ERROR: slide {sid} is locked — propose instead of editing")
+    if stj.get("state") == "parked":
+        sys.exit(f"ERROR: slide {sid} is parked — unpark it first")
+    A = assoc(root)
+    if sid not in A:
+        sys.exit(f"ERROR: slide {sid} not found in associations")
+    if not A[sid]:
+        sys.exit(f"ERROR: slide {sid} is structural — structural slides "
+                 "hold no nuggets")
+    for nid in nugs:
+        if not (root / "nuggets" / f"{nid}.json").exists():
+            sys.exit(f"ERROR: nugget {nid} does not exist")
+    merged = A[sid] + [n for n in nugs if n not in A[sid]]
+    A[sid] = merged
+    write_assoc(root, A)
+    log(root, "storyteller", "associate-nuggets", slide=sid, nuggets=nugs)
+    print(json.dumps({"slide_id": sid, "nuggets": merged}))
 
 def cmd_merge(root: Path, a):
     parts = [x for x in (a.slides or "").split(",") if x]
@@ -395,6 +824,15 @@ def cmd_merge(root: Path, a):
     for sid in parts:
         if sid not in A:
             sys.exit(f"ERROR: slide {sid} not found in associations")
+        stp = root / "slides" / f"{sid}.json"
+        state = (json.loads(stp.read_text(encoding="utf-8")).get("state")
+                 if stp.exists() else None)
+        if state == "locked":
+            sys.exit(f"ERROR: slide {sid} is locked — a locked slide is "
+                     "user-owned and cannot be merged")
+        if state == "parked":
+            sys.exit(f"ERROR: slide {sid} is parked — unpark it before "
+                     "merging")
     merged_nugs, seen = [], set()
     for sid in parts:
         for nid in A[sid]:
@@ -545,7 +983,8 @@ def cmd_set_content(root: Path, a):
 
 def cmd_validate(root: Path, a):
     errs = []
-    ids = order(root)
+    ids = order(root)                      # active includes only
+    parked = parked_ids(root)
     files = {p.stem for p in slide_files(root)}
     A = assoc(root)
     for sid in files:
@@ -559,14 +998,17 @@ def cmd_validate(root: Path, a):
         for nid in nugs:
             if not (root / "nuggets" / f"{nid}.json").exists():
                 errs.append(f"{sid}: nugget {nid} missing")
-    if sorted(ids) != sorted(files):
-        errs.append(f"slides.md order {ids} != files {sorted(files)}")
+    active_files = sorted(files - set(parked))
+    if sorted(ids) != active_files:
+        errs.append(f"slides.md active order {ids} != active files "
+                    f"{active_files}")
     if len(ids) != len(set(ids)):
         errs.append("slides.md has duplicates")
     budget = int(ctx(root)["deck"]["max_slides"])
-    if len(files) > budget:
-        errs.append(f"budget exceeded: {len(files)} > {budget}")
-    print(json.dumps({"ok": not errs, "slides": len(files), "errors": errs}, indent=2))
+    if len(active_files) > budget:
+        errs.append(f"budget exceeded: {len(active_files)} > {budget}")
+    print(json.dumps({"ok": not errs, "slides": len(active_files),
+                      "parked": parked, "errors": errs}, indent=2))
 
 # ---------- dispatch ----------
 
@@ -578,15 +1020,23 @@ def main():
     pn = sub.add_parser("persist-nuggets"); pn.add_argument("--source", required=True); pn.add_argument("--file", required=True)
     mb = sub.add_parser("mine-brief"); mb.add_argument("--source", required=True); mb.add_argument("--out", required=True)
     mm = sub.add_parser("mark-mined"); mm.add_argument("--source", required=True)
-    c = sub.add_parser("create-slide"); c.add_argument("--title", required=True); c.add_argument("--nuggets", default=""); c.add_argument("--after", default="end")
+    pb = sub.add_parser("plan-brief"); pb.add_argument("--out", required=True)
+    wp = sub.add_parser("write-plan"); wp.add_argument("--file", required=True)
+    c = sub.add_parser("create-slide"); c.add_argument("--title", required=True); c.add_argument("--nuggets", default=""); c.add_argument("--after", default="end"); c.add_argument("--parked", action="store_true"); c.add_argument("--intended-function", dest="intended_function", default=None)
+    an = sub.add_parser("associate-nuggets"); an.add_argument("--slide", required=True); an.add_argument("--nuggets", required=True)
     m = sub.add_parser("merge-slides"); m.add_argument("--slides", required=True); m.add_argument("--title", default="")
+    pk = sub.add_parser("park-slide"); pk.add_argument("--slide", required=True); pk.add_argument("--reason", default="")
+    up = sub.add_parser("unpark-slide"); up.add_argument("--slide", required=True)
     s = sub.add_parser("set-content"); s.add_argument("--slide", required=True); s.add_argument("--body-file", required=True)
     sub.add_parser("validate")
     a = ap.parse_args()
     root = find_deck_root(a.deck)
     {"create-nugget": cmd_create_nugget, "persist-nuggets": cmd_persist_nuggets,
      "mine-brief": cmd_mine_brief, "mark-mined": cmd_mark_mined,
-     "create-slide": cmd_create, "merge-slides": cmd_merge,
+     "plan-brief": cmd_plan_brief, "write-plan": cmd_write_plan,
+     "create-slide": cmd_create, "associate-nuggets": cmd_associate,
+     "merge-slides": cmd_merge, "park-slide": cmd_park,
+     "unpark-slide": cmd_unpark,
      "set-content": cmd_set_content, "validate": cmd_validate}[a.cmd](root, a)
 
 if __name__ == "__main__":
