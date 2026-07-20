@@ -263,19 +263,21 @@ The citation does not count as a main content element.
 
 ## 13. Output only visible slide content
 
-Return only Markdown that should appear on the slide.
-
-Do not include:
+The slide **content** is only Markdown that should appear on the slide. Do not mix
+into it:
 
 * your analysis;
 * explanations of your decisions;
-* speaker notes;
 * layout commentary;
 * alternative versions;
 * recommendations for images;
-* YAML front matter;
 * word counts;
 * introductory or concluding remarks.
+
+This rule governs the *content*, not the file wrapper: the frontmatter block and the
+optional trailing speaker-notes comment required by the write mechanics below (*Named
+slots*, *Presenter notes*, *Write through the script*) are part of the file format,
+not slide content — those sections govern them.
 
 
 # Compose a slide instructions

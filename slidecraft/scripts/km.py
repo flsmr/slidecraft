@@ -109,29 +109,52 @@ def parked_ids(root: Path) -> list[str]:
             out.append(p.stem)
     return out
 
-def active_count(root: Path) -> int:
-    """Slides that occupy a budget slot (D34: parked slides do not)."""
-    return len({p.stem for p in slide_files(root)} - set(parked_ids(root)))
+def yaml_str(value) -> str:
+    """A YAML-safe scalar: a JSON string is valid YAML, so titles containing
+    colons ("Sprint 4: Production Engineering") cannot break the parse."""
+    return json.dumps(str(value), ensure_ascii=False)
 
-def write_order(root: Path, ids: list[str]):
-    c = ctx(root)
+# Headmatter keys write_order owns and regenerates; every other key a user
+# added by hand (fonts:, addons:, colorSchema:, …) is preserved verbatim —
+# the 2026-07-18 "theme: default" clobber generalized to all keys.
+MANAGED_HEAD_KEYS = {"theme", "title", "src"}
+
+def preserved_headmatter_lines(root: Path) -> list[str]:
+    md = root / "slides.md"
+    if not md.exists():
+        return []
+    m = re.match(r"^---\r?\n(.*?)\r?\n---\r?\n",
+                 md.read_text(encoding="utf-8-sig"), re.S)
+    if not m:
+        return []
+    kept = []
+    for line in m.group(1).splitlines():
+        key = re.match(r"^([A-Za-z0-9_-]+):", line)  # unindented keys only
+        if key and key.group(1) in MANAGED_HEAD_KEYS:
+            continue
+        kept.append(line)
+    return kept
+
+def write_order(root: Path, ids: list[str], parked: list[str] | None = None,
+                c: dict | None = None):
+    c = ctx(root) if c is None else c
     theme_ref = (c.get("theme") or {}).get("source") or "default"
-    title = c["deck"].get("topic", "Deck")
+    title = yaml_str(c["deck"].get("topic", "Deck"))
     # Import the first slide via the headmatter's own ``src`` rather than as a
     # separate ``---`` block. A standalone headmatter block followed by the first
     # ``src:`` import leaves the deck opening on an empty slide (the headmatter
     # renders as a blank slide 1); folding the first import into the headmatter
     # makes slide 1 the real cover.
+    head_lines = [f"theme: {theme_ref}", f"title: {title}"]
+    head_lines += preserved_headmatter_lines(root)
     if ids:
-        head = (f"---\ntheme: {theme_ref}\ntitle: {title}\n"
-                f"src: ./slides/{ids[0]}.md\n---\n")
-        body = "".join(f"\n---\nsrc: ./slides/{i}.md\n---\n" for i in ids[1:])
-    else:
-        head = f"---\ntheme: {theme_ref}\ntitle: {title}\n---\n"
-        body = ""
+        head_lines.append(f"src: ./slides/{ids[0]}.md")
+    head = "---\n" + "\n".join(head_lines) + "\n---\n"
+    body = "".join(f"\n---\nsrc: ./slides/{i}.md\n---\n" for i in ids[1:])
     # Parked slides ride in a commented block (D34): their includes are kept
     # (visible, un-parkable) but Slidev never renders them.
-    parked = parked_ids(root)
+    if parked is None:
+        parked = parked_ids(root)
     tail = ""
     if parked:
         inner = "".join(f"---\nsrc: ./slides/{i}.md\n---\n" for i in parked)
@@ -139,7 +162,7 @@ def write_order(root: Path, ids: list[str]):
     (root / "slides.md").write_text(head + body + tail, encoding="utf-8")
 
 def skeleton(title: str, nugget_ids: list[str]) -> str:
-    return (f"---\nlayout: default\ntitle: {title}\n---\n\n"
+    return (f"---\nlayout: default\ntitle: {yaml_str(title)}\n---\n\n"
             f"<!-- awaiting composition; nuggets: {','.join(nugget_ids)} -->\n")
 
 def source_slug(name: str) -> str:
@@ -179,6 +202,44 @@ def normalize(s: str) -> str:
 # repo and in the installed toolkit, D33).
 AGENTS_DIR = Path(__file__).resolve().parent.parent / "agents"
 SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
+
+
+def gate_exit(msg: str):
+    """A NON-retryable failure under the invoke shim's persist convention
+    (D44): exit 1 means "the model can fix this and a re-invoke is worth an
+    LLM call"; anything else gates immediately. Orchestrator wiring errors
+    (wrong --source slug, missing payload file, wrong slide id) exit here."""
+    print(msg, file=sys.stderr)
+    sys.exit(2)
+
+
+# Root-absolute asset references in a slide body: HTML ``src="/…"`` and
+# markdown images ``![alt](/…)`` — the two syntaxes a composer can emit.
+ASSET_REF_RE = re.compile(
+    r'src=["\'](/[^"\']+)["\']|!\[[^\]]*\]\((/[^)\s]+)\)')
+
+
+def missing_assets(root: Path, body: str) -> list[str]:
+    """Referenced ``/…`` assets that do not exist under ``public/``
+    (Slidev serves public/ at the site root)."""
+    out = []
+    for m in ASSET_REF_RE.finditer(body):
+        asset = m.group(1) or m.group(2)
+        if not (root / "public" / asset.lstrip("/")).exists():
+            out.append(asset)
+    return out
+
+
+def notes_comment(inner: str) -> str:
+    """Slidev speaker-notes serialization: a trailing HTML comment. A literal
+    comment terminator inside the text would close the note early —
+    neutralise only that exact sequence."""
+    return "<!--\n" + inner.replace("-->", "-- >") + "\n-->\n"
+
+
+def save_state(root: Path, sid: str, stj: dict):
+    (root / "slides" / f"{sid}.json").write_text(
+        json.dumps(stj, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def strip_frontmatter(text: str) -> str:
@@ -299,9 +360,10 @@ def storytelling_craft_section() -> str:
     hits = sorted(SKILLS_DIR.glob("*storytelling*/SKILL.md"))
     if not hits:
         return ""
-    body = strip_frontmatter(hits[0].read_text(encoding="utf-8-sig")).strip()
+    bodies = [strip_frontmatter(h.read_text(encoding="utf-8-sig")).strip()
+              for h in hits]
     return ("\n\n---\n\n## Storytelling craft (deck-type guidance)\n\n"
-            + body + "\n")
+            + "\n\n".join(bodies) + "\n")
 
 
 def nugget_digests(root: Path) -> str:
@@ -411,7 +473,7 @@ def cmd_write_plan(root: Path, a):
     exhaustion is the storyteller's abort terminal, D44)."""
     p = Path(a.file)
     if not p.exists():
-        sys.exit(f"ERROR: plan file {a.file} does not exist")
+        gate_exit(f"ERROR: plan file {a.file} does not exist")
     try:
         obj = json.loads(p.read_text(encoding="utf-8-sig"))
     except json.JSONDecodeError as exc:
@@ -421,28 +483,40 @@ def cmd_write_plan(root: Path, a):
                  '{"plan": [...], "notes": ""}')
 
     known = {q.stem for q in (root / "nuggets").glob("*.json")}
+    kinds = {nid: (load_nugget(root, nid) or {}).get("kind", "text")
+             for nid in known}
     A = assoc(root)
     files = {q.stem for q in slide_files(root)}
     states = {sid: load_state(root, sid) for sid in files}
     locked = {sid for sid, s in states.items() if s.get("state") == "locked"}
     structural = {sid for sid in files if not A.get(sid)}
-    parked_set = set(parked_ids(root))
+    parked_set = {sid for sid, s in states.items()
+                  if s.get("state") == "parked"}
     budget = int(ctx(root)["deck"]["max_slides"])
     n_active = len(files - parked_set)
 
     errors: list[str] = []
     steps: list[dict] = []
     referenced: set[str] = set()
+    retired: set[str] = set()          # merged away earlier in this plan
+    planned_extra: dict[str, list] = {}  # associates planned per slide
 
-    def check_slide(where: str, sid, *, allow_parked=False) -> bool:
+    def image_count(nugs) -> int:
+        return sum(1 for n in nugs if kinds.get(n) == "image")
+
+    def check_slide(where: str, sid) -> bool:
         if not isinstance(sid, str) or sid not in files:
-            errors.append(f"{where}: slide {sid!r} does not exist")
+            if sid in retired:
+                errors.append(f"{where}: slide {sid} was merged away by an "
+                              "earlier step of this plan")
+            else:
+                errors.append(f"{where}: slide {sid!r} does not exist")
             return False
         if sid in locked:
             errors.append(f"{where}: slide {sid} is locked — locked slides "
                           "are skip-and-propose (use notes)")
             return False
-        if not allow_parked and sid in parked_set:
+        if sid in parked_set:
             errors.append(f"{where}: slide {sid} is parked — unpark it first")
             return False
         return True
@@ -477,6 +551,10 @@ def cmd_write_plan(root: Path, a):
                 if missing:
                     errors.append(f"{where} '{title}': unknown nugget id(s): "
                                   + ", ".join(str(m) for m in missing))
+                if image_count(nugs) > 1:
+                    errors.append(f"{where} '{title}': at most ONE image "
+                                  "nugget per slide — split the figures "
+                                  "across slides")
                 referenced.update(nugs)
             hint = step.get("intended_function")
             if hint is not None and hint not in CONCEPT_TYPES:
@@ -507,6 +585,12 @@ def cmd_write_plan(root: Path, a):
                 if sid in structural:
                     errors.append(f"{where}: slide {sid} is structural — "
                                   "structural slides hold no nuggets")
+                on_slide = A.get(sid, []) + planned_extra.get(sid, [])
+                if image_count(set(on_slide) | set(nugs)) > 1:
+                    errors.append(f"{where}: slide {sid} would carry more "
+                                  "than one image nugget — at most ONE "
+                                  "figure per slide")
+                planned_extra.setdefault(sid, []).extend(nugs)
             missing = [n for n in nugs if n not in known]
             if missing:
                 errors.append(f"{where}: unknown nugget id(s): "
@@ -520,6 +604,10 @@ def cmd_write_plan(root: Path, a):
             if not isinstance(sids, list) or len(sids) < 2:
                 errors.append(f"{where}: needs >=2 slide ids")
                 continue
+            if len(set(sids)) != len(sids):
+                errors.append(f"{where}: duplicate slide ids in merge — "
+                              "merging a slide with itself frees no slot")
+                continue
             ok = True
             for sid in sids:
                 if not check_slide(where, sid):
@@ -530,7 +618,22 @@ def cmd_write_plan(root: Path, a):
                                   "candidates")
                     ok = False
             if ok:
+                union = []
+                for sid in sids:
+                    union.extend(A.get(sid, []))
+                    union.extend(planned_extra.get(sid, []))
+                if image_count(set(union)) > 1:
+                    errors.append(f"{where}: the merged slide would carry "
+                                  "more than one image nugget — at most ONE "
+                                  "figure per slide")
+                # The merge retires its inputs: later steps must not
+                # reference them (cmd_merge deletes their files).
                 n_active -= len(sids) - 1
+                retired.update(sids)
+                files -= set(sids)
+                structural -= set(sids)
+                for sid in sids:
+                    planned_extra.pop(sid, None)
             steps.append({"op": "merge-slides", "slides": list(sids),
                           "title": step.get("title") or ""})
 
@@ -581,30 +684,44 @@ def cmd_write_plan(root: Path, a):
 
 # ---------- compose brief + slide persist (D42/D43, ticket 16) ----------
 
-def layout_catalog(root: Path) -> dict[str, dict]:
-    """Layouts by their OFFERED name: the semantic alias when the theme ships
-    one, else the physical layout name. The composer only ever sees offered
-    names + role names; ``write-slide`` maps back to physical (ADR-0001)."""
-    caps = ctx(root)["theme"]["capabilities"]
-    catalog: dict[str, dict] = {}
+def offered_layouts(c: dict) -> dict[str, dict]:
+    """Theme-capability layouts by their OFFERED name: the semantic alias
+    when the theme ships one, else the physical layout name. The composer
+    only ever sees offered names + role names; ``write-slide`` maps back to
+    physical (ADR-0001)."""
+    caps = c["theme"]["capabilities"]
+    offered: dict[str, dict] = {}
     for entry in caps.get("layouts", []):
-        offered = entry.get("alias") or entry["name"]
-        catalog.setdefault(offered, entry)
-    return catalog
+        name = entry.get("alias") or entry["name"]
+        offered.setdefault(name, entry)
+    return offered
 
 
-def layouts_section(root: Path) -> str:
+def takes_image_prop(entry: dict) -> bool:
+    """A prop-based image layout (Slidev builtins image / image-left /
+    image-right): no roles map, figure travels as the ``image:`` frontmatter
+    prop rather than a slot."""
+    return not entry.get("roles") and "image" in (entry.get("props") or [])
+
+
+def layouts_section(c: dict) -> str:
     """The layout capabilities for a composer brief: offered name, intent,
-    ROLE names, and defaults — never a physical slot name."""
+    CONTENT role names, defaults, and figure capability — never a physical
+    slot name. ``image`` is not a content role (the figure travels via the
+    ``image`` output field), so it is advertised separately."""
     lines = []
-    for offered, entry in layout_catalog(root).items():
+    for name, entry in offered_layouts(c).items():
         intent = entry.get("intent", "")
-        lines.append(f"- **{offered}**" + (f" — {intent}" if intent else ""))
+        lines.append(f"- **{name}**" + (f" — {intent}" if intent else ""))
         roles = entry.get("roles") or {}
-        if roles:
-            lines.append("  roles: " + ", ".join(roles.keys()))
+        content_roles = [r for r in roles if r != "image"]
+        if content_roles:
+            lines.append("  roles: " + ", ".join(content_roles))
         else:
             lines.append("  roles: title, body (single content area)")
+        if "image" in roles or takes_image_prop(entry):
+            lines.append('  figure: takes one figure via the "image" '
+                         "output field")
         defaults = entry.get("defaults") or {}
         if defaults:
             lines.append("  defaults: " + "; ".join(
@@ -612,10 +729,10 @@ def layouts_section(root: Path) -> str:
     return "\n".join(lines)
 
 
-def style_contract_section(root: Path) -> str:
+def style_contract_section(c: dict) -> str:
     """Inline the theme's style guide CONTENT (a pure function cannot read
     the file the old composer was pointed at)."""
-    sg = (ctx(root).get("theme") or {}).get("styleguide") or ""
+    sg = (c.get("theme") or {}).get("styleguide") or ""
     if not sg:
         return ""
     p = Path(sg)
@@ -669,7 +786,7 @@ def cmd_compose_brief(root: Path, a):
         "LANGUAGE": inj.get("LANGUAGE", deckb.get("language", "")),
     }
     brief = render_template(load_template("slide-composer"), values)
-    brief += style_contract_section(root)
+    brief += style_contract_section(c)
 
     sec = ["\n\n---\n\n## Your slide\n"]
     sec.append(f'- Working title: "{stj.get("title", sid)}"')
@@ -751,7 +868,7 @@ def cmd_compose_brief(root: Path, a):
     sec.append("")
     sec.append("## Layouts you may use")
     sec.append("")
-    sec.append(layouts_section(root))
+    sec.append(layouts_section(c))
     brief += "\n".join(sec) + "\n"
 
     write_brief(root, a.out, brief)
@@ -760,17 +877,17 @@ def cmd_compose_brief(root: Path, a):
                       "type": stype, "chars": len(brief)}))
 
 
-def build_slide_markdown(root: Path, sid: str, obj) -> tuple[str, dict]:
+def build_slide_markdown(root: Path, sid: str, obj, c: dict) -> tuple[str, dict]:
     """The composer's semantic role-keyed JSON (D43) → physical Slidev
     markdown. Raises :class:`Rejection` on every model-fixable problem."""
     if not isinstance(obj, dict):
         raise Rejection("composer output must be a single JSON object")
-    catalog = layout_catalog(root)
+    offered = offered_layouts(c)
     layout = obj.get("layout")
-    if not isinstance(layout, str) or layout not in catalog:
+    if not isinstance(layout, str) or layout not in offered:
         raise Rejection(f"layout {layout!r} is not one of the offered "
-                        f"layouts: {sorted(catalog)}")
-    entry = catalog[layout]
+                        f"layouts: {sorted(offered)}")
+    entry = offered[layout]
     physical_layout = entry["name"]
     concept = obj.get("concept_type")
     if concept not in CONCEPT_TYPES:
@@ -785,7 +902,9 @@ def build_slide_markdown(root: Path, sid: str, obj) -> tuple[str, dict]:
     unknown = sorted(set(content) - allowed)
     if unknown:
         raise Rejection(f"unknown content role(s) {unknown} for layout "
-                        f"{layout!r} — allowed roles: {sorted(allowed)}")
+                        f"{layout!r} — allowed roles: {sorted(allowed)}"
+                        + (' (a figure goes in the top-level "image" field,'
+                           " not in content)" if "image" in unknown else ""))
     image = obj.get("image") or None
     if image is not None:
         if not isinstance(image, dict) or not image.get("asset"):
@@ -793,6 +912,10 @@ def build_slide_markdown(root: Path, sid: str, obj) -> tuple[str, dict]:
         if roles and "image" not in roles:
             raise Rejection(f"layout {layout!r} has no image slot — choose "
                             "an image-capable layout or return no image")
+        asset = str(image["asset"])
+        if not (root / "public" / asset.lstrip("/")).exists():
+            raise Rejection(f"referenced asset '{asset}' does not exist "
+                            f"(expected under public/: public{asset})")
 
     defaults = entry.get("defaults") or {}
     filled = {}
@@ -802,12 +925,16 @@ def build_slide_markdown(root: Path, sid: str, obj) -> tuple[str, dict]:
             filled[role] = v
 
     title = filled.get("title") or load_state(root, sid).get("title", sid)
-    parts = [f"---\nlayout: {physical_layout}\n"
-             f"title: {json.dumps(title, ensure_ascii=False)}\n---\n"]
+    fm_lines = [f"layout: {physical_layout}", f"title: {yaml_str(title)}"]
     img_tag = ""
     if image is not None:
-        alt = str(image.get("alt", "")).replace('"', "'")
-        img_tag = f'<img src="{image["asset"]}" alt="{alt}">'
+        if takes_image_prop(entry):
+            # Slidev's builtin image layouts take the figure as a prop.
+            fm_lines.append(f"image: {yaml_str(image['asset'])}")
+        else:
+            alt = str(image.get("alt", "")).replace('"', "'")
+            img_tag = f'<img src="{image["asset"]}" alt="{alt}">'
+    parts = ["---\n" + "\n".join(fm_lines) + "\n---\n"]
     if roles:
         for role, slot in roles.items():
             if role == "image":
@@ -830,18 +957,16 @@ def build_slide_markdown(root: Path, sid: str, obj) -> tuple[str, dict]:
         parts.append(f"\n<!-- FIGURE NEEDED: {figure_needed} -->\n")
     body = "".join(parts)
 
-    # Same asset rule as set-content: every root-absolute reference must
-    # exist under public/ (covers the image field AND markdown-authored img).
-    for asset in re.findall(r'src=["\'](/[^"\']+)["\']', body):
-        if not (root / "public" / asset.lstrip("/")).exists():
-            raise Rejection(f"referenced asset '{asset}' does not exist "
-                            f"(expected under public/: public{asset})")
+    # Same asset rule as set-content, via the shared checker (covers HTML
+    # src= AND markdown ![](…) images anywhere in the composed body).
+    for asset in missing_assets(root, body):
+        raise Rejection(f"referenced asset '{asset}' does not exist "
+                        f"(expected under public/: public{asset})")
 
     notes = str(obj.get("notes") or "").strip()
     notes_added = False
     if notes:
-        body = (body.rstrip()
-                + f"\n\n<!--\n{notes.replace('-->', '-- >')}\n-->\n")
+        body = body.rstrip() + "\n\n" + notes_comment(notes)
     else:
         auto = build_presenter_notes(root, sid)      # D39 verbatim fill
         if auto:
@@ -864,27 +989,29 @@ def cmd_write_slide(root: Path, a):
     sp = root / "slides" / f"{sid}.md"
     if not stp.exists() or not sp.exists():
         # Not model-fixable — a gate, not a retryable rejection.
-        print(f"ERROR: slide {sid} does not exist", file=sys.stderr)
-        sys.exit(2)
+        gate_exit(f"ERROR: slide {sid} does not exist")
+    stj = load_state(root, sid)
+    if stj.get("state") == "locked":
+        gate_exit(f"ERROR: slide {sid} is locked — user-owned content is "
+                  "never overwritten by the composer pipeline")
+    if stj.get("state") == "parked":
+        gate_exit(f"ERROR: slide {sid} is parked — unpark it before "
+                  "composing")
     p = Path(a.file)
     if not p.exists():
-        print(f"ERROR: composer output file {a.file} does not exist",
-              file=sys.stderr)
-        sys.exit(2)
+        gate_exit(f"ERROR: composer output file {a.file} does not exist")
     try:
         obj = json.loads(p.read_text(encoding="utf-8-sig"))
     except json.JSONDecodeError as exc:
         sys.exit(f"ERROR: composer output is not valid JSON: {exc}")
     try:
-        body, meta = build_slide_markdown(root, sid, obj)
+        body, meta = build_slide_markdown(root, sid, obj, ctx(root))
     except Rejection as exc:
         sys.exit(f"ERROR: {exc}")
     sp.write_text(body, encoding="utf-8")
-    stj = json.loads(stp.read_text(encoding="utf-8"))
     stj["state"] = "composed"
     stj["concept_type"] = meta["concept_type"]
-    stp.write_text(json.dumps(stj, indent=2, ensure_ascii=False),
-                   encoding="utf-8")
+    save_state(root, sid, stj)
     log(root, "composer", "write-slide", slide=sid, layout=meta["layout"],
         concept_type=meta["concept_type"], notes_added=meta["notes_added"])
     print(json.dumps({"ok": True, "slide": sid, **meta}))
@@ -897,9 +1024,13 @@ class Rejection(Exception):
     shim's convention for 'the model can fix this', D44)."""
 
 
-def check_nugget(root: Path, n: dict):
+def check_nugget(root: Path, n: dict, norm_cache: dict | None = None):
     """Validate one enriched nugget dict; raise :class:`Rejection` on any
-    schema or verbatim-guard failure. Writes nothing."""
+    schema or verbatim-guard failure. Writes nothing.
+
+    ``norm_cache`` (slug → normalized source text) lets a batch caller pay
+    the source read + full-text normalization once instead of per nugget.
+    """
     kind = n.get("kind")
     if kind not in ("text", "image"):
         raise Rejection('nugget "kind" must be "text" or "image"')
@@ -915,13 +1046,18 @@ def check_nugget(root: Path, n: dict):
     # ----- verbatim guard (text nuggets only) -----
     if kind == "text":
         slug = source_slug(n["source"])
-        src_path = root / "sources" / f"{slug}.json"
-        if not src_path.exists():
-            raise Rejection(f"source {n['source']} not converted "
-                            f"(expected sources/{slug}.json)")
-        src = json.loads(src_path.read_text(encoding="utf-8"))
-        source_text = "\n".join(pg.get("text", "") for pg in src.get("pages", []))
-        if normalize(n["raw_text"]) not in normalize(source_text):
+        norm_source = (norm_cache or {}).get(slug)
+        if norm_source is None:
+            src_path = root / "sources" / f"{slug}.json"
+            if not src_path.exists():
+                raise Rejection(f"source {n['source']} not converted "
+                                f"(expected sources/{slug}.json)")
+            src = json.loads(src_path.read_text(encoding="utf-8"))
+            norm_source = normalize("\n".join(
+                pg.get("text", "") for pg in src.get("pages", [])))
+            if norm_cache is not None:
+                norm_cache[slug] = norm_source
+        if normalize(n["raw_text"]) not in norm_source:
             raise Rejection("verbatim guard failed — raw_text is not a "
                             f"substring of source {n['source']} (normalized). "
                             "Fix the excerpt to match the source exactly.")
@@ -948,7 +1084,7 @@ def cmd_create_nugget(root: Path, a):
     if not p.exists():
         sys.exit(f"ERROR: nugget file {a.file} does not exist")
     try:
-        n = json.loads(p.read_text(encoding="utf-8"))
+        n = json.loads(p.read_text(encoding="utf-8-sig"))
     except json.JSONDecodeError as exc:
         sys.exit(f"ERROR: nugget file is not valid JSON: {exc}")
     try:
@@ -969,12 +1105,18 @@ def cmd_persist_nuggets(root: Path, a):
     rejection can never duplicate already-persisted nuggets — then persists
     each item.
     """
+    # Wiring errors gate immediately (exit 2): the model cannot fix a wrong
+    # --source slug or a missing batch file, so no re-invoke is spent on it.
+    if not (root / "sources" / f"{a.source}.json").exists():
+        gate_exit(f"ERROR: source {a.source} not converted "
+                  f"(no sources/{a.source}.json) — wrong --source slug, or "
+                  "the convert step did not run")
     src = source_record(root, a.source)
     p = Path(a.file)
     if not p.exists():
-        sys.exit(f"ERROR: batch file {a.file} does not exist")
+        gate_exit(f"ERROR: batch file {a.file} does not exist")
     try:
-        batch = json.loads(p.read_text(encoding="utf-8"))
+        batch = json.loads(p.read_text(encoding="utf-8-sig"))
     except json.JSONDecodeError as exc:
         sys.exit(f"ERROR: miner output is not valid JSON: {exc}")
     if not isinstance(batch, dict) or not isinstance(batch.get("nuggets"), list):
@@ -983,6 +1125,7 @@ def cmd_persist_nuggets(root: Path, a):
 
     enriched = []
     errors = []
+    norm_cache: dict = {}   # one source read + normalize for the whole batch
     for i, item in enumerate(batch["nuggets"], start=1):
         if not isinstance(item, dict):
             errors.append(f"nugget #{i}: not an object")
@@ -991,7 +1134,7 @@ def cmd_persist_nuggets(root: Path, a):
         n["kind"] = "text"                      # text-miner slice: forced,
         n["source"] = src["original_file"]      # never miner-invented
         try:
-            check_nugget(root, n)
+            check_nugget(root, n, norm_cache)
         except Rejection as exc:
             errors.append(f"nugget #{i} ({n.get('title', '?')}): {exc}")
         enriched.append(n)
@@ -1012,6 +1155,11 @@ CONCEPT_TYPES = ("structural", "motivate", "define", "compare", "relationship",
                  "claim-support")
 
 
+def image_nugget_ids(root: Path, nugget_ids) -> list[str]:
+    return [nid for nid in nugget_ids
+            if (load_nugget(root, nid) or {}).get("kind") == "image"]
+
+
 def cmd_create(root: Path, a):
     c = ctx(root)
     budget = int(c["deck"]["max_slides"])
@@ -1020,7 +1168,8 @@ def cmd_create(root: Path, a):
     if hint and hint not in CONCEPT_TYPES:
         sys.exit(f"ERROR: intended_function {hint!r} not in "
                  f"{sorted(CONCEPT_TYPES)}")
-    cur = active_count(root)
+    parked = parked_ids(root)
+    cur = len({p.stem for p in slide_files(root)} - set(parked))
     if not parked_flag and cur >= budget:
         print(json.dumps({"error": "budget_full", "current": cur, "max": budget}))
         sys.exit(3)
@@ -1028,6 +1177,10 @@ def cmd_create(root: Path, a):
     for nid in nugs:
         if not (root / "nuggets" / f"{nid}.json").exists():
             sys.exit(f"ERROR: nugget {nid} does not exist")
+    imgs = image_nugget_ids(root, nugs)
+    if len(imgs) > 1:
+        sys.exit("ERROR: at most ONE image nugget per slide — "
+                 f"got {', '.join(imgs)}; split the figures across slides")
     st = stamp(root)
     sid = f"{slugify(a.title)}--{st}"
     state = {"slide_id": sid, "state": "parked" if parked_flag else "draft",
@@ -1036,15 +1189,17 @@ def cmd_create(root: Path, a):
     if hint:
         state["intended_function"] = hint
     (root / "slides" / f"{sid}.md").write_text(skeleton(a.title, nugs), encoding="utf-8")
-    (root / "slides" / f"{sid}.json").write_text(json.dumps(state, indent=2), encoding="utf-8")
+    save_state(root, sid, state)
     A = assoc(root); A[sid] = nugs; write_assoc(root, A)
     ids = order(root)
-    if not parked_flag:
+    if parked_flag:
+        parked = parked + [sid]
+    else:
         if a.after in (None, "", "end") or a.after not in ids:
             ids.append(sid)
         else:
             ids.insert(ids.index(a.after) + 1, sid)
-    write_order(root, ids)
+    write_order(root, ids, parked=parked, c=c)
     log(root, "storyteller", "create-slide", slide=sid, nuggets=nugs,
         title=a.title, parked=parked_flag)
     print(json.dumps({"slide_id": sid, "nuggets": nugs, "parked": parked_flag}))
@@ -1054,10 +1209,9 @@ def cmd_park(root: Path, a):
     """Move a slide out of the active order into the commented parked block
     (D34): file + association preserved, budget slot freed."""
     sid = a.slide
-    stp = root / "slides" / f"{sid}.json"
-    if not stp.exists():
+    if not (root / "slides" / f"{sid}.json").exists():
         sys.exit(f"ERROR: slide {sid} does not exist")
-    stj = json.loads(stp.read_text(encoding="utf-8"))
+    stj = load_state(root, sid)
     if stj.get("state") == "locked":
         sys.exit(f"ERROR: slide {sid} is locked — a locked slide is "
                  "user-owned and cannot be parked")
@@ -1069,7 +1223,7 @@ def cmd_park(root: Path, a):
     stj["parked_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
     if reason:
         stj["parked_reason"] = reason
-    stp.write_text(json.dumps(stj, indent=2, ensure_ascii=False), encoding="utf-8")
+    save_state(root, sid, stj)
     write_order(root, [i for i in order(root) if i != sid])
     log(root, "km", "park-slide", slide=sid, reason=reason)
     print(json.dumps({"ok": True, "slide": sid, "state": "parked"}))
@@ -1078,22 +1232,23 @@ def cmd_park(root: Path, a):
 def cmd_unpark(root: Path, a):
     """Return a parked slide to the active order (needs a free slot, D34)."""
     sid = a.slide
-    stp = root / "slides" / f"{sid}.json"
-    if not stp.exists():
+    if not (root / "slides" / f"{sid}.json").exists():
         sys.exit(f"ERROR: slide {sid} does not exist")
-    stj = json.loads(stp.read_text(encoding="utf-8"))
+    stj = load_state(root, sid)
     if stj.get("state") != "parked":
         sys.exit(f"ERROR: slide {sid} is not parked")
     budget = int(ctx(root)["deck"]["max_slides"])
-    cur = active_count(root)          # the slide itself is parked, not counted
+    parked = parked_ids(root)         # the slide itself is parked, not counted
+    cur = len({p.stem for p in slide_files(root)} - set(parked))
     if cur >= budget:
         print(json.dumps({"error": "budget_full", "current": cur, "max": budget}))
         sys.exit(3)
     stj["state"] = stj.pop("state_before_park", "draft")
     stj.pop("parked_reason", None)
     stj.pop("parked_at", None)
-    stp.write_text(json.dumps(stj, indent=2, ensure_ascii=False), encoding="utf-8")
-    write_order(root, order(root) + [sid])
+    save_state(root, sid, stj)
+    write_order(root, order(root) + [sid],
+                parked=[p for p in parked if p != sid])
     log(root, "km", "unpark-slide", slide=sid)
     print(json.dumps({"ok": True, "slide": sid, "state": stj["state"]}))
 
@@ -1106,10 +1261,9 @@ def cmd_associate(root: Path, a):
     nugs = [x for x in (a.nuggets or "").split(",") if x]
     if not nugs:
         sys.exit("ERROR: associate needs at least one nugget id")
-    stp = root / "slides" / f"{sid}.json"
-    if not stp.exists():
+    if not (root / "slides" / f"{sid}.json").exists():
         sys.exit(f"ERROR: slide {sid} does not exist")
-    stj = json.loads(stp.read_text(encoding="utf-8"))
+    stj = load_state(root, sid)
     if stj.get("state") == "locked":
         sys.exit(f"ERROR: slide {sid} is locked — propose instead of editing")
     if stj.get("state") == "parked":
@@ -1124,6 +1278,10 @@ def cmd_associate(root: Path, a):
         if not (root / "nuggets" / f"{nid}.json").exists():
             sys.exit(f"ERROR: nugget {nid} does not exist")
     merged = A[sid] + [n for n in nugs if n not in A[sid]]
+    imgs = image_nugget_ids(root, merged)
+    if len(imgs) > 1:
+        sys.exit(f"ERROR: slide {sid} would carry more than one image "
+                 f"nugget ({', '.join(imgs)}) — at most ONE figure per slide")
     A[sid] = merged
     write_assoc(root, A)
     log(root, "storyteller", "associate-nuggets", slide=sid, nuggets=nugs)
@@ -1133,13 +1291,13 @@ def cmd_merge(root: Path, a):
     parts = [x for x in (a.slides or "").split(",") if x]
     if len(parts) < 2:
         sys.exit("ERROR: merge needs >=2 slide ids")
+    if len(set(parts)) != len(parts):
+        sys.exit("ERROR: duplicate slide ids in merge")
     A = assoc(root)
     for sid in parts:
         if sid not in A:
             sys.exit(f"ERROR: slide {sid} not found in associations")
-        stp = root / "slides" / f"{sid}.json"
-        state = (json.loads(stp.read_text(encoding="utf-8")).get("state")
-                 if stp.exists() else None)
+        state = load_state(root, sid).get("state")
         if state == "locked":
             sys.exit(f"ERROR: slide {sid} is locked — a locked slide is "
                      "user-owned and cannot be merged")
@@ -1151,6 +1309,10 @@ def cmd_merge(root: Path, a):
         for nid in A[sid]:
             if nid not in seen:
                 seen.add(nid); merged_nugs.append(nid)
+    imgs = image_nugget_ids(root, merged_nugs)
+    if len(imgs) > 1:
+        sys.exit("ERROR: the merged slide would carry more than one image "
+                 f"nugget ({', '.join(imgs)}) — at most ONE figure per slide")
     title = a.title or "Merged: " + " + ".join(A_title(root, s) for s in parts)
     st = stamp(root)
     sid = f"{slugify(title)}--{st}"
@@ -1233,12 +1395,8 @@ def build_presenter_notes(root: Path, sid: str) -> str:
             blocks.append(f"[{nugget_locator(n)}]\n{raw}")
     if not blocks:
         return ""
-    inner = ("Source material (verbatim) — presenter reference:\n\n"
-             + "\n\n".join(blocks))
-    # A literal comment terminator in the verbatim text would close the note
-    # early; neutralise only that exact sequence (keeps the text otherwise intact).
-    inner = inner.replace("-->", "-- >")
-    return f"<!--\n{inner}\n-->\n"
+    return notes_comment("Source material (verbatim) — presenter reference:"
+                         "\n\n" + "\n\n".join(blocks))
 
 def has_presenter_notes(body: str) -> bool:
     """True when a composed body already ends with speaker notes.
@@ -1261,9 +1419,18 @@ def has_presenter_notes(body: str) -> bool:
 
 def cmd_set_content(root: Path, a):
     sp = root / "slides" / f"{a.slide}.md"
-    if not sp.exists():
+    if not sp.exists() or not (root / "slides" / f"{a.slide}.json").exists():
         sys.exit(f"ERROR: slide {a.slide} does not exist")
-    body = Path(a.body_file).read_text(encoding="utf-8")
+    stj = load_state(root, a.slide)
+    if stj.get("state") == "locked":
+        sys.exit(f"ERROR: slide {a.slide} is locked — user-owned content; "
+                 "unlock it before writing")
+    if stj.get("state") == "parked":
+        sys.exit(f"ERROR: slide {a.slide} is parked — unpark it before "
+                 "writing")
+    # utf-8-sig: tolerate the BOM PowerShell 5.1 / Notepad prepend to the
+    # composer's temp file (a BOM'd body is valid, not "no frontmatter").
+    body = Path(a.body_file).read_text(encoding="utf-8-sig")
     fm = re.match(r"^---\n(.*?)\n---\n", body, re.S)
     if not fm:
         sys.exit("ERROR: body has no frontmatter block")
@@ -1273,10 +1440,9 @@ def cmd_set_content(root: Path, a):
         sys.exit(f"ERROR: layout '{layout.group(1)}' not in theme capabilities {caps}")
     # Slidev serves public/ at the site root, so a slide references an asset by
     # a root-absolute URL (e.g. /extracted/x.png -> public/extracted/x.png).
-    for asset in re.findall(r'src=["\'](/[^"\']+)["\']', body):
-        if not (root / "public" / asset.lstrip("/")).exists():
-            sys.exit(f"ERROR: referenced asset '{asset}' does not exist "
-                     f"(expected under public/: public{asset})")
+    for asset in missing_assets(root, body):
+        sys.exit(f"ERROR: referenced asset '{asset}' does not exist "
+                 f"(expected under public/: public{asset})")
     # Presenter notes default to the nuggets' raw knowledge (D39): when the
     # composer left speaker notes empty, fill them verbatim from the slide's
     # nuggets so the presenter has the full source behind the telegraphic body.
@@ -1287,9 +1453,8 @@ def cmd_set_content(root: Path, a):
             body = body.rstrip() + "\n\n" + notes
             notes_added = True
     sp.write_text(body, encoding="utf-8")
-    stp = root / "slides" / f"{a.slide}.json"
-    stj = json.loads(stp.read_text(encoding="utf-8")); stj["state"] = "composed"
-    stp.write_text(json.dumps(stj, indent=2), encoding="utf-8")
+    stj["state"] = "composed"
+    save_state(root, a.slide, stj)
     log(root, "composer", "set-content", slide=a.slide, chars=len(body),
         notes_added=notes_added)
     print(json.dumps({"ok": True, "slide": a.slide, "notes_added": notes_added}))

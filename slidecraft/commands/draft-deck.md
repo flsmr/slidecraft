@@ -5,6 +5,18 @@ argument-hint: (run inside an initialized deck folder)
 
 # Draft Deck
 
+> **⚠ TRANSITION STATE (2026-07-19, tickets 13/15/16 landed — ticket 17 pending).**
+> The role templates are now **pure functions** (D40): they promise brief-inlined
+> content and return structured JSON only — they no longer read files or call
+> scripts. Steps 2–4 below describe the superseded pre-D40 flow and **must not be
+> run as written** (the miner would persist nothing, the storyteller would see no
+> digests, the composer would never write). Until ticket 17 rewires this command,
+> the working pipeline is the km seams per SPEC §7: per source
+> `km mine-brief` → invoke shim (`invoke_shim.py`) → `km persist-nuggets` →
+> `km mark-mined`; then `km plan-brief` → shim → `km write-plan`; then the step
+> list via `km create-slide/associate-nuggets/merge-slides/park-slide/unpark-slide`,
+> and per slide `km compose-brief` → shim → `km write-slide`.
+
 Draft (or extend) the deck **in the current working directory**. Requires an initialized deck
 (`deck-context.json` present — else tell the user to run `/init-deck`). See `/SPEC.md` §7 for
 the pipeline and D29/D35 for how agents are spawned.

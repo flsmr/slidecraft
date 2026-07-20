@@ -259,3 +259,15 @@ def test_mine_step_cap2_drops_and_flags_source_stays_unmined(converted_deck,
     assert "mined_at" not in src
     assert (converted_deck / "input" / SOURCE_FILE).exists()
     assert (respdir / "count").read_text() == "3"
+
+
+def test_persist_nuggets_unknown_source_is_a_gate_not_a_retry(converted_deck,
+                                                              tmp_path):
+    f = tmp_path / "batch.json"
+    f.write_text(json.dumps({"nuggets": []}), encoding="utf-8")
+    with pytest.raises(SystemExit) as ei:
+        km.cmd_persist_nuggets(converted_deck,
+                               Namespace(source="chapter_4.md", file=str(f)))
+    # A wrong --source slug is orchestrator wiring, not model output:
+    # exit 2 gates the shim immediately instead of burning LLM retries.
+    assert ei.value.code == 2

@@ -386,3 +386,80 @@ def test_plan_cap2_exhaustion_aborts_flagged_nothing_composed(deck, tmp_path,
     # Nothing was composed or created; no plan was recorded.
     assert list((deck / "slides").glob("*")) == []
     assert not (deck / "plan.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# Review fixes: plan simulation retires merged slides; one figure per slide;
+# YAML-safe titles; headmatter preservation; persist gates
+# ---------------------------------------------------------------------------
+
+def test_write_plan_rejects_reference_to_merged_away_slide(deck, tmp_path,
+                                                           capsys):
+    _add_nugget(deck, "n1")
+    _add_nugget(deck, "n2")
+    a = _create(deck, "A", nuggets="n1")
+    b = _create(deck, "B", nuggets="n2")
+    capsys.readouterr()
+    plan = {"plan": [
+        {"action": "merge", "slides": [a, b], "title": "AB"},
+        {"action": "park", "slide": a, "reason": "freed"}]}
+    with pytest.raises(SystemExit) as ei:
+        _write_plan(deck, plan, tmp_path)
+    assert "merged away" in str(ei.value)
+
+
+def test_write_plan_rejects_duplicate_merge_ids(deck, tmp_path, capsys):
+    _add_nugget(deck, "n1")
+    a = _create(deck, "A", nuggets="n1")
+    capsys.readouterr()
+    plan = {"plan": [{"action": "merge", "slides": [a, a], "title": "AA"}]}
+    with pytest.raises(SystemExit) as ei:
+        _write_plan(deck, plan, tmp_path)
+    assert "duplicate" in str(ei.value)
+
+
+def test_write_plan_rejects_two_figures_on_one_slide(deck, tmp_path):
+    _add_nugget(deck, "img1", kind="image")
+    _add_nugget(deck, "img2", kind="image")
+    plan = {"plan": [
+        {"action": "create", "title": "Two figures",
+         "nuggets": ["img1", "img2"]}]}
+    with pytest.raises(SystemExit) as ei:
+        _write_plan(deck, plan, tmp_path)
+    assert "ONE image" in str(ei.value)
+
+
+def test_associate_refuses_second_figure_at_km_level(deck, capsys):
+    _add_nugget(deck, "n1")
+    _add_nugget(deck, "img1", kind="image")
+    _add_nugget(deck, "img2", kind="image")
+    sid = _create(deck, "Figure slide", nuggets="n1,img1")
+    capsys.readouterr()
+    with pytest.raises(SystemExit) as ei:
+        km.cmd_associate(deck, Namespace(slide=sid, nuggets="img2"))
+    assert "ONE figure" in str(ei.value)
+
+
+def test_colon_title_is_yaml_quoted_in_skeleton(deck, capsys):
+    sid = _create(deck, "Definition: Objekt-Tracking")
+    md = (deck / "slides" / f"{sid}.md").read_text(encoding="utf-8")
+    assert 'title: "Definition: Objekt-Tracking"' in md
+
+
+def test_write_order_preserves_user_headmatter_keys(deck, capsys):
+    _create(deck, "First")
+    md_path = deck / "slides.md"
+    text = md_path.read_text(encoding="utf-8")
+    # User hand-adds a headmatter key…
+    text = text.replace("---\ntheme:", "---\nfonts: my-font\ntheme:", 1)
+    md_path.write_text(text, encoding="utf-8")
+    _create(deck, "Second")
+    after = md_path.read_text(encoding="utf-8")
+    assert "fonts: my-font" in after            # …and it survives a rewrite
+    assert after.count("theme:") == 1
+
+
+def test_write_plan_missing_file_is_a_gate_not_a_retry(deck):
+    with pytest.raises(SystemExit) as ei:
+        km.cmd_write_plan(deck, Namespace(file=str(deck / "nope.json")))
+    assert ei.value.code == 2                   # shim gate, no LLM retries

@@ -86,7 +86,12 @@ def is_image_entry(fields: dict[str, str]) -> bool:
 # --------------------------------------------------------------------------
 
 def manifest_slugs(deck: Path) -> list[str]:
+    """ACTIVE slide slugs from slides.md. Commented includes are skipped —
+    km's D34 parked block keeps parked slides' ``src:`` lines inside an
+    ``<!-- parked … -->`` comment, and those must not be scanned, cited, or
+    counted as deck slides."""
     mani = (deck / "slides.md").read_text(encoding="utf-8")
+    mani = re.sub(r"<!--.*?-->", "", mani, flags=re.DOTALL)
     return re.findall(r"src: \./slides/([^\s]+)\.md", mani)
 
 
@@ -225,12 +230,28 @@ def sync_manifest(deck: Path, base: str, new_slugs: list[str],
     run_re = re.compile(
         rf"(?:---\nsrc: \./slides/{re.escape(base)}(?:-\d+)?\.md\n---\n\n?)+")
     block = "".join(f"---\nsrc: ./slides/{s}.md\n---\n\n" for s in new_slugs)
-    if run_re.search(text):
-        text = run_re.sub(block, text, count=1)
+    # Never rewrite inside a comment: km's D34 parked block keeps parked
+    # includes commented out, and splicing generated pages in there would
+    # park them (or corrupt the comment).
+    spans = _comment_spans(text)
+
+    def _outside(pos: int) -> bool:
+        return not any(s <= pos < e for s, e in spans)
+
+    m = run_re.search(text)
+    while m and not _outside(m.start()):
+        m = run_re.search(text, m.end())
+    if m:
+        text = text[:m.start()] + block + text[m.end():]
     elif new_slugs:
         anchor = f"---\nsrc: ./slides/{anchor_file}\n---\n"
-        text = (text.replace(anchor, block + anchor, 1)
-                if anchor in text else text + "\n" + block)
+        pos = text.find(anchor)
+        while pos != -1 and not _outside(pos):
+            pos = text.find(anchor, pos + 1)
+        if pos != -1:
+            text = text[:pos] + block + text[pos:]
+        else:
+            text = text + "\n" + block
     mani_p.write_text(text, encoding="utf-8", newline="\n")
 
 

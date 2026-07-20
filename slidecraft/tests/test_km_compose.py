@@ -327,3 +327,110 @@ def test_compose_step_cap2_parks_and_flags(deck, tmp_path, capsys):
     out = json.loads(capsys.readouterr().out.strip())
     assert out["ok"] is True
     assert out["parked"] == [sid]
+
+
+# ---------------------------------------------------------------------------
+# Review fixes: writer state guards; builtin image-prop layouts; markdown
+# asset check; BOM tolerance
+# ---------------------------------------------------------------------------
+
+def test_write_slide_gates_on_locked_slide(deck, tmp_path, capsys):
+    _add_nugget(deck, "n1", raw_text="A passage.")
+    sid = _create(deck, "User slide", nuggets="n1")
+    _set_state(deck, sid, "locked")
+    before = _slide_md(deck, sid)
+    capsys.readouterr()
+    with pytest.raises(SystemExit) as ei:
+        _write_slide(deck, sid, {"layout": "content",
+                                 "concept_type": "define",
+                                 "content": {"title": "T"}}, tmp_path)
+    assert ei.value.code == 2                       # gate, not a retry
+    assert _slide_md(deck, sid) == before           # content untouched
+    assert _state(deck, sid)["state"] == "locked"   # lock not erased
+
+
+def test_set_content_refuses_locked_slide(deck, capsys):
+    _add_nugget(deck, "n1", raw_text="A passage.")
+    sid = _create(deck, "User slide", nuggets="n1")
+    _set_state(deck, sid, "locked")
+    body_file = deck / "logs" / "body.tmp"
+    body_file.write_text("---\nlayout: content\n---\n\nX\n", encoding="utf-8")
+    capsys.readouterr()
+    with pytest.raises(SystemExit) as ei:
+        km.cmd_set_content(deck, Namespace(slide=sid,
+                                           body_file=str(body_file)))
+    assert "locked" in str(ei.value)
+
+
+def test_set_content_tolerates_bom_in_body_file(deck, capsys):
+    sid = _create(deck, "Intro")
+    body_file = deck / "logs" / "body.tmp"
+    # utf-8-sig writes the BOM PowerShell 5.1's Out-File would prepend.
+    body_file.write_text("---\nlayout: content\n---\n\n# Claim\n",
+                         encoding="utf-8-sig")
+    capsys.readouterr()
+    km.cmd_set_content(deck, Namespace(slide=sid, body_file=str(body_file)))
+    assert json.loads(capsys.readouterr().out.strip())["ok"] is True
+
+
+def test_write_slide_rejects_missing_markdown_image_asset(deck, tmp_path,
+                                                          capsys):
+    _add_nugget(deck, "n1", raw_text="A passage.")
+    sid = _create(deck, "Slide", nuggets="n1")
+    capsys.readouterr()
+    with pytest.raises(SystemExit) as ei:
+        _write_slide(deck, sid, {
+            "layout": "content", "concept_type": "define",
+            "content": {"title": "T",
+                        "body": "![diagram](/extracted/ghost.png)"},
+        }, tmp_path)
+    assert "ghost.png" in str(ei.value)
+
+
+def _builtin_deck(tmp_path):
+    from slidecraft.scripts import scaffold_deck
+    from slidecraft.tests.conftest import ANSWERS
+    root = tmp_path / "bdeck"
+    root.mkdir()
+    answers = dict(ANSWERS)
+    answers["theme"] = {"type": "builtin", "source": "default"}
+    scaffold_deck.scaffold(root, answers)
+    return root
+
+
+def test_write_slide_emits_image_prop_for_builtin_layouts(tmp_path, capsys):
+    deck = _builtin_deck(tmp_path)
+    _add_asset(deck)
+    _add_nugget(deck, "n1", raw_text="Text beside the figure.")
+    _add_nugget(deck, "img1", kind="image")
+    sid = _create(deck, "Figure right", nuggets="n1,img1")
+    capsys.readouterr()
+
+    _write_slide(deck, sid, {
+        "layout": "image-right",
+        "concept_type": "finding",
+        "content": {"title": "The curve rises", "body": "- evidence"},
+        "image": {"asset": "/extracted/fig1.png", "alt": "Curve"},
+    }, tmp_path)
+
+    md = _slide_md(deck, sid)
+    assert "layout: image-right" in md
+    # Slidev builtin image layouts take the figure as a frontmatter prop…
+    assert 'image: "/extracted/fig1.png"' in md
+    # …never as an inline tag crammed into the text column.
+    assert "<img" not in md
+
+
+def test_compose_brief_advertises_figure_capability_not_image_role(deck,
+                                                                   tmp_path,
+                                                                   capsys):
+    _add_nugget(deck, "n1", raw_text="A passage.")
+    sid = _create(deck, "Slide", nuggets="n1")
+    capsys.readouterr()
+    brief = _compose_brief(deck, sid, tmp_path / "brief.md")
+    # The figure layout's roles line lists content roles only; the figure
+    # travels via the "image" output field and is advertised as such.
+    assert 'takes one figure via the "image" output field' in brief
+    for line in brief.splitlines():
+        if line.strip().startswith("roles:"):
+            assert "image" not in line

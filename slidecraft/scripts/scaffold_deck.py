@@ -388,8 +388,11 @@ def write_associations(root: Path, created: list):
 
 
 def write_slides_md(root: Path, ans: dict, theme: dict, created: list):
+    # json.dumps = YAML-safe scalar: a topic containing a colon must not
+    # break the headmatter parse (same rule as km.write_order).
+    title = json.dumps(str(ans["topic"]), ensure_ascii=False)
     slides_md = (f"---\ntheme: {theme_name(theme)}\n"
-                 f"title: {ans['topic']}\n---\n")
+                 f"title: {title}\n---\n")
     (root / "slides.md").write_text(slides_md, encoding="utf-8")
     created.append("slides.md")
 
