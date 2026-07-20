@@ -186,6 +186,23 @@ def test_persist_image_missing_image_source_is_a_gate(deck, tmp_path):
     assert _nugget_files(deck) == []
 
 
+def test_persist_image_gates_on_malformed_record_not_a_retry(deck, tmp_path):
+    # A record missing its denormalized `path` is a convert/wiring gap, not a
+    # model error — it must gate (exit 2), never burn the shim's re-invokes.
+    (deck / "public" / "extracted").mkdir(parents=True, exist_ok=True)
+    (deck / "sources" / "broken.json").write_text(json.dumps({
+        "source_id": "s2", "original_file": "broken.pdf", "type": "pdf",
+        "pages": [{"page": 1, "text": ""}],
+        "images": [{"image_source_id": "broken-p1-img1", "page": 1,
+                    "context_text": ""}],           # no "path"
+    }), encoding="utf-8")
+    with pytest.raises(SystemExit) as ei:
+        _persist_image(deck, {"nuggets": [_img_nugget()]}, tmp_path,
+                       source="broken", image_source="broken-p1-img1")
+    assert ei.value.code == 2                       # gate, not a retryable exit 1
+    assert _nugget_files(deck) == []
+
+
 def test_persist_image_rejects_missing_visible_text_atomically(deck, tmp_path):
     _add_image_source(deck)
     batch = {"nuggets": [_img_nugget(),

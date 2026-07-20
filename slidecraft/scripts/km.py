@@ -1174,6 +1174,14 @@ def cmd_persist_nuggets(root: Path, a):
             gate_exit(f"ERROR: source {a.source} has no extracted image "
                       f"{image_id!r} — wrong image-source id, or convert did "
                       "not extract it")
+        # The figure facts are denormalized from the record, not the model —
+        # a record missing them is a convert/wiring gap, so gate (exit 2)
+        # instead of letting check_nugget reject as a retryable model error
+        # and burning the shim's re-invokes on something no output can fix.
+        missing = [k for k in ("path", "page") if not rec.get(k)]
+        if missing:
+            gate_exit(f"ERROR: image record {image_id!r} is missing "
+                      f"{', '.join(missing)} — re-run convert for {a.source}")
     p = Path(a.file)
     if not p.exists():
         gate_exit(f"ERROR: batch file {a.file} does not exist")
@@ -1557,6 +1565,12 @@ def cmd_validate(root: Path, a):
         errs.append(f"budget exceeded: {len(active_files)} > {budget}")
     print(json.dumps({"ok": not errs, "slides": len(active_files),
                       "parked": parked, "errors": errs}, indent=2))
+    # Exit non-zero on failure so the /draft-deck orchestrator can gate on the
+    # exit code (ticket 17) instead of parsing stdout. This is the final deck
+    # gate, never a shim persist step — so exit 1 here is unambiguous and does
+    # NOT collide with the shim's exit 3/4 or km's budget_full exit 3.
+    if errs:
+        sys.exit(1)
 
 # ---------- dispatch ----------
 
