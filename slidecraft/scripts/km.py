@@ -6,8 +6,8 @@ they never write slide prose — that is always the Composer's job.
 
 Subcommands:
   create-nugget   --file PATH                               -> {"nugget_id": ...}
-  persist-nuggets --source SLUG --file PATH                 -> {"nugget_ids": [...]}
-  mine-brief      --source SLUG --out PATH                  -> {"ok": true, ...}
+  persist-nuggets --source SLUG [--image-source ID] --file PATH -> {"nugget_ids": [...]}
+  mine-brief      (--source SLUG | --image ID) --out PATH   -> {"ok": true, ...}
   mark-mined      --source SLUG                             -> {"ok": true, ...}
   plan-brief    --out PATH                                  -> {"ok": true, ...}
   write-plan    --file PATH                                 -> {"ok": true, "steps": [...]}
@@ -282,6 +282,22 @@ def source_full_text(src: dict) -> str:
                      for pg in src.get("pages", []))
 
 
+def find_image_record(root: Path, image_source_id: str) -> tuple[dict, dict] | None:
+    """The (source record, image record) for an extracted image, found by its
+    globally-unique ``image_source_id`` (``<slug>-p<page>-img<idx>``). The
+    image-miner never sees or produces IDs (D45); the orchestrator holds them
+    and looks the record up here. Returns ``None`` when no source carries it."""
+    for p in sorted((root / "sources").glob("*.json")):
+        try:
+            src = json.loads(p.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+        for rec in src.get("images", []):
+            if rec.get("image_source_id") == image_source_id:
+                return src, rec
+    return None
+
+
 def write_brief(root: Path, out: str, brief: str):
     path = Path(out)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -289,11 +305,41 @@ def write_brief(root: Path, out: str, brief: str):
 
 
 def cmd_mine_brief(root: Path, a):
-    """Render the self-contained text-miner brief (D40/D42): role craft +
-    injection values + the full source text inline. The miner needs no file
-    access, no scripts, no IDs — everything is in the brief."""
-    src = source_record(root, a.source)
+    """Render the self-contained miner brief (D40/D42).
+
+    Text mode (``--source SLUG``): knowledge-miner craft + injection values +
+    the full source text inline. Image mode (``--image IMAGE-SOURCE-ID``):
+    image-miner craft + injection only — the figure itself is passed to the
+    executor by the invoke shim (``--image``, a base64 data-URL, D45), never
+    inlined here; the brief stays conceptual and carries no id or path. Either
+    way the miner needs no file access, no scripts, no IDs (D40)."""
+    image_id = getattr(a, "image", None)
+    if bool(a.source) == bool(image_id):
+        gate_exit("ERROR: mine-brief needs exactly one of --source (text) or "
+                  "--image (one extracted image)")
     c = ctx(root)
+    if image_id:
+        found = find_image_record(root, image_id)
+        if not found:
+            gate_exit(f"ERROR: no extracted image {image_id!r} in any source "
+                      "(wrong image-source id, or convert did not run)")
+        _src, rec = found
+        inj = c.get("injection", {}).get("image-miner", {})
+        values = {
+            "FOCUS-TOPIC": inj.get("FOCUS-TOPIC", c["deck"].get("topic", "")),
+            "LANGUAGE": inj.get("LANGUAGE", c["deck"].get("language", "")),
+        }
+        brief = render_template(load_template("image-miner"), values)
+        # The local file the shim reads and encodes; served by Slidev as the
+        # root-absolute URL rec["path"] (/extracted/<file>.png -> public/…).
+        asset = str((root / "public" / rec["path"].lstrip("/")).resolve())
+        write_brief(root, a.out, brief)
+        log(root, "km", "mine-brief", image_source=image_id, chars=len(brief))
+        print(json.dumps({"ok": True, "brief": a.out,
+                          "image_source": image_id, "asset": asset,
+                          "chars": len(brief)}))
+        return
+    src = source_record(root, a.source)
     inj = c.get("injection", {}).get("knowledge-miner", {})
     values = {
         "FOCUS-TOPIC": inj.get("FOCUS-TOPIC", c["deck"].get("topic", "")),
@@ -1096,14 +1142,21 @@ def cmd_create_nugget(root: Path, a):
 
 
 def cmd_persist_nuggets(root: Path, a):
-    """Fan-out persist wrapper for a miner's batch output (ticket 13).
+    """Fan-out persist wrapper for a miner's batch output (ticket 13/14).
 
-    The miner returns ``{"nuggets": [...]}`` whose items carry no ``kind``/
-    ``source`` — the orchestrator knows the source; the miner must not invent
-    it. This wrapper enriches every item, validates the WHOLE batch (schema +
+    A miner returns ``{"nuggets": [...]}`` whose items carry no ``kind``/
+    ``source`` — the orchestrator knows those; the miner must not invent them.
+    This wrapper enriches every item, validates the WHOLE batch (schema +
     verbatim guard) before writing anything — so a shim retry after a
     rejection can never duplicate already-persisted nuggets — then persists
     each item.
+
+    Text mode (``--source SLUG``): each item is forced ``kind: "text"`` and
+    the verbatim guard runs against the source text.
+    Image mode (``--source SLUG --image-source ID``, D45): each item is forced
+    ``kind: "image"`` and the deterministic figure facts — ``asset`` (public
+    ``/extracted/…`` path), ``context_text`` (nearest text block), ``page`` —
+    are **denormalized from the source's image record**, never from the model.
     """
     # Wiring errors gate immediately (exit 2): the model cannot fix a wrong
     # --source slug or a missing batch file, so no re-invoke is spent on it.
@@ -1112,6 +1165,15 @@ def cmd_persist_nuggets(root: Path, a):
                   f"(no sources/{a.source}.json) — wrong --source slug, or "
                   "the convert step did not run")
     src = source_record(root, a.source)
+    image_id = getattr(a, "image_source", None)
+    rec = None
+    if image_id:
+        rec = next((r for r in src.get("images", [])
+                    if r.get("image_source_id") == image_id), None)
+        if rec is None:
+            gate_exit(f"ERROR: source {a.source} has no extracted image "
+                      f"{image_id!r} — wrong image-source id, or convert did "
+                      "not extract it")
     p = Path(a.file)
     if not p.exists():
         gate_exit(f"ERROR: batch file {a.file} does not exist")
@@ -1131,8 +1193,15 @@ def cmd_persist_nuggets(root: Path, a):
             errors.append(f"nugget #{i}: not an object")
             continue
         n = dict(item)
-        n["kind"] = "text"                      # text-miner slice: forced,
         n["source"] = src["original_file"]      # never miner-invented
+        if rec is not None:
+            # D45: the figure's identity is denormalized, not model-supplied.
+            n["kind"] = "image"
+            n["page"] = rec.get("page")
+            n["asset"] = rec.get("path")
+            n["context_text"] = rec.get("context_text", "")
+        else:
+            n["kind"] = "text"                  # text-miner slice: forced
         try:
             check_nugget(root, n, norm_cache)
         except Rejection as exc:
@@ -1144,7 +1213,8 @@ def cmd_persist_nuggets(root: Path, a):
         sys.exit("ERROR: " + "; ".join(errors))
 
     ids = [persist_nugget(root, n) for n in enriched]
-    log(root, "km", "persist-nuggets", source=a.source, count=len(ids))
+    log(root, "km", "persist-nuggets", source=a.source, count=len(ids),
+        image_source=image_id)
     print(json.dumps({"nugget_ids": ids, "count": len(ids),
                       "source": a.source}))
 
@@ -1495,8 +1565,8 @@ def main():
     ap.add_argument("--deck")
     sub = ap.add_subparsers(dest="cmd", required=True)
     cn = sub.add_parser("create-nugget"); cn.add_argument("--file", required=True)
-    pn = sub.add_parser("persist-nuggets"); pn.add_argument("--source", required=True); pn.add_argument("--file", required=True)
-    mb = sub.add_parser("mine-brief"); mb.add_argument("--source", required=True); mb.add_argument("--out", required=True)
+    pn = sub.add_parser("persist-nuggets"); pn.add_argument("--source", required=True); pn.add_argument("--image-source", dest="image_source", default=None); pn.add_argument("--file", required=True)
+    mb = sub.add_parser("mine-brief"); mb.add_argument("--source", default=None); mb.add_argument("--image", default=None); mb.add_argument("--out", required=True)
     mm = sub.add_parser("mark-mined"); mm.add_argument("--source", required=True)
     pb = sub.add_parser("plan-brief"); pb.add_argument("--out", required=True)
     wp = sub.add_parser("write-plan"); wp.add_argument("--file", required=True)

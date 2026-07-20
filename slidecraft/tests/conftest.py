@@ -135,10 +135,14 @@ sys.stdout.write(files[min(i, len(files) - 1)].read_text(encoding="utf-8"))
 
 
 def wire_fake_executor(deck: Path, tmp_path: Path, role: str,
-                       responses: list[str]) -> Path:
+                       responses: list[str], image_arg: bool = False) -> Path:
     """Point one role's executor at a scripted `cmd` fake that replays the
     given responses in order (last one repeats). Returns the response dir —
-    its ``count`` file records how many invokes happened."""
+    its ``count`` file records how many invokes happened.
+
+    ``image_arg=True`` appends an ``{image}`` placeholder so the fake declares
+    ``supports_image`` (the shim substitutes the real path) — used to drive the
+    vision (image-miner) path without a live model. The script ignores it."""
     import sys as _sys
     respdir = tmp_path / f"responses-{role}"
     respdir.mkdir()
@@ -146,10 +150,12 @@ def wire_fake_executor(deck: Path, tmp_path: Path, role: str,
         (respdir / f"resp-{i}.txt").write_text(resp, encoding="utf-8")
     script = tmp_path / "fake_executor.py"
     script.write_text(FAKE_EXECUTOR, encoding="utf-8")
+    command = [_sys.executable, str(script), str(respdir)]
+    if image_arg:
+        command.append("{image}")
     ctx_path = deck / "deck-context.json"
     ctx = json.loads(ctx_path.read_text(encoding="utf-8"))
     executors = ctx.setdefault("executors", {})
-    executors[role] = {"executor": "cmd",
-                       "command": [_sys.executable, str(script), str(respdir)]}
+    executors[role] = {"executor": "cmd", "command": command}
     ctx_path.write_text(json.dumps(ctx, indent=2), encoding="utf-8")
     return respdir

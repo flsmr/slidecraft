@@ -47,7 +47,7 @@ Return **only** a JSON object — no prose, no markdown fence:
       "figure_type": "chart",
       "information": "- Qualitative curves compare three approaches on unitless axes (development time vs. product quality)\n- Rapid prototyping reaches a given quality level earliest\n- The digital mock-up (virtual structure) trails it; the physical mock-up (real structure) is slowest\n- Two arrows mark the resulting time savings at two quality levels\n- Curve ends are dashed, indicating extrapolation",
       "visible_text": ["Product quality", "Development time", "Rapid prototyping", "Digital mock-up", "Virtual structure", "Physical mock-up", "Real structure", "Time savings"],
-      "description": "Line chart on a pale background with three rising curves from a common origin, each labelled by a coloured box connected with a leader line, and two horizontal double-headed arrows spanning between curves."
+      "description": "Compares how three prototyping approaches trade development time against product quality, showing rapid prototyping reaching a given quality soonest. A line chart with three rising curves from a shared origin and two arrows marking the time savings."
     }
   ]
 }
@@ -65,9 +65,11 @@ Field rules:
   **verbatim**: titles, axis labels, series names, legend entries, callouts, units. This
   is the nugget's provenance anchor — it must be exact. Empty array if the image has no
   text.
-- **`description`** — a neutral, literal description of what is depicted (composition,
-  chart type, layout). This is what a later agent uses to decide whether and where to
-  place the figure, and it serves as alt text. Describe, do not interpret.
+- **`description`** — **1–2 sentences, content first, then form.** Lead with what the
+  figure is *about* (the relationship, comparison, or process it depicts), then name its
+  form (chart type, composition). This is what the storyteller uses to place the figure
+  between the right slides and pair it with fitting nuggets, and it serves as alt text.
+  Not a label inventory, not a shape-only description.
 
 Do not invent IDs, timestamps, file paths, or page numbers — the knowledge manager
 assigns those.
