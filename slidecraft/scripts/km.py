@@ -917,20 +917,40 @@ def takes_image_prop(entry: dict) -> bool:
     return not entry.get("roles") and "image" in (entry.get("props") or [])
 
 
+def planner_layouts(c: dict) -> dict[str, dict]:
+    """The offered layouts IN D4 scope for the planner: single-column
+    (content roles == {"body"}) and two-column (== {"left","right"}) content
+    layouts only — never image-capable or structural layouts. The single
+    source of scope truth, shared by the planner brief and write-skeleton's
+    validation."""
+    out: dict[str, dict] = {}
+    for name, entry in offered_layouts(c).items():
+        roles = entry.get("roles") or {}
+        if "image" in roles or takes_image_prop(entry):
+            continue                      # image-capable: out of scope (D4/D5)
+        if roles:
+            content = {r for r in roles if r not in ("title", "image")}
+            if content not in ({"body"}, {"left", "right"}):
+                continue                  # structural / off-scope shape
+        # A bare (no-roles) layout in a theme without semantic aliases is the
+        # only content area available — treat it as single-column.
+        out[name] = entry
+    return out
+
+
 def planner_layouts_section(c: dict) -> str:
     """Offered CONTENT layouts for the planner, by role — scoped to single-
     column (`content`, role `body`) and two-column (`two-cols`, roles
     `left`/`right`). Never a physical slot name; the medium is a section
-    `type`, not a layout, so image-only / prop-image layouts are not offered."""
+    `type`, not a layout, so image-only / prop-image / structural layouts
+    are not offered (D4 scope, enforced by ``planner_layouts``)."""
     lines = []
-    for name, entry in offered_layouts(c).items():
+    for name, entry in planner_layouts(c).items():
         roles = entry.get("roles") or {}
-        content_roles = [r for r in roles if r not in ("title", "image")]
-        if not content_roles:                       # single content area
+        if not roles:                                # bare: single content area
             content_roles = ["body"]
-        # Scope now: 1 or 2 content areas only.
-        if len(content_roles) > 2:
-            continue
+        else:
+            content_roles = [r for r in roles if r not in ("title", "image")]
         intent = entry.get("intent", "")
         lines.append(f"- **{name}**" + (f" — {intent}" if intent else ""))
         lines.append("  content areas (roles): " + ", ".join(content_roles))

@@ -79,9 +79,27 @@ def test_planner_brief_routes_raw_material_and_no_physical_slots(deck, tmp_path,
         assert needle not in brief
 
 
+def test_planner_brief_offers_only_d4_scope_layouts(deck, tmp_path, capsys):
+    _add_nugget(deck, "n1", raw_text="A passage.")
+    sid = _create(deck, "Definitions", nuggets="n1")
+    capsys.readouterr()
+
+    brief = _compose_brief(deck, sid, tmp_path / "brief.md")
+
+    # Isolate the layout-advertisement lines planner_layouts_section emits
+    # (`- **<name>**`), since "content"/"two-cols" also appear in the
+    # template's static prose elsewhere in the brief.
+    offered = set(re.findall(r"^- \*\*([a-zA-Z][\w-]*)\*\*", brief, re.MULTILINE))
+    assert offered == {"content", "two-cols"}
+    for name in ("image-split", "figure", "cover", "closing"):
+        assert name not in offered
+
+
 def test_planner_brief_figure_block_lists_figure_nuggets(deck, tmp_path, capsys):
-    _add_nugget(deck, "n1", raw_text="Supporting text passage.", page=3)
-    _add_nugget(deck, "img1", kind="image", page=4)     # image nugget carries asset
+    _add_nugget(deck, "n1", raw_text="Supporting text passage.", page=3,
+                information="DIGEST-ONLY-BULLET-NEVER-PLANNER-FACING")
+    _add_nugget(deck, "img1", kind="image", page=4,        # image nugget carries asset
+                visible_text=["OCR-ONLY-LABEL-NEVER-PLANNER-FACING"])
     sid = _create(deck, "Figure with text", nuggets="n1,img1")
     capsys.readouterr()
 
@@ -90,6 +108,10 @@ def test_planner_brief_figure_block_lists_figure_nuggets(deck, tmp_path, capsys)
     # The planner is told a real figure is available to PLACE (source-image).
     assert "img1" in brief
     assert "Available figures" in brief or "figure" in brief.lower()
+    # The planner routes from raw_text/description only — never the miner's
+    # digest (`information`) or an image nugget's OCR `visible_text` labels.
+    assert "DIGEST-ONLY-BULLET-NEVER-PLANNER-FACING" not in brief
+    assert "OCR-ONLY-LABEL-NEVER-PLANNER-FACING" not in brief
 
 
 # ---------------------------------------------------------------------------
