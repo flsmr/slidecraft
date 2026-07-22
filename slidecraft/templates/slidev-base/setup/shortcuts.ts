@@ -11,19 +11,36 @@ function sidOf(nav: any): string | null {
   return m ? m[1] : null
 }
 
-async function count(sid: string): Promise<number> {
-  try {
-    const r = await fetch(`/__variants?slide=${encodeURIComponent(sid)}`)
-    if (!r.ok) return 1
-    return (await r.json()).count ?? 1
-  } catch { return 1 }
+// Per-sid variant-count cache: populated lazily in the background so a
+// keypress on a normal (uncached, no-variant) slide never blocks on the
+// `/__variants` subprocess spawn. Only once a count >= 2 is cached for a sid
+// does a later keypress intercept navigation and cycle instead.
+const countCache = new Map<string, number>()
+
+function refreshCount(sid: string): void {
+  fetch(`/__variants?slide=${encodeURIComponent(sid)}`)
+    .then((r) => (r.ok ? r.json() : { count: 1 }))
+    .then((j) => countCache.set(sid, j.count ?? 1))
+    .catch(() => {})   // leave uncached; a later keypress will retry
 }
 
 export default defineShortcutsSetup((nav: any, base: any[]) => {
-  async function cycle(dir: 'up' | 'down', fallback: () => void) {
+  function cycle(dir: 'up' | 'down', fallback: () => void) {
     const sid = sidOf(nav)
-    if (!sid || (await count(sid)) < 2) return fallback()   // normal nav
-    await fetch('/__variant', {
+    if (!sid) return fallback()   // no sid resolved: normal nav
+
+    const cached = countCache.get(sid)
+    if (cached === undefined) {
+      // Count not yet known: never block this keypress waiting on the
+      // subprocess — navigate immediately and warm the cache in the
+      // background for the next keypress on this slide.
+      fallback()
+      refreshCount(sid)
+      return
+    }
+    if (cached < 2) return fallback()   // known normal slide: no variants
+
+    fetch('/__variant', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ slide: sid, dir }),
     })

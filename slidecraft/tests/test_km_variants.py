@@ -5,6 +5,8 @@ import json
 from argparse import Namespace
 from pathlib import Path
 
+import pytest
+
 from slidecraft.scripts import km
 
 
@@ -39,6 +41,11 @@ def test_get_variants_lists_canonical_then_siblings(deck, capsys):
 
     assert out["count"] == 3
     assert out["files"] == ["sX.md", "sX_v1.md", "sX_v2.md"]  # numeric order
+
+
+def test_get_variants_missing_slide_exits_nonzero(deck, capsys):
+    with pytest.raises(SystemExit):
+        km.cmd_get_variants(deck, Namespace(slide="does-not-exist"))
 
 
 def test_slide_files_and_validate_ignore_variants(deck, capsys):
@@ -101,6 +108,14 @@ def test_cycle_noop_when_no_siblings(deck, capsys):
     assert out == {"ok": True, "cycled": False, "count": 1}
 
 
+def test_cycle_down_noop_when_no_siblings(deck, capsys):
+    _slide(deck, "sX", "CANON")
+    capsys.readouterr()
+    km.cmd_cycle_variant(deck, Namespace(slide="sX", dir="down"))
+    out = json.loads(capsys.readouterr().out)
+    assert out == {"ok": True, "cycled": False, "count": 1}
+
+
 def test_cycle_leaves_slides_md_and_state_untouched(deck, capsys):
     _slide(deck, "sX", "CANON")
     _variant(deck, "sX", 1, "V1")
@@ -150,3 +165,18 @@ def test_merge_preserves_predecessors_as_variants(deck, capsys):
     assoc = json.loads((deck / "associations.json").read_text(encoding="utf-8"))
     assert assoc[m_id] == ["n1", "n2"]
     assert km.order(deck).count(m_id) == 1
+
+
+def test_validate_counts_slide_with_variant_as_one_active(deck, capsys):
+    _nugget(deck, "n1")
+    km.cmd_create(deck, Namespace(title="A", nuggets="n1", after="end",
+                                  parked=False, intended_function=None))
+    capsys.readouterr()
+    sid = next(p.stem for p in km.slide_files(deck) if p.stem.startswith("a--"))
+    _variant(deck, sid, 1, "ALT")
+
+    km.cmd_validate(deck, Namespace())
+    out = json.loads(capsys.readouterr().out.strip())
+
+    assert out["ok"] is True
+    assert out["slides"] == 1

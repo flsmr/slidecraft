@@ -32,7 +32,15 @@ export default defineConfig({
         let body = ''
         req.on('data', (c) => (body += c))
         req.on('end', () => {
-          const { slide, dir } = JSON.parse(body || '{}')
+          let slide: string, dir: string
+          try {
+            ({ slide, dir } = JSON.parse(body || '{}'))
+          } catch {
+            res.setHeader('Content-Type', 'application/json')
+            res.statusCode = 400
+            res.end(JSON.stringify({ ok: false, err: 'bad request body' }))
+            return
+          }
           const r = km(['cycle-variant', '--slide', slide, '--dir', dir])
           res.setHeader('Content-Type', 'application/json')
           res.statusCode = r.code === 0 ? 200 : 400

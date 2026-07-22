@@ -393,7 +393,7 @@ def write_variant_scaffold(root: Path, created: list):
         if tpl.is_file():
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(tpl, dest)
-            created.append(str(dest.relative_to(root)))
+            created.append(dest.relative_to(root).as_posix())
         else:
             created.append(f"(WARNING: variant template not found at {tpl})")
 
