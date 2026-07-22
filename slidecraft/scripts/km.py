@@ -186,9 +186,16 @@ BACKUP_NOTE = ("_Set aside from the main narrative by the storyteller — a dist
 DIGEST_MARK = "backup digest"
 
 
-def skeleton(title: str, nugget_ids: list[str]) -> str:
+def skeleton(root: Path, title: str, nugget_ids: list[str]) -> str:
+    """Placeholder body for a created-but-uncomposed slide. Shows a banner and
+    the distilled nugget information, so a live-watched deck reveals what the
+    slide will be about while the composer works. Keeps the literal
+    `awaiting composition` marker (inside a comment) that needs_composition()
+    keys off; MUST NOT emit DIGEST_MARK (that reads as a parked digest)."""
     return (f"---\nlayout: default\ntitle: {yaml_str(title)}\n---\n\n"
-            f"<!-- awaiting composition; nuggets: {','.join(nugget_ids)} -->\n")
+            f"> 🚧 **Composer is drafting this slide…**\n"
+            f"<!-- awaiting composition; nuggets: {','.join(nugget_ids)} -->\n"
+            + nugget_info_section(root, title, nugget_ids))
 
 
 def needs_composition(body: str) -> bool:
@@ -1316,7 +1323,7 @@ def cmd_create(root: Path, a):
     # (D46) so it reads in the Backup appendix; an active create gets a skeleton
     # for the composer to fill.
     initial_body = (digest_body(root, a.title, nugs) if parked_flag
-                    else skeleton(a.title, nugs))
+                    else skeleton(root, a.title, nugs))
     (root / "slides" / f"{sid}.md").write_text(initial_body, encoding="utf-8")
     save_state(root, sid, state)
     A = assoc(root); A[sid] = nugs; write_assoc(root, A)
@@ -1389,7 +1396,7 @@ def cmd_unpark(root: Path, a):
     needs_compose = needs_composition(sp.read_text(encoding="utf-8-sig"))
     if needs_compose:
         # Discard the digest preview; the composer writes the real slide next.
-        sp.write_text(skeleton(stj.get("title", sid),
+        sp.write_text(skeleton(root, stj.get("title", sid),
                                assoc(root).get(sid, [])), encoding="utf-8")
         stj["state"] = "pending"
         stj.pop("state_before_park", None)
@@ -1468,7 +1475,8 @@ def cmd_merge(root: Path, a):
     title = a.title or "Merged: " + " + ".join(A_title(root, s) for s in parts)
     st = stamp(root)
     sid = f"{slugify(title)}--{st}"
-    (root / "slides" / f"{sid}.md").write_text(skeleton(title, merged_nugs), encoding="utf-8")
+    (root / "slides" / f"{sid}.md").write_text(
+        skeleton(root, title, merged_nugs), encoding="utf-8")
     (root / "slides" / f"{sid}.json").write_text(json.dumps(
         {"slide_id": sid, "state": "draft", "title": title,
          "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -1550,6 +1558,25 @@ def build_presenter_notes(root: Path, sid: str) -> str:
     return notes_comment("Source material (verbatim) — presenter reference:"
                          "\n\n" + "\n\n".join(blocks))
 
+def nugget_info_section(root: Path, title: str, nugget_ids: list[str]) -> str:
+    """Distilled `information` for each nugget as a markdown section: an
+    `# <title>` heading, then per-nugget (a `## <nugget title>` subhead when
+    there is more than one) the nugget's already-distilled `information`. The
+    single source of truth for "show the knowledge" — shared by digest_body
+    (Backup preview, D46) and skeleton (awaiting-composition placeholder). No
+    frontmatter, no markers, no speaker notes — the callers wrap it."""
+    nugs = [n for n in (load_nugget(root, nid) for nid in nugget_ids) if n]
+    parts = [f"\n# {title}\n"]
+    multi = len(nugs) > 1
+    for n in nugs:
+        if multi:
+            parts.append(f"\n## {n.get('title', '')}\n")
+        info = str(n.get("information", "")).strip()
+        if info:
+            parts.append("\n" + info + "\n")
+    return "".join(parts)
+
+
 def digest_body(root: Path, title: str, nugget_ids: list[str]) -> str:
     """A deterministic preview body for a Backup slide (D46): the miner's
     distilled ``information`` for each associated nugget, so a human roughly
@@ -1559,17 +1586,9 @@ def digest_body(root: Path, title: str, nugget_ids: list[str]) -> str:
 
     Carries :data:`DIGEST_MARK` so park/unpark can tell it from a real slide."""
     nugs = [n for n in (load_nugget(root, nid) for nid in nugget_ids) if n]
-    parts = [f"---\nlayout: default\ntitle: {yaml_str(title)}\n---\n",
-             f"<!-- {DIGEST_MARK}: distilled nugget information, awaiting review -->\n",
-             f"\n# {title}\n"]
-    multi = len(nugs) > 1
-    for n in nugs:
-        if multi:
-            parts.append(f"\n## {n.get('title', '')}\n")
-        info = str(n.get("information", "")).strip()
-        if info:
-            parts.append("\n" + info + "\n")
-    body = "".join(parts)
+    body = (f"---\nlayout: default\ntitle: {yaml_str(title)}\n---\n"
+            f"<!-- {DIGEST_MARK}: distilled nugget information, awaiting review -->\n"
+            + nugget_info_section(root, title, nugget_ids))
     notes = [f"[{nugget_locator(n)}]\n{raw}"
              for n in nugs if (raw := nugget_raw(n))]
     if notes:
