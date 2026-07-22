@@ -358,7 +358,9 @@ def write_package_json(root: Path, ans: dict, theme: dict, created: list):
 def write_gitignore(root: Path, created: list):
     # node_modules/ is heavy and reinstallable; the local theme copy (theme/)
     # IS part of the deck, so it is deliberately NOT ignored (D38).
-    (root / ".gitignore").write_text("node_modules/\ndist/\n", encoding="utf-8")
+    (root / ".gitignore").write_text(
+        "node_modules/\ndist/\n.draft-status.json\nlogs/serve_deck.json\n",
+        encoding="utf-8")
     created.append(".gitignore")
 
 
