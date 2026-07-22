@@ -1206,6 +1206,185 @@ def cmd_write_slide(root: Path, a):
     print(json.dumps({"ok": True, "slide": sid, **meta}))
 
 
+# ---------- two-stage planner: skeleton persist (D4/D6, ticket sdd-5) ----------
+
+SECTION_TYPES = ("text", "diagram", "image", "source-image")
+ASPECT_BY_ROLE = {"body": "16:9", "left": "1:1", "right": "1:1"}
+
+
+def content_roles_for(entry: dict) -> list[str]:
+    """A layout entry's CONTENT-area roles (design §4): its roles map minus
+    `title`/`image`, or `["body"]` when the layout ships no roles map."""
+    roles = entry.get("roles") or {}
+    content = [r for r in roles if r not in ("title", "image")]
+    return content or ["body"]
+
+
+def aspect_ratio_for(role: str) -> str:
+    """The image-generation aspect ratio for a content role (D17): single-
+    column `body` → 16:9; two-column `left`/`right` → 1:1."""
+    return ASPECT_BY_ROLE.get(role, "16:9")
+
+
+def validate_plan(root: Path, sid: str, obj, c: dict) -> tuple[dict, dict]:
+    """Validate a planner plan JSON (§4). Returns (entry, sections) where
+    `entry` is the offered-layout entry and `sections` is the validated
+    per-role section map. Raises :class:`Rejection` (retryable, exit 1) on any
+    model-fixable problem.
+
+    Layout scope is section-aware: a CONTENT slide (non-empty `sections`)
+    must land on one of the D4-in-scope planner layouts (`planner_layouts`
+    — single-column or two-column content only); a STRUCTURAL slide (empty
+    `sections`) may use any offered layout (cover/closing/etc., D4/D6)."""
+    if not isinstance(obj, dict):
+        raise Rejection("plan must be a single JSON object")
+    layout = obj.get("layout")
+    concept = obj.get("concept_type")
+    if concept not in CONCEPT_TYPES:
+        raise Rejection(f"concept_type {concept!r} not in {list(CONCEPT_TYPES)}")
+    if not obj.get("title") or not isinstance(obj["title"], str):
+        raise Rejection('plan needs a non-empty string "title"')
+    sections = obj.get("sections") or {}
+    if not isinstance(sections, dict):
+        raise Rejection('"sections" must map content-area roles to objects')
+    scope = planner_layouts(c) if sections else offered_layouts(c)
+    if not isinstance(layout, str) or layout not in scope:
+        raise Rejection(f"layout {layout!r} is not one of the in-scope "
+                        f"layouts: {sorted(scope)}")
+    entry = scope[layout]
+    allowed_roles = set(content_roles_for(entry))
+    unknown = sorted(set(sections) - allowed_roles)
+    if unknown:
+        raise Rejection(f"unknown section role(s) {unknown} for layout "
+                        f"{layout!r} — allowed: {sorted(allowed_roles)}")
+    A = assoc(root)
+    associated = set(A.get(sid, []))
+    for role, sec in sections.items():
+        if not isinstance(sec, dict):
+            raise Rejection(f"section {role!r} must be an object")
+        stype = sec.get("type")
+        if stype not in SECTION_TYPES:
+            raise Rejection(f"section {role!r} type {stype!r} not in "
+                            f"{list(SECTION_TYPES)}")
+        nug_ids = sec.get("nuggets") or []
+        if not isinstance(nug_ids, list):
+            raise Rejection(f"section {role!r} nuggets must be a list")
+        for nid in nug_ids:
+            if nid not in associated:
+                raise Rejection(f"section {role!r} routes nugget {nid!r} that "
+                                "is not associated with this slide")
+        if stype == "source-image":
+            figs = [nid for nid in nug_ids
+                    if (load_nugget(root, nid) or {}).get("kind") == "image"]
+            if not figs:
+                raise Rejection(f"section {role!r} is source-image but routes "
+                                "no figure nugget (an image nugget with an asset)")
+            for nid in figs:
+                asset = str((load_nugget(root, nid) or {}).get("asset", ""))
+                if not asset or not (root / "public" / asset.lstrip("/")).exists():
+                    raise Rejection(f"section {role!r} figure {nid} has no asset "
+                                    f"under public/ (asset={asset!r})")
+    return entry, sections
+
+
+def _wireframe_placeholder(stype: str, instructions: str) -> str:
+    """The visible wireframe for a pending content area: a machine marker + the
+    planner's instruction as a blockquote (so a live-watched deck shows what
+    each area will become while the designers work)."""
+    instr = (instructions or "").strip().replace("\n", " ")
+    return (f"<!-- {stype} · pending -->\n\n"
+            f"> 🚧 **{stype}** — {instr}")
+
+
+def cmd_write_skeleton(root: Path, a):
+    """Stage-1 persist (§6): validate the plan JSON, render the wireframe,
+    place source-image areas, persist the plan sidecar + per-section status,
+    set state `planned`, and return the sections still needing a designer.
+    Rejection = exit 1 (shim retry; cap-2 = park terminal). A structural plan
+    (no sections) composes from title + layout defaults only."""
+    sid = a.slide
+    stp = root / "slides" / f"{sid}.json"
+    sp = root / "slides" / f"{sid}.md"
+    if not stp.exists():
+        gate_exit(f"ERROR: slide {sid} does not exist")
+    stj = load_state(root, sid)
+    if stj.get("state") == "locked":
+        gate_exit(f"ERROR: slide {sid} is locked")
+    if stj.get("state") == "parked":
+        gate_exit(f"ERROR: slide {sid} is parked — unpark before planning")
+    p = Path(a.file)
+    if not p.exists():
+        gate_exit(f"ERROR: plan file {a.file} does not exist")
+    try:
+        obj = json.loads(p.read_text(encoding="utf-8-sig"))
+    except json.JSONDecodeError as exc:
+        sys.exit(f"ERROR: plan output is not valid JSON: {exc}")
+    try:
+        entry, sections = validate_plan(root, sid, obj, ctx(root))
+    except Rejection as exc:
+        sys.exit(f"ERROR: {exc}")
+
+    physical_layout = entry["name"]
+    roles = entry.get("roles") or {}
+    title = str(obj["title"]).strip()
+    fm = [f"layout: {physical_layout}", f"title: {yaml_str(title)}"]
+    parts = ["---\n" + "\n".join(fm) + "\n---\n"]
+
+    # Title into its slot (if the layout has one), else an H1.
+    if "title" in roles:
+        parts.append(f"\n::{roles['title']}::\n# {title}\n")
+    elif not roles:
+        parts.append(f"\n# {title}\n")
+
+    plan_sections: dict[str, dict] = {}
+    pending, placed = [], []
+    for role in content_roles_for(entry):
+        sec = sections.get(role)
+        slot = roles.get(role)
+        if sec is None:
+            plan_sections[role] = {"type": "text", "instructions": "",
+                                   "nuggets": [], "status": "placed"}
+            continue
+        stype = sec["type"]
+        instructions = str(sec.get("instructions", ""))
+        nug_ids = list(sec.get("nuggets") or [])
+        if stype == "source-image":
+            fig = next(nid for nid in nug_ids
+                       if (load_nugget(root, nid) or {}).get("kind") == "image")
+            asset = str((load_nugget(root, fig) or {})["asset"])
+            block = f'<img src="{asset}" alt="{title}">'
+            status = "placed"; placed.append(role)
+        else:
+            block = _wireframe_placeholder(stype, instructions)
+            status = "pending"; pending.append(role)
+        if slot:
+            parts.append(f"\n::{slot}::\n{block}\n")
+        else:
+            parts.append(f"\n{block}\n")
+        plan_sections[role] = {"type": stype, "instructions": instructions,
+                               "nuggets": nug_ids, "status": status}
+
+    body = "".join(parts)
+    for asset in missing_assets(root, body):
+        sys.exit(f"ERROR: referenced asset '{asset}' does not exist "
+                 f"(expected under public/: public{asset})")
+    sp.write_text(body, encoding="utf-8")
+
+    stj["state"] = "planned"
+    stj["concept_type"] = obj["concept_type"]
+    stj["title"] = title
+    stj["plan"] = {"layout": physical_layout, "concept_type": obj["concept_type"],
+                   "title": title, "sections": plan_sections}
+    # A slide whose only areas were source-image (or defaults) is already done.
+    if not pending:
+        stj["state"] = "composed"
+    save_state(root, sid, stj)
+    log(root, "km", "write-skeleton", slide=sid, layout=physical_layout,
+        pending=len(pending), placed=len(placed))
+    print(json.dumps({"ok": True, "slide": sid, "state": stj["state"],
+                      "pending_sections": pending, "placed_sections": placed}))
+
+
 # ---------- nugget validation + persist core ----------
 
 class Rejection(Exception):
@@ -1877,6 +2056,7 @@ def main():
     wp = sub.add_parser("write-plan"); wp.add_argument("--file", required=True)
     cb = sub.add_parser("compose-brief"); cb.add_argument("--slide", required=True); cb.add_argument("--out", required=True)
     ws = sub.add_parser("write-slide"); ws.add_argument("--slide", required=True); ws.add_argument("--file", required=True)
+    wsk = sub.add_parser("write-skeleton"); wsk.add_argument("--slide", required=True); wsk.add_argument("--file", required=True)
     c = sub.add_parser("create-slide"); c.add_argument("--title", required=True); c.add_argument("--nuggets", default=""); c.add_argument("--after", default="end"); c.add_argument("--parked", action="store_true"); c.add_argument("--intended-function", dest="intended_function", default=None)
     an = sub.add_parser("associate-nuggets"); an.add_argument("--slide", required=True); an.add_argument("--nuggets", required=True)
     m = sub.add_parser("merge-slides"); m.add_argument("--slides", required=True); m.add_argument("--title", default="")
@@ -1894,6 +2074,7 @@ def main():
      "mine-brief": cmd_mine_brief, "mark-mined": cmd_mark_mined,
      "plan-brief": cmd_plan_brief, "write-plan": cmd_write_plan,
      "compose-brief": cmd_compose_brief, "write-slide": cmd_write_slide,
+     "write-skeleton": cmd_write_skeleton,
      "create-slide": cmd_create, "associate-nuggets": cmd_associate,
      "merge-slides": cmd_merge, "park-slide": cmd_park,
      "unpark-slide": cmd_unpark,
