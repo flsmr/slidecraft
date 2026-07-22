@@ -142,6 +142,33 @@ def preserved_headmatter_lines(root: Path) -> list[str]:
         kept.append(line)
     return kept
 
+STATUS_FILE = ".draft-status.json"
+
+
+def status_block(root: Path) -> str:
+    """Inline markdown for the transient status slide (body content placed after
+    the headmatter block, so it becomes slide 1). Empty string when there is no
+    `.draft-status.json` — the sole trigger. Never a `src:` import and never a
+    slide file, so order()/budget/validate never count it."""
+    p = root / STATUS_FILE
+    if not p.exists():
+        return ""
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return ""
+    label = str(d.get("label", "")).strip() or "Drafting…"
+    phase = str(d.get("phase", "")).strip()
+    detail = str(d.get("detail", "")).strip()
+    phase_line = " ".join(x for x in (phase, detail) if x)
+    lines = [f"# ⏳ {label}", ""]
+    if phase_line:
+        lines.append(f"**Phase:** {phase_line}")
+        lines.append("")
+    lines.append("_Temporary drafting status — removed when the deck is done._")
+    return "\n".join(lines) + "\n"
+
+
 def write_order(root: Path, ids: list[str], parked: list[str] | None = None,
                 c: dict | None = None):
     c = ctx(root) if c is None else c
@@ -154,10 +181,18 @@ def write_order(root: Path, ids: list[str], parked: list[str] | None = None,
     # makes slide 1 the real cover.
     head_lines = [f"theme: {theme_ref}", f"title: {title}"]
     head_lines += preserved_headmatter_lines(root)
-    if ids:
-        head_lines.append(f"src: ./slides/{ids[0]}.md")
-    head = "---\n" + "\n".join(head_lines) + "\n---\n"
-    body = "".join(f"\n---\nsrc: ./slides/{i}.md\n---\n" for i in ids[1:])
+    status = status_block(root)
+    if status:
+        # Status slide is slide 1 (the headmatter block's own body); do NOT
+        # fold a slide src into the headmatter. Every real slide follows as a
+        # src import (including what would have been the folded first slide).
+        head = "---\n" + "\n".join(head_lines) + "\n---\n\n" + status + "\n"
+        body = "".join(f"\n---\nsrc: ./slides/{i}.md\n---\n" for i in ids)
+    else:
+        if ids:
+            head_lines.append(f"src: ./slides/{ids[0]}.md")
+        head = "---\n" + "\n".join(head_lines) + "\n---\n"
+        body = "".join(f"\n---\nsrc: ./slides/{i}.md\n---\n" for i in ids[1:])
     # Parked slides render in the "Backup Slides" appendix at the very end (D46):
     # an inline section divider (plain markdown in slides.md, not a slide file —
     # so nothing counts it against the budget) followed by the parked includes.
@@ -1341,6 +1376,27 @@ def cmd_create(root: Path, a):
     print(json.dumps({"slide_id": sid, "nuggets": nugs, "parked": parked_flag}))
 
 
+def cmd_set_status(root: Path, a):
+    data = {"phase": a.phase, "detail": getattr(a, "detail", "") or "",
+            "label": getattr(a, "label", "") or "",
+            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+    (root / STATUS_FILE).write_text(
+        json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    write_order(root, order(root))
+    log(root, "orchestrator", "set-status", **data)
+    print(json.dumps({"status": "set", **data}, ensure_ascii=False))
+
+
+def cmd_clear_status(root: Path, a):
+    p = root / STATUS_FILE
+    existed = p.exists()
+    if existed:
+        p.unlink()
+    write_order(root, order(root))
+    log(root, "orchestrator", "clear-status", existed=existed)
+    print(json.dumps({"status": "cleared", "existed": existed}))
+
+
 def cmd_park(root: Path, a):
     """Move a slide out of the active order into the rendered "Backup Slides"
     appendix (D34/D46): file + association preserved, budget slot freed. A slide
@@ -1722,6 +1778,8 @@ def main():
     pk = sub.add_parser("park-slide"); pk.add_argument("--slide", required=True); pk.add_argument("--reason", default="")
     up = sub.add_parser("unpark-slide"); up.add_argument("--slide", required=True)
     s = sub.add_parser("set-content"); s.add_argument("--slide", required=True); s.add_argument("--body-file", required=True)
+    stp = sub.add_parser("set-status"); stp.add_argument("--phase", required=True); stp.add_argument("--detail", default=""); stp.add_argument("--label", default="")
+    sub.add_parser("clear-status")
     sub.add_parser("validate")
     a = ap.parse_args()
     root = find_deck_root(a.deck)
@@ -1732,7 +1790,8 @@ def main():
      "create-slide": cmd_create, "associate-nuggets": cmd_associate,
      "merge-slides": cmd_merge, "park-slide": cmd_park,
      "unpark-slide": cmd_unpark,
-     "set-content": cmd_set_content, "validate": cmd_validate}[a.cmd](root, a)
+     "set-content": cmd_set_content, "validate": cmd_validate,
+     "set-status": cmd_set_status, "clear-status": cmd_clear_status}[a.cmd](root, a)
 
 if __name__ == "__main__":
     main()
