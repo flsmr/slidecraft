@@ -539,3 +539,45 @@ def test_cli_exhaustion_exits_3_with_terminal(tmp_path):
     assert result["terminal"] == "drop"
     assert result["attempts"] == 3
     assert any("verbatim guard failed" in e for e in result["errors"])
+
+
+# ---------- durable prompt/response logging (§7.1, D16) ----------
+
+
+def test_run_role_calls_on_attempt_for_every_attempt(tmp_path):
+    # A persist that rejects once then accepts → 2 attempts → 2 on_attempt calls.
+    calls = []
+
+    class FakeExec:
+        supports_image = False
+        def __init__(self): self.i = 0
+        def run(self, prompt, image=None):
+            self.i += 1
+            return json.dumps({"n": self.i})
+
+    state = {"first": True}
+    def persist(out):
+        if state["first"]:
+            state["first"] = False
+            raise invoke_shim.PersistRejection("try again")
+
+    res = invoke_shim.run_role(
+        "knowledge-miner", "BRIEF", persist=persist, executor=FakeExec(),
+        on_attempt=lambda prompt, raw, attempt: calls.append((attempt, raw)))
+    assert res.status == "ok"
+    assert [a for a, _ in calls] == [1, 2]           # both attempts logged
+
+
+def test_log_prompt_record_writes_per_slide_and_actions_ref(tmp_path):
+    deck = tmp_path
+    (deck / "deck-context.json").write_text("{}", encoding="utf-8")
+    rec = invoke_shim.log_prompt_record(
+        deck, slide="slide-1", section="left", role="text-designer",
+        model="m", executor="owui", attempt=1, status="ok",
+        prompt="P", response="R", run_label="run-A")
+    assert rec.exists() and rec.parent.name == "slide-1"
+    data = json.loads(rec.read_text(encoding="utf-8"))
+    assert data["prompt"] == "P" and data["response"] == "R"
+    assert data["run_label"] == "run-A" and data["section"] == "left"
+    actions = (deck / "logs" / "actions.jsonl").read_text(encoding="utf-8")
+    assert "prompt-log" in actions and "slide-1" in actions

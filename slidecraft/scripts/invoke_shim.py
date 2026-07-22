@@ -38,8 +38,46 @@ import json
 import mimetypes
 import os
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
+
+
+def log_prompt_record(deck, *, slide, section, role, model, executor,
+                      attempt, status, prompt, response, run_label=None):
+    """Write one durable prompt/response record under the deck's
+    logs/prompts/<slide>/ and append a reference to logs/actions.jsonl (§7.1).
+    Returns the record path. Best-effort: a locked/synced log never raises."""
+    deck = Path(deck)
+    slide_key = slide or "_deckwide"
+    pdir = deck / "logs" / "prompts" / slide_key
+    pdir.mkdir(parents=True, exist_ok=True)
+    seq = len(list(pdir.glob("*.json"))) + 1
+    parts = [f"{seq:03d}", role]
+    if section:
+        parts.append(section)
+    if model:
+        parts.append(str(model).replace("/", "-").replace(":", "-"))
+    rec_path = pdir / ("-".join(parts) + ".json")
+    record = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "slide": slide_key,
+              "section": section, "role": role, "model": model,
+              "executor": executor, "attempt": attempt, "status": status,
+              "run_label": run_label, "prompt": prompt, "response": response}
+    rec_path.write_text(json.dumps(record, indent=2, ensure_ascii=False),
+                        encoding="utf-8")
+    try:
+        logdir = deck / "logs"
+        logdir.mkdir(exist_ok=True)
+        with (logdir / "actions.jsonl").open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps({
+                "ts": record["ts"], "agent": "invoke-shim",
+                "action": "prompt-log", "role": role, "slide": slide_key,
+                "section": section, "attempt": attempt, "status": status,
+                "record": str(rec_path.relative_to(deck)).replace("\\", "/"),
+            }, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+    return rec_path
 
 
 class PersistRejection(Exception):
@@ -424,13 +462,18 @@ def build_executor(spec: dict):
 
 # ---------- the loop ----------
 
-def run_role(role, brief, *, persist, executor, image=None, retry_cap=RETRY_CAP):
+def run_role(role, brief, *, persist, executor, image=None, retry_cap=RETRY_CAP,
+            on_attempt=None):
     """Run one role invocation through the bounded executor + persist loop.
 
     Each attempt is stateless: the retry prompt is the original brief with
     the rejection error appended, never a conversation. Transport failures
     and persist gates resolve to ``status="error"`` (contained, reported) —
     they never raise out of this function and never burn re-invokes.
+
+    ``on_attempt(prompt, raw, attempt)``, when given, is called once per
+    attempt (including retries) before persist — so a durable prompt/response
+    log can capture every attempt, not just the terminal one (§7.1).
     """
     if role not in ROLES:
         raise ValueError(f"unknown role: {role!r}")
@@ -442,8 +485,12 @@ def run_role(role, brief, *, persist, executor, image=None, retry_cap=RETRY_CAP)
             raw = executor.run(prompt, image=image)
         except Exception as exc:  # transport/infra — no re-invoke can fix it
             errors.append(f"executor failure: {exc}")
+            if on_attempt:
+                on_attempt(prompt, f"<executor failure: {exc}>", attempt)
             return InvokeResult(role=role, status="error", attempts=attempt,
                                 errors=errors)
+        if on_attempt:
+            on_attempt(prompt, raw, attempt)
         try:
             output = parse_structured(raw)
             persist(output)
@@ -523,6 +570,10 @@ def main(argv=None):
                                    "deck-context.json; must be initialized)")
     ap.add_argument("--out", required=True,
                     help="where to write the InvokeResult JSON")
+    ap.add_argument("--slide", help="slide id (prompt-log grouping)")
+    ap.add_argument("--section", help="section role (designer prompt-log)")
+    ap.add_argument("--run-label", dest="run_label",
+                    help="optional label to tag this run's prompt records")
     ap.add_argument("persist_cmd", nargs=argparse.REMAINDER,
                     help="-- persist command argv with {out} placeholder")
     a = ap.parse_args(argv)
@@ -556,12 +607,21 @@ def main(argv=None):
 
     brief = Path(a.brief_file).read_text(encoding="utf-8-sig")
 
+    def _on_attempt(prompt, raw, attempt):
+        if a.deck:
+            log_prompt_record(
+                a.deck, slide=a.slide, section=a.section, role=a.role,
+                model=spec.get("model"), executor=spec.get("executor"),
+                attempt=attempt, status="attempt", prompt=prompt,
+                response=raw, run_label=a.run_label)
+
     with tempfile.TemporaryDirectory(prefix="invoke-shim-") as tmp:
         result = run_role(
             a.role, brief,
             persist=_persist_via_command(persist_argv, Path(tmp)),
             executor=executor,
             image=a.image,
+            on_attempt=_on_attempt,
         )
 
     out_path.write_text(json.dumps({
