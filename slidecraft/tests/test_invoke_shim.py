@@ -581,3 +581,37 @@ def test_log_prompt_record_writes_per_slide_and_actions_ref(tmp_path):
     assert data["run_label"] == "run-A" and data["section"] == "left"
     actions = (deck / "logs" / "actions.jsonl").read_text(encoding="utf-8")
     assert "prompt-log" in actions and "slide-1" in actions
+
+
+def test_log_prompt_record_is_best_effort_on_write_failure(tmp_path, monkeypatch):
+    (tmp_path / "deck-context.json").write_text("{}", encoding="utf-8")
+    import pathlib
+    orig = pathlib.Path.write_text
+    def boom(self, *a, **k):
+        if self.suffix == ".json":
+            raise OSError("locked (simulated OneDrive)")
+        return orig(self, *a, **k)
+    monkeypatch.setattr(pathlib.Path, "write_text", boom)
+    # Must NOT raise, and returns None on the record-write failure.
+    result = invoke_shim.log_prompt_record(
+        tmp_path, slide="slide-1", section=None, role="text-designer",
+        model="m", executor="owui", attempt=1, status="attempt",
+        prompt="P", response="R")
+    assert result is None
+
+
+def test_run_role_survives_on_attempt_callback_raising(tmp_path):
+    # A logging callback must never break the core invoke loop (belt-and-
+    # suspenders alongside log_prompt_record's own best-effort guarding).
+    class FakeExec:
+        supports_image = False
+        def run(self, prompt, image=None):
+            return json.dumps({"n": 1})
+
+    def boom_on_attempt(prompt, raw, attempt):
+        raise OSError("locked (simulated OneDrive)")
+
+    res = invoke_shim.run_role(
+        "text-designer", "brief", persist=lambda out: None,
+        executor=FakeExec(), on_attempt=boom_on_attempt)
+    assert res.status == "ok"

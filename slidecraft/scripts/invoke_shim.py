@@ -47,24 +47,29 @@ def log_prompt_record(deck, *, slide, section, role, model, executor,
                       attempt, status, prompt, response, run_label=None):
     """Write one durable prompt/response record under the deck's
     logs/prompts/<slide>/ and append a reference to logs/actions.jsonl (§7.1).
-    Returns the record path. Best-effort: a locked/synced log never raises."""
+    Returns the record path, or None on any I/O failure. STRICTLY best-effort:
+    a locked/synced log (OneDrive) must never raise out of a completed invoke."""
     deck = Path(deck)
     slide_key = slide or "_deckwide"
-    pdir = deck / "logs" / "prompts" / slide_key
-    pdir.mkdir(parents=True, exist_ok=True)
-    seq = len(list(pdir.glob("*.json"))) + 1
-    parts = [f"{seq:03d}", role]
-    if section:
-        parts.append(section)
-    if model:
-        parts.append(str(model).replace("/", "-").replace(":", "-"))
-    rec_path = pdir / ("-".join(parts) + ".json")
+    rec_path = None
     record = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "slide": slide_key,
               "section": section, "role": role, "model": model,
               "executor": executor, "attempt": attempt, "status": status,
               "run_label": run_label, "prompt": prompt, "response": response}
-    rec_path.write_text(json.dumps(record, indent=2, ensure_ascii=False),
-                        encoding="utf-8")
+    try:
+        pdir = deck / "logs" / "prompts" / slide_key
+        pdir.mkdir(parents=True, exist_ok=True)
+        seq = len(list(pdir.glob("*.json"))) + 1
+        parts = [f"{seq:03d}", role]
+        if section:
+            parts.append(section)
+        if model:
+            parts.append(str(model).replace("/", "-").replace(":", "-"))
+        rec_path = pdir / ("-".join(parts) + ".json")
+        rec_path.write_text(json.dumps(record, indent=2, ensure_ascii=False),
+                            encoding="utf-8")
+    except OSError:
+        return None
     try:
         logdir = deck / "logs"
         logdir.mkdir(exist_ok=True)
@@ -486,11 +491,17 @@ def run_role(role, brief, *, persist, executor, image=None, retry_cap=RETRY_CAP,
         except Exception as exc:  # transport/infra — no re-invoke can fix it
             errors.append(f"executor failure: {exc}")
             if on_attempt:
-                on_attempt(prompt, f"<executor failure: {exc}>", attempt)
+                try:
+                    on_attempt(prompt, f"<executor failure: {exc}>", attempt)
+                except Exception:
+                    pass  # a logging callback must never break the invoke loop
             return InvokeResult(role=role, status="error", attempts=attempt,
                                 errors=errors)
         if on_attempt:
-            on_attempt(prompt, raw, attempt)
+            try:
+                on_attempt(prompt, raw, attempt)
+            except Exception:
+                pass  # a logging callback must never break the invoke loop
         try:
             output = parse_structured(raw)
             persist(output)
