@@ -251,3 +251,25 @@ def test_create_slide_id_has_no_triple_dash(tmp_path):
     sid = next(iter(A))
     assert "---" not in sid                       # would be dropped by Slidev
     assert sid in (deck / "slides.md").read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Template rendering — leftover placeholder guard (widened regex)
+# ---------------------------------------------------------------------------
+
+import pytest
+
+
+def test_render_template_guard_catches_underscore_placeholder():
+    # A hyphen-style placeholder resolves; an UNRESOLVED underscore-style name
+    # must still trip the leftover guard (widened regex).
+    with pytest.raises(SystemExit) as exc:
+        km.render_template("Hello %NAME% and %DECK_TYPE%", {"NAME": "x"})
+    assert "%DECK_TYPE%" in str(exc.value)
+
+
+def test_render_template_resolves_underscore_named_value():
+    # A value whose KEY has an underscore still substitutes (only the leftover
+    # SCAN changed, not substitution).
+    out = km.render_template("v=%DECK_TYPE%", {"DECK_TYPE": "lecture"})
+    assert out == "v=lecture"

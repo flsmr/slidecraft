@@ -364,7 +364,7 @@ def render_template(template: str, values: dict) -> str:
     out = template
     for key, value in values.items():
         out = out.replace(f"%{key}%", str(value))
-    leftover = sorted(set(re.findall(r"%[A-Z][A-Z-]*%", out)))
+    leftover = sorted(set(re.findall(r"%[A-Z][A-Z_-]*%", out)))
     if leftover:
         sys.exit(f"ERROR: unresolved placeholder(s) in template: {leftover}")
     return out
