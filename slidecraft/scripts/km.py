@@ -917,28 +917,53 @@ def takes_image_prop(entry: dict) -> bool:
     return not entry.get("roles") and "image" in (entry.get("props") or [])
 
 
-def layouts_section(c: dict) -> str:
-    """The layout capabilities for a composer brief: offered name, intent,
-    CONTENT role names, defaults, and figure capability — never a physical
-    slot name. ``image`` is not a content role (the figure travels via the
-    ``image`` output field), so it is advertised separately."""
+def planner_layouts_section(c: dict) -> str:
+    """Offered CONTENT layouts for the planner, by role — scoped to single-
+    column (`content`, role `body`) and two-column (`two-cols`, roles
+    `left`/`right`). Never a physical slot name; the medium is a section
+    `type`, not a layout, so image-only / prop-image layouts are not offered."""
     lines = []
     for name, entry in offered_layouts(c).items():
+        roles = entry.get("roles") or {}
+        content_roles = [r for r in roles if r not in ("title", "image")]
+        if not content_roles:                       # single content area
+            content_roles = ["body"]
+        # Scope now: 1 or 2 content areas only.
+        if len(content_roles) > 2:
+            continue
         intent = entry.get("intent", "")
         lines.append(f"- **{name}**" + (f" — {intent}" if intent else ""))
-        roles = entry.get("roles") or {}
-        content_roles = [r for r in roles if r != "image"]
-        if content_roles:
-            lines.append("  roles: " + ", ".join(content_roles))
+        lines.append("  content areas (roles): " + ", ".join(content_roles))
+    return "\n".join(lines)
+
+
+def raw_material_section(nugs: list[dict]) -> str:
+    """Verbatim raw material for the planner: each text nugget's raw_text with
+    its id + locator, each image nugget noted as a placeable figure."""
+    parts = []
+    for n in nugs:
+        nid = n.get("nugget_id", "?")
+        loc = nugget_locator(n)
+        if n.get("kind") == "image":
+            parts.append(f"### Figure nugget {nid} — {loc}\n"
+                         f"{str(n.get('description', '')).strip()}")
         else:
-            lines.append("  roles: title, body (single content area)")
-        if "image" in roles or takes_image_prop(entry):
-            lines.append('  figure: takes one figure via the "image" '
-                         "output field")
-        defaults = entry.get("defaults") or {}
-        if defaults:
-            lines.append("  defaults: " + "; ".join(
-                f'{k} = "{v}"' for k, v in defaults.items()))
+            parts.append(f"### Nugget {nid} — {loc}\n"
+                         f"{str(n.get('raw_text', '')).strip()}")
+    return "\n\n".join(parts) if parts else "(no material)"
+
+
+def figure_block_section(nugs: list[dict]) -> str:
+    """The `%FIGURE-BLOCK%` value: an 'Available figures' list of the image
+    nuggets a source-image area may place (id + description + asset presence),
+    or '' when the slide routes no figure (optional placeholder, D10)."""
+    imgs = [n for n in nugs if n.get("kind") == "image"]
+    if not imgs:
+        return ""
+    lines = ["### Available figures (place via a `source-image` area)"]
+    for n in imgs:
+        lines.append(f"- {n.get('nugget_id', '?')} — "
+                     f"{str(n.get('description', '')).strip()}")
     return "\n".join(lines)
 
 
@@ -969,12 +994,10 @@ def slide_type(nuggets: list[dict]) -> str:
 
 
 def cmd_compose_brief(root: Path, a):
-    """Render the self-contained composer brief for ONE slide by slide type
-    (D40/D42): unified role+craft template + theme style contract + the
-    slide's routed nugget fields + layout roles/intents/defaults + deck
-    metadata. The two briefs read opposite fields of the same nugget: the
-    composer gets verbatim ``raw_text`` (never the ``information`` digest,
-    never ``visible_text``)."""
+    """Assemble the PLANNER brief for ONE slide (§5.1): planner template +
+    theme style contract + the slide's verbatim raw material + offered content
+    layouts (by role) + deck metadata. The planner routes; it writes only the
+    title. (Renamed role of the former composer brief.)"""
     sid = a.slide
     stj = load_state(root, sid)
     if not stj:
@@ -993,97 +1016,30 @@ def cmd_compose_brief(root: Path, a):
     c = ctx(root)
     inj = c.get("injection", {}).get("slide-composer", {})
     deckb = c["deck"]
+    meta_lines = [f"- Topic: {deckb.get('topic', '')}"]
+    for label, key in (("Presenter", "presenter"), ("Institution", "institution"),
+                       ("Course", "course"), ("Date", "date"), ("Footer", "footer")):
+        v = inj.get(key.upper(), deckb.get(key, ""))
+        if v:
+            meta_lines.append(f"- {label}: {v}")
+    hint = stj.get("intended_function")
     values = {
         "AUDIENCE": inj.get("AUDIENCE", deckb.get("audience", "")),
         "DECK-TYPE": inj.get("DECK-TYPE", deckb.get("type", "")),
         "LANGUAGE": inj.get("LANGUAGE", deckb.get("language", "")),
+        "STYLE-CONTRACT": "",   # style contract appended after render (below)
+        "WORKING-TITLE": stj.get("title", sid),
+        "SLIDE-TYPE": stype,
+        "INTENDED-FUNCTION": (f"**{hint}** — honor it unless the material "
+                              "clearly demands otherwise." if hint
+                              else "(none given)"),
+        "RAW-MATERIAL": raw_material_section(nugs),
+        "FIGURE-BLOCK": figure_block_section(nugs),
+        "LAYOUTS": planner_layouts_section(c),
+        "DECK-METADATA": "\n".join(meta_lines),
     }
     brief = render_template(load_template("slide-composer"), values)
     brief += style_contract_section(c)
-
-    sec = ["\n\n---\n\n## Your slide\n"]
-    sec.append(f'- Working title: "{stj.get("title", sid)}"')
-    sec.append(f"- Slide type: {stype}")
-    hint = stj.get("intended_function")
-    if hint:
-        sec.append(f"- Intended didactic function (hint): **{hint}** — "
-                   "honor it unless the raw material clearly demands "
-                   "otherwise.")
-
-    text_nuggets = [n for n in nugs if n.get("kind", "text") == "text"]
-    image_nuggets = [n for n in nugs if n.get("kind") == "image"]
-
-    if stype == "structural":
-        sec.append("")
-        sec.append("This is a **structural** slide (cover, agenda, section "
-                   "divider, or closing). Compose it from the deck metadata "
-                   "and the layout defaults only — there is no source "
-                   "material.")
-        sec.append("")
-        sec.append("Deck metadata:")
-        sec.append(f"- Topic: {deckb.get('topic', '')}")
-        for label, key in (("Presenter", "PRESENTER"),
-                           ("Institution", "INSTITUTION"),
-                           ("Course", "COURSE"), ("Date", "DATE"),
-                           ("Footer", "FOOTER")):
-            v = inj.get(key, deckb.get(key.lower(), ""))
-            if v:
-                sec.append(f"- {label}: {v}")
-
-    if stype in ("text-only", "image-text"):
-        sec.append("")
-        sec.append("## Raw source material")
-        sec.append("")
-        sec.append("Compose the slide from these verbatim excerpts ONLY."
-                   + (" The figure below rides alongside — place it, never "
-                      "paraphrase it into body text." if stype == "image-text"
-                      else ""))
-        for i, n in enumerate(text_nuggets, 1):
-            sec.append("")
-            sec.append(f"### Excerpt {i} — {n.get('source', '?')}, "
-                       f"p. {n.get('page', '?')}")
-            sec.append("")
-            sec.append(str(n.get("raw_text", "")).strip())
-
-    if stype == "image-text":
-        n = image_nuggets[0]
-        sec.append("")
-        sec.append("## Figure to place")
-        sec.append("")
-        sec.append(f"- asset: {n.get('asset', '')}")
-        sec.append(f"- what it shows: {n.get('description', '')}")
-        sec.append(f"- citation: {n.get('source', '?')}, "
-                   f"p. {n.get('page', '?')}")
-        sec.append("")
-        sec.append('Place this figure via the "image" output field on an '
-                   "image-capable layout. Compose the body from the text "
-                   "excerpts above only.")
-
-    if stype == "image-only":
-        n = image_nuggets[0]
-        sec.append("")
-        sec.append("## Figure")
-        sec.append("")
-        sec.append(f"- asset: {n.get('asset', '')}")
-        sec.append(f"- what it shows: {n.get('description', '')}")
-        ctxt = str(n.get("context_text", "")).strip()
-        if ctxt:
-            sec.append(f"- nearby text in the source (headline material): "
-                       f"{ctxt}")
-        sec.append(f"- citation: {n.get('source', '?')}, "
-                   f"p. {n.get('page', '?')}")
-        sec.append("")
-        sec.append("This figure speaks for itself: compose a HEADLINE ONLY "
-                   "(from what the figure shows and the nearby text), place "
-                   'the figure via the "image" output field, and return '
-                   "**no body text**.")
-
-    sec.append("")
-    sec.append("## Layouts you may use")
-    sec.append("")
-    sec.append(layouts_section(c))
-    brief += "\n".join(sec) + "\n"
-
     write_brief(root, a.out, brief)
     log(root, "km", "compose-brief", slide=sid, type=stype, chars=len(brief))
     print(json.dumps({"ok": True, "brief": a.out, "slide": sid,

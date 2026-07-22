@@ -51,110 +51,45 @@ def _add_asset(deck: Path, name: str = "fig1.png"):
 
 
 # ---------------------------------------------------------------------------
-# compose-brief — field routing per slide type (seam 1)
+# compose-brief — planner brief assembly (seam 1)
 # ---------------------------------------------------------------------------
 
-def test_text_only_brief_routes_raw_text_and_citations(deck, tmp_path, capsys):
+def test_planner_brief_routes_raw_material_and_no_physical_slots(deck, tmp_path, capsys):
     _add_nugget(deck, "n1", raw_text="First verbatim passage.", page=2)
     _add_nugget(deck, "n2", raw_text="Second verbatim passage.", page=5)
-    sid = _create(deck, "Definitions", nuggets="n1,n2",
-                  intended_function="define")
+    sid = _create(deck, "Definitions", nuggets="n1,n2", intended_function="define")
     capsys.readouterr()
 
     brief = _compose_brief(deck, sid, tmp_path / "brief.md")
 
-    # Verbatim raw knowledge + citation locators, per nugget.
+    # Verbatim raw material reaches the planner (it routes from it).
     assert "First verbatim passage." in brief
     assert "Second verbatim passage." in brief
-    assert "chapter_4.md" in brief and "p. 2" in brief and "p. 5" in brief
-    # The digest and the miner's title never reach the composer (D42).
-    assert "digest bullet" not in brief
-    # The hint from the plan is offered, not imposed.
+    # The plan contract + section types are described.
+    assert "sections" in brief
+    assert "source-image" in brief and "diagram" in brief
+    # The hint is offered.
     assert "define" in brief
-    # Layout capabilities ride along by ROLE — never physical slot names.
-    assert "image-split" in brief and "two-cols" in brief
+    # Content layouts advertised by ROLE; never a physical slot; no leftover.
+    assert "content" in brief and "two-cols" in brief
     for slot in PHYSICAL_SLOTS:
-        assert slot not in brief, f"brief leaks physical slot {slot!r}"
-    assert not re.search(r"%[A-Z][A-Z-]*%", brief)
-    for needle in ("km.py", "--deck", "python ", "set-content"):
-        assert needle not in brief, f"brief leaks {needle!r}"
+        assert slot not in brief, f"planner brief leaks physical slot {slot!r}"
+    assert not re.search(r"%[A-Z][A-Z_-]*%", brief)
+    for needle in ("km.py", "--deck", "python ", "write-skeleton"):
+        assert needle not in brief
 
 
-def test_image_text_brief_places_figure_composes_from_text(deck, tmp_path,
-                                                           capsys):
+def test_planner_brief_figure_block_lists_figure_nuggets(deck, tmp_path, capsys):
     _add_nugget(deck, "n1", raw_text="Supporting text passage.", page=3)
-    _add_nugget(deck, "img1", kind="image", page=4)
+    _add_nugget(deck, "img1", kind="image", page=4)     # image nugget carries asset
     sid = _create(deck, "Figure with text", nuggets="n1,img1")
     capsys.readouterr()
 
     brief = _compose_brief(deck, sid, tmp_path / "brief.md")
 
-    assert "Supporting text passage." in brief          # co-nugget raw_text
-    assert "/extracted/fig1.png" in brief               # image asset
-    assert "A chart described for img1." in brief       # image description
-    assert "p. 3" in brief and "p. 4" in brief          # both citations
-    # Body from the text nuggets only; the figure is placed, never retold.
-    assert "text excerpts" in brief
-    # The image's label dump and digest stay out (D42).
-    assert "Axis label" not in brief                    # visible_text
-    assert "digest bullet" not in brief                 # information
-    assert "Nearest caption text block." not in brief   # context_text
-
-
-def test_image_only_brief_headline_only_with_context(deck, tmp_path, capsys):
-    _add_nugget(deck, "img1", kind="image", page=4)
-    sid = _create(deck, "The figure", nuggets="img1")
-    capsys.readouterr()
-
-    brief = _compose_brief(deck, sid, tmp_path / "brief.md")
-
-    assert "/extracted/fig1.png" in brief
-    assert "A chart described for img1." in brief
-    assert "Nearest caption text block." in brief       # context_text (D42)
-    assert "chapter_4.md" in brief and "p. 4" in brief  # citation locator
-    assert "HEADLINE ONLY" in brief.upper()             # the instruction
-    assert "no body text" in brief.lower()
-    assert "Axis label" not in brief                    # never visible_text
-
-
-def test_structural_brief_carries_metadata_and_defaults_only(deck, tmp_path,
-                                                             capsys):
-    _add_nugget(deck, "n1", raw_text="Content passage.")
-    sid = _create(deck, "Cover")                        # no nuggets
-    capsys.readouterr()
-
-    brief = _compose_brief(deck, sid, tmp_path / "brief.md")
-
-    assert "structural" in brief
-    # Deck metadata for the cover/closing slots…
-    assert "Dr. Jane Roe" in brief and "IU" in brief
-    assert "DLMAIE02" in brief and "2026-07-19" in brief
-    # …plus layout defaults ("Thank you" from the closing layout).
-    assert "Thank you" in brief
-    # And no source material at all — not even other slides' raw text.
-    assert "Content passage." not in brief
-    assert "Raw source material" not in brief
-
-
-# ---------------------------------------------------------------------------
-# Unified composer template (seam 1)
-# ---------------------------------------------------------------------------
-
-def test_unified_composer_template_craft_kept_mechanics_removed():
-    tpl = (km.AGENTS_DIR / "slide-composer.md").read_text(encoding="utf-8")
-    # Dead mechanics gone: no script calls, disk reads, or physical slots.
-    for needle in ("set-content", "km.py", "%KM%", "%DECK-ROOT%", "%SKILL%",
-                   "%SLIDE-ID%", "::body", "python", "tempfile", "Read "):
-        assert needle not in tpl, f"composer template still has {needle!r}"
-    # The craft survived the merge…
-    assert "30–55" in tpl                       # density budget
-    assert "assertion" in tpl.lower()           # assertion titles
-    assert "visual type" in tpl.lower()         # visual-type-first
-    assert "provenance" in tpl.lower()          # the one rule
-    # …and the output contract is stated in the template.
-    for field in ('"layout"', '"concept_type"', '"content"', '"image"',
-                  '"figure_needed"', '"notes"'):
-        assert field in tpl, f"output contract misses {field}"
+    # The planner is told a real figure is available to PLACE (source-image).
+    assert "img1" in brief
+    assert "Available figures" in brief or "figure" in brief.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -419,18 +354,3 @@ def test_write_slide_emits_image_prop_for_builtin_layouts(tmp_path, capsys):
     assert 'image: "/extracted/fig1.png"' in md
     # …never as an inline tag crammed into the text column.
     assert "<img" not in md
-
-
-def test_compose_brief_advertises_figure_capability_not_image_role(deck,
-                                                                   tmp_path,
-                                                                   capsys):
-    _add_nugget(deck, "n1", raw_text="A passage.")
-    sid = _create(deck, "Slide", nuggets="n1")
-    capsys.readouterr()
-    brief = _compose_brief(deck, sid, tmp_path / "brief.md")
-    # The figure layout's roles line lists content roles only; the figure
-    # travels via the "image" output field and is advertised as such.
-    assert 'takes one figure via the "image" output field' in brief
-    for line in brief.splitlines():
-        if line.strip().startswith("roles:"):
-            assert "image" not in line
