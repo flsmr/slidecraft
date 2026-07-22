@@ -1,3 +1,8 @@
+<catalog>
+use: Showing how a total per category splits across series (composition over categories).
+looks: Vertical bars per category, each divided into stacked segments by series.
+fill: prop-only; :categories=[…], :series=[{name, values:[…]}]; optional :percent normalises each stack to 100%.
+</catalog>
 <!--
 StackedBarChart.vue
 

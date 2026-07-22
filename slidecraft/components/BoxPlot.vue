@@ -1,3 +1,8 @@
+<catalog>
+use: Comparing the distribution (median, quartiles, spread, outliers) of a value across groups.
+looks: A box-and-whisker per group showing quartiles, median line, whiskers, and outlier dots.
+fill: prop-only; :groups=[{label, values:[…]}] or {label, min, q1, median, q3, max, outliers}.
+</catalog>
 <!--
 BoxPlot.vue
 

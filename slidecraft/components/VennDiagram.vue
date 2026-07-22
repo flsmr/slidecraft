@@ -1,3 +1,8 @@
+<catalog>
+use: Showing overlap or shared meaning between 2 or 3 sets of concepts.
+looks: Overlapping circles labelled per set, with intersection regions carrying their own labels.
+fill: prop-only; :sets=[{label}] (2 or 3), :intersections={AB, AC, BC, ABC}.
+</catalog>
 <!--
 VennDiagram.vue
 

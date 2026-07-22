@@ -1,3 +1,8 @@
+<catalog>
+use: Showing a value across two categorical dimensions as colour intensity (e.g. demand by team and weekday).
+looks: A grid of coloured cells (single-hue ramp) addressed by row/column, with values printed inside.
+fill: prop-only; :rows=[…], :cols=[…], :data=[[…row values…], …].
+</catalog>
 <!--
 Heatmap.vue
 Props:

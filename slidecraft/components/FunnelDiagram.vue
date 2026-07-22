@@ -1,3 +1,8 @@
+<catalog>
+use: A sequential narrowing process with measurable drop-off at each stage (e.g. a conversion funnel).
+looks: Stacked trapezoid segments narrowing top to bottom, each labelled with its value and optional conversion rate.
+fill: bullet list ordered top→bottom; each item is a stage, "label | value" (or "label: value"); optional 3rd segment "| note" sets a custom right callout instead of the auto conversion rate.
+</catalog>
 <!--
 FunnelDiagram.vue
 

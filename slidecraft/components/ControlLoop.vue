@@ -1,3 +1,8 @@
+<catalog>
+use: A forward process chain with a feedback arrow returning from a later step to an earlier one.
+looks: A left-to-right chain of nodes with a distinct curved feedback arrow looping back.
+fill: bullet list; each top-level item is a node, "label | desc" (feedback from/to stay props).
+</catalog>
 <!--
 ControlLoop.vue
 

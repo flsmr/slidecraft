@@ -1,3 +1,8 @@
+<catalog>
+use: Relating two numeric variables across individual points, optionally across series.
+looks: Plotted points (optionally sized bubbles) on x/y axes, with an optional trend line per series.
+fill: prop-only; :series=[{name, points:[{x, y, r, label}]}].
+</catalog>
 <!--
 ScatterPlot.vue
 

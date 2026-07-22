@@ -1,3 +1,8 @@
+<catalog>
+use: An input → process → output structure.
+looks: Three stacked/linked panels (Input, Process, Output), each holding items.
+fill: exactly 3 items (Input / Process / Output); nested bullets are that panel's items.
+</catalog>
 <!--
 IPODiagram.vue
 

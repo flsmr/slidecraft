@@ -1,3 +1,8 @@
+<catalog>
+use: Comparing multiple series side-by-side within each category (e.g. year-over-year by quarter).
+looks: Clustered vertical bars, one cluster per category, one bar per series within the cluster.
+fill: prop-only; :categories=[…], :series=[{name, values:[…]}].
+</catalog>
 <!--
 GroupedBarChart.vue
 

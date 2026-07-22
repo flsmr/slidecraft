@@ -1,3 +1,8 @@
+<catalog>
+use: Showing how a whole splits into shares across a small number of categories.
+looks: A donut (or full pie) with slices sized by share and a legend of percentages.
+fill: prop-only; :data=[[label, value], …].
+</catalog>
 <!-- PieChart: reusable, on-style donut chart for slidev-theme-general.
      Slices sweep from 0 to their final fraction when the slide becomes active
      (respects prefers-reduced-motion). Palette + legend owned by the component.

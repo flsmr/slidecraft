@@ -1,3 +1,8 @@
+<catalog>
+use: A cross-functional process flow showing which actor or role performs each step over time.
+looks: Horizontal lanes per actor with step nodes positioned by lane and time column, linked by directed arrows.
+fill: prop-only; :lanes=[{label}], :steps=[{id, lane, column, label, type}], :links=[{from, to, label}].
+</catalog>
 <!--
 Swimlane.vue
 

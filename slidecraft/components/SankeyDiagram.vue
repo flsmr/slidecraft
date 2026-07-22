@@ -1,3 +1,8 @@
+<catalog>
+use: Showing how a quantity flows and splits between stages (e.g. energy or budget flow).
+looks: Coloured node bars connected by proportionally-wide flow ribbons, left to right.
+fill: prop-only; :nodes=[{id, label, column}], :links=[{source, target, value}].
+</catalog>
 <!--
 SankeyDiagram.vue
 

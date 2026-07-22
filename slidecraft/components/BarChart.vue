@@ -1,3 +1,8 @@
+<catalog>
+use: Comparing a single value across categories (e.g. quarterly totals).
+looks: Vertical bars growing from a baseline, one per category, value labels on the bars.
+fill: prop-only; :data=[[label, value], …].
+</catalog>
 <!-- BarChart: reusable, on-style bar chart for slidev-theme-general.
      Data in, geometry + palette + labels owned by the component, so every chart
      is on-style by construction. Bars grow smoothly from the baseline when the

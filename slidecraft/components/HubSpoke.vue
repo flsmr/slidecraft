@@ -1,3 +1,8 @@
+<catalog>
+use: A central concept with several satellite concepts radiating from it.
+looks: A central hub box with spoke boxes arranged around it, each connected by a line.
+fill: 1st top-level item = the hub; its children = spokes, each "label | desc".
+</catalog>
 <!--
 HubSpoke.vue
 

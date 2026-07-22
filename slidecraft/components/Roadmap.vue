@@ -1,3 +1,8 @@
+<catalog>
+use: A time-ordered sequence of milestones toward a goal.
+looks: Milestones placed along a horizontal time axis, evenly or proportionally spaced, marked done or pending.
+fill: bullet list; each item is a milestone, "date | title | desc"; a leading "[x]" marks it done.
+</catalog>
 <!--
 Roadmap.vue
 

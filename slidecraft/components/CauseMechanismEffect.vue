@@ -1,3 +1,8 @@
+<catalog>
+use: A cause → mechanism → effect chain making the causal path explicit.
+looks: Three linked stages left-to-right, each a labeled box with a short description.
+fill: exactly 3 items (cause / mechanism / effect), each "label | desc".
+</catalog>
 <!--
 CauseMechanismEffect.vue
 

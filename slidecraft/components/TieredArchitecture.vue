@@ -1,3 +1,8 @@
+<catalog>
+use: A layered/tiered system architecture, top tier to bottom, with optional cross-cutting concerns.
+looks: Horizontal stacked bands top-to-bottom, each holding item chips, with optional right-hand sidebars.
+fill: layer = "name | desc"; nested bullets are item chips; a "Cross-cutting" (or "Sidebars") item's children become the right-hand sidebars.
+</catalog>
 <!--
 TieredArchitecture.vue
 

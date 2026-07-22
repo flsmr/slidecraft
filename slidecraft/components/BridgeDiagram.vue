@@ -1,3 +1,8 @@
+<catalog>
+use: Connecting two states or concepts across a gap, with the enablers that close it.
+looks: Two outer pillars joined by a spanning deck, with optional enabler supports over the middle gap.
+fill: 1st item = the "from" pillar, last item = the "to" pillar (each "label | desc"); middle items are the enabler pillars.
+</catalog>
 <!--
 BridgeDiagram.vue
 

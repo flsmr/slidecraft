@@ -1,3 +1,8 @@
+<catalog>
+use: A criterion-by-criterion comparison of two concepts or options.
+looks: A two-column table with a criterion label per row and a value in each column.
+fill: row = "criterion | left | right"; a leading "= Left title | Right title" li sets the two headings.
+</catalog>
 <!--
 TwoColumnCompare.vue
 

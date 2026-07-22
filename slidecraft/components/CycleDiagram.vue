@@ -1,3 +1,8 @@
+<catalog>
+use: A repeating cyclical process with no clear start or end, arranged around a circle.
+looks: Stages arranged radially around an optional centre label, connected in a circular flow.
+fill: bullet list; each top-level item is a stage, "label | desc".
+</catalog>
 <!--
 CycleDiagram.vue
 

@@ -1,3 +1,8 @@
+<catalog>
+use: Ranking or comparing many categories by a single value, especially with long labels.
+looks: Horizontal bars extending from a baseline, one per category, optionally sorted descending.
+fill: prop-only; :data=[[label, value], …] or {label, value, color}.
+</catalog>
 <!--
 HorizontalBarChart.vue
 

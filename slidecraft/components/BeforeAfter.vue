@@ -1,3 +1,8 @@
+<catalog>
+use: A before → after comparison of a single subject across two states.
+looks: Two paired columns; each "before" point sits on the same row as its "after" counterpart.
+fill: exactly 2 items ("Before", "After"); each item's nested bullets are that side's points.
+</catalog>
 <!--
 BeforeAfter.vue
 

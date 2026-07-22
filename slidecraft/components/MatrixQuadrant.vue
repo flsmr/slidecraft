@@ -1,3 +1,8 @@
+<catalog>
+use: Plotting items across two axes to sort them into four strategic quadrants (e.g. effort vs impact).
+looks: A 2x2 grid with labelled axes and quadrant titles, optionally with plotted item dots.
+fill: prop-only; :x-axis/:y-axis={label, lowLabel, highLabel}, :quadrants=[4x {title, desc}], :items=[{label, x, y}].
+</catalog>
 <!--
 MatrixQuadrant.vue
 

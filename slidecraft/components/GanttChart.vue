@@ -1,3 +1,8 @@
+<catalog>
+use: Showing a project schedule of tasks across lanes over time, with milestones and progress.
+looks: Horizontal task bars positioned on a time axis, grouped into lanes, with progress fill and diamond milestones.
+fill: prop-only; :tasks=[{name, start, end, lane, progress}], :milestones=[{label, at}].
+</catalog>
 <!--
 GanttChart.vue
 

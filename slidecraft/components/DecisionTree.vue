@@ -1,3 +1,8 @@
+<catalog>
+use: A branching decision with yes/no criteria leading to outcomes.
+looks: A top-down tree; diamond-ish decision nodes, leaf outcome nodes, labeled edges.
+fill: nested bullet list = the tree; a label ending "?" is a decision; child "Yes:"/"No:" sets the edge.
+</catalog>
 <!--
 DecisionTree.vue
 

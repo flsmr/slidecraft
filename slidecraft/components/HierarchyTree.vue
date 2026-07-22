@@ -1,3 +1,8 @@
+<catalog>
+use: An organisational or containment hierarchy with parent-child relationships.
+looks: A top-down tree of labelled boxes, each level indented beneath its parent.
+fill: nested bullet list is the tree itself ("label | desc", recursing through children).
+</catalog>
 <!--
 HierarchyTree.vue
 

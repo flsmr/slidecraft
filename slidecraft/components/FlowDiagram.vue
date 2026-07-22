@@ -1,3 +1,8 @@
+<catalog>
+use: A linear process or pipeline with one clear direction of flow.
+looks: Left-to-right boxes joined by single arrows.
+fill: bullet list; each top-level item is a step, "title | short description".
+</catalog>
 <!--
 FlowDiagram.vue
 

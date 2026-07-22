@@ -1,3 +1,8 @@
+<catalog>
+use: A mind-map style concept with a central idea and branching sub-topics.
+looks: An emphasised central concept with primary branch boxes radiating around it and leaf items in a spaced perimeter lane.
+fill: 1st top-level item = the centre; its children = branches; grandchildren = each branch's items.
+</catalog>
 <!--
 RadialConcept.vue
 

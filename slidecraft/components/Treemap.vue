@@ -1,3 +1,8 @@
+<catalog>
+use: Showing part-to-whole composition weighted by size, when there are too many categories for a pie chart.
+looks: Nested rectangular tiles sized proportionally to value, each labelled with its name and value.
+fill: prop-only; :data=[{label, value}, …].
+</catalog>
 <!--
 Treemap.vue
 

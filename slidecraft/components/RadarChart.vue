@@ -1,3 +1,8 @@
+<catalog>
+use: Comparing one or more entities across several dimensions at once (e.g. a capability profile).
+looks: A polygon per series plotted across radial axes on a shared spider-web grid.
+fill: prop-only; :axes=[…], :series=[{name, values:[…]}].
+</catalog>
 <!--
 RadarChart.vue
 

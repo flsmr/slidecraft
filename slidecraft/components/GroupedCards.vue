@@ -1,3 +1,8 @@
+<catalog>
+use: A set of parallel concepts or steps shown as cards, each with its own sub-items (e.g. programme pillars).
+looks: A grid of cards, each with an icon, title, optional badge, description, and a bullet list of items.
+fill: card = "icon Label | badge"; nested bullets are that card's items.
+</catalog>
 <!--
 GroupedCards.vue
 

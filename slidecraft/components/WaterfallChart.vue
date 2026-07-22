@@ -1,3 +1,8 @@
+<catalog>
+use: Showing how a starting value is built up or drawn down to a total through a sequence of changes.
+looks: Floating bars stepping from a start bar through signed delta bars to a total bar.
+fill: prop-only; :items=[{label, value, type: 'start'|'delta'|'total'}].
+</catalog>
 <!--
 WaterfallChart.vue
 

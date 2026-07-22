@@ -1,3 +1,8 @@
+<catalog>
+use: Trends over an ordered axis (typically time), for one or more series.
+looks: One or more connected lines across shared x-labels, with optional filled area and point markers.
+fill: prop-only; :series=[{name, points:[[x,y], …]}] or :data=[[label,value], …] for a single series.
+</catalog>
 <!--
 LineChart.vue
 

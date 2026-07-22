@@ -1,3 +1,8 @@
+<catalog>
+use: A maturity or progression model with ordered levels from lowest to highest.
+looks: Ascending steps low-to-high, each a labelled tread, with the current level markable.
+fill: bullet list ordered lowest→highest; each item is a level, "label | desc" (the current level stays a prop).
+</catalog>
 <!--
 Staircase.vue
 Props:

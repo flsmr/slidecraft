@@ -1,3 +1,8 @@
+<catalog>
+use: A containment hierarchy where concepts sit inside other concepts.
+looks: Nested labelled boxes, each parent enclosing its children, drawn outer to inner.
+fill: nested bullet list is the containment tree itself, recursing through children.
+</catalog>
 <!--
 NestedBox.vue
 

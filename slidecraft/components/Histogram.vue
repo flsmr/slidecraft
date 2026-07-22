@@ -1,3 +1,8 @@
+<catalog>
+use: Showing the distribution of a single numeric variable.
+looks: Adjacent vertical bars over binned x-ranges, with an optional dashed mean line.
+fill: prop-only; :values=[…] (auto-binned) or :bins=[{x0, x1, count}].
+</catalog>
 <!--
 Histogram.vue
 

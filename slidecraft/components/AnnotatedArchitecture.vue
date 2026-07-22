@@ -1,3 +1,8 @@
+<catalog>
+use: A system architecture diagram with freely positioned blocks, connections, and prose annotations.
+looks: Labelled blocks placed on a coordinate canvas, joined by connector lines, with callout annotations.
+fill: prop-only; :blocks=[{id, label, x, y, w, h}], :connections=[{from, to, label}], :annotations=[{at, text}].
+</catalog>
 <!--
 AnnotatedArchitecture.vue
 

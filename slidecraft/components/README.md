@@ -162,6 +162,13 @@ Per-component mapping (top-level `<li>` unless noted):
 list-shaped, so they keep prop-based authoring. The numerical charts also stay prop-based
 (they already take `:data`).
 
+> **Source of truth for the diagram designer.** Each component's routing hint,
+> appearance, and fill idiom also live in a `<catalog>` block at the top of its
+> `.vue` file (`use` / `looks` / `fill`). `km component_catalog()` extracts those
+> blocks to build the diagram designer's prompt, so **adding or removing a
+> component here automatically adds or removes it from that prompt** (D14). Keep a
+> component's `<catalog>` row and its table row above in sync; the `.vue` block wins.
+
 ## Adding a new chart type (line, stacked bar, …)
 
 Copy an existing component and keep the same three conventions, so agents and readers can

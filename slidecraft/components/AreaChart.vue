@@ -1,3 +1,8 @@
+<catalog>
+use: Showing the trend and relative contribution of multiple series over an ordered axis.
+looks: Filled areas beneath lines across shared x-labels, stacked or overlapping.
+fill: prop-only; :x-labels=[…], :series=[{name, values:[…]}].
+</catalog>
 <!--
 AreaChart.vue
 

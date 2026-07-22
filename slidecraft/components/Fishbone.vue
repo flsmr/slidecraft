@@ -1,3 +1,8 @@
+<catalog>
+use: A root-cause (Ishikawa) analysis grouping causes into categories against a single effect.
+looks: A horizontal spine ending in the effect head, with category branches alternating above/below carrying their causes.
+fill: optional childless 1st item = the effect; every other top-level item is a category, nested bullets are its causes.
+</catalog>
 <!--
 Fishbone.vue
 

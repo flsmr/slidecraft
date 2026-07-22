@@ -1,3 +1,8 @@
+<catalog>
+use: Showing how individual items changed between two points or periods.
+looks: Two vertical axes (before/after) with a line per item connecting its two values.
+fill: prop-only; :items=[{label, before, after}].
+</catalog>
 <!--
 SlopeChart.vue
 

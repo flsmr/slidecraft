@@ -61,3 +61,15 @@ def test_component_catalog_renders_present_and_flags_missing(tmp_path):
     assert "GenBox" not in table                        # infra excluded
     assert "_slotAuthoring" not in table
     assert missing == ["DecisionTree"]
+
+
+def test_shipped_components_all_have_catalog_metadata():
+    """Every shipped diagram component (minus infra) carries a <catalog> block,
+    so the diagram designer's prompt lists them all with real metadata."""
+    table, missing = km.component_catalog(km.COMPONENTS_DIR)
+    assert missing == [], f"components missing <catalog> metadata: {missing}"
+    # Spot-check a few representative names render with their fields.
+    for name in ("FlowDiagram", "DecisionTree", "TwoColumnCompare",
+                 "CauseMechanismEffect", "IPODiagram"):
+        assert f"**{name}**" in table
+    assert "no catalog metadata" not in table

@@ -1,3 +1,8 @@
+<catalog>
+use: A hierarchy of levels narrowing from a broad base to a narrow apex (e.g. vision to execution).
+looks: A stacked pyramid, widest at the bottom to narrowest at the top, with optional side description callouts.
+fill: bullet list ordered top→bottom; each item is a level, "label | desc".
+</catalog>
 <!--
 PyramidDiagram.vue
 
