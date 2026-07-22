@@ -1394,6 +1394,87 @@ def cmd_write_skeleton(root: Path, a):
                       "pending_sections": pending, "placed_sections": placed}))
 
 
+# ---------- design brief (Stage-2 assemble, §6) ----------
+
+def _designer_role_for(stype: str) -> str:
+    return {"text": "text-designer", "diagram": "diagram-designer",
+            "image": "image-designer"}.get(stype, "")
+
+
+def nuggets_material(root: Path, nug_ids) -> str:
+    """Verbatim material for a set of nugget ids: raw_text for text nuggets,
+    visible_text lines for image nuggets, each with a provenance locator."""
+    parts = []
+    for nid in nug_ids:
+        n = load_nugget(root, nid)
+        if not n:
+            continue
+        raw = nugget_raw(n)                 # existing helper: raw_text / visible_text
+        if raw:
+            parts.append(f"[{nugget_locator(n)}]\n{raw}")
+    return "\n\n".join(parts) if parts else "(no material)"
+
+
+def _exact_text(root: Path, nug_ids) -> str:
+    """The verbatim on-figure labels an image designer may render: every image
+    nugget's visible_text, one per line. Empty when the routed nuggets carry
+    none (the planner's instructions then carry the wording)."""
+    lines = []
+    for nid in nug_ids:
+        n = load_nugget(root, nid) or {}
+        vt = n.get("visible_text")
+        if isinstance(vt, list):
+            lines.extend(str(x) for x in vt)
+    return "\n".join(lines) if lines else "(none — render only what the instructions name)"
+
+
+def cmd_design_brief(root: Path, a):
+    """Stage-2 assemble (§6): read the plan sidecar, render the designer
+    template for this slide+section with routed material + full slide raw
+    material (D13) + type-specific values."""
+    sid, role = a.slide, a.section
+    stj = load_state(root, sid)
+    plan = stj.get("plan") or {}
+    sec = (plan.get("sections") or {}).get(role)
+    if not sec:
+        gate_exit(f"ERROR: slide {sid} has no planned section {role!r}")
+    stype = sec["type"]
+    designer = _designer_role_for(stype)
+    if not designer:
+        gate_exit(f"ERROR: section {role!r} type {stype!r} has no designer "
+                  "(source-image is placed by write-skeleton)")
+    c = ctx(root)
+    inj = c.get("injection", {}).get(designer, {})
+    deckb = c["deck"]
+    all_nug_ids = assoc(root).get(sid, [])
+    values = {
+        "AUDIENCE": inj.get("AUDIENCE", deckb.get("audience", "")),
+        "DECK-TYPE": inj.get("DECK-TYPE", deckb.get("type", "")),
+        "LANGUAGE": inj.get("LANGUAGE", deckb.get("language", "")),
+        "CORE-MESSAGE": plan.get("title", stj.get("title", sid)),
+        "SECTION-ROLE": role,
+        "INSTRUCTIONS": sec.get("instructions", ""),
+        "NUGGETS": nuggets_material(root, sec.get("nuggets", [])),
+        "RAW-MATERIAL": nuggets_material(root, all_nug_ids),   # D13: full slide
+    }
+    if stype == "diagram":
+        table, _missing = component_catalog(COMPONENTS_DIR)
+        values["COMPONENT-CATALOG"] = table
+    if stype == "image":
+        values["EXACT-TEXT"] = _exact_text(root, sec.get("nuggets", []))
+        values["ASPECT-RATIO"] = aspect_ratio_for(role)
+    # Style contract only for text/diagram (image has no %STYLE-CONTRACT%).
+    body = render_template(load_template(designer),
+                           {**values, "STYLE-CONTRACT": ""} if stype != "image" else values)
+    if stype != "image":
+        body += style_contract_section(c)
+    write_brief(root, a.out, body)
+    log(root, "km", "design-brief", slide=sid, section=role, type=stype,
+        chars=len(body))
+    print(json.dumps({"ok": True, "slide": sid, "section": role, "type": stype,
+                      "role": designer, "brief": a.out, "chars": len(body)}))
+
+
 # ---------- nugget validation + persist core ----------
 
 class Rejection(Exception):
@@ -2066,6 +2147,7 @@ def main():
     cb = sub.add_parser("compose-brief"); cb.add_argument("--slide", required=True); cb.add_argument("--out", required=True)
     ws = sub.add_parser("write-slide"); ws.add_argument("--slide", required=True); ws.add_argument("--file", required=True)
     wsk = sub.add_parser("write-skeleton"); wsk.add_argument("--slide", required=True); wsk.add_argument("--file", required=True)
+    db = sub.add_parser("design-brief"); db.add_argument("--slide", required=True); db.add_argument("--section", required=True); db.add_argument("--out", required=True)
     c = sub.add_parser("create-slide"); c.add_argument("--title", required=True); c.add_argument("--nuggets", default=""); c.add_argument("--after", default="end"); c.add_argument("--parked", action="store_true"); c.add_argument("--intended-function", dest="intended_function", default=None)
     an = sub.add_parser("associate-nuggets"); an.add_argument("--slide", required=True); an.add_argument("--nuggets", required=True)
     m = sub.add_parser("merge-slides"); m.add_argument("--slides", required=True); m.add_argument("--title", default="")
@@ -2084,6 +2166,7 @@ def main():
      "plan-brief": cmd_plan_brief, "write-plan": cmd_write_plan,
      "compose-brief": cmd_compose_brief, "write-slide": cmd_write_slide,
      "write-skeleton": cmd_write_skeleton,
+     "design-brief": cmd_design_brief,
      "create-slide": cmd_create, "associate-nuggets": cmd_associate,
      "merge-slides": cmd_merge, "park-slide": cmd_park,
      "unpark-slide": cmd_unpark,
