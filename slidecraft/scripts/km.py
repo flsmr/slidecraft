@@ -84,8 +84,35 @@ def assoc(root: Path) -> dict:
 def write_assoc(root: Path, a: dict):
     (root / "associations.json").write_text(json.dumps(a, indent=2, ensure_ascii=False), encoding="utf-8")
 
+VARIANT_RE = re.compile(r"_v\d+$")
+
+
+def is_variant_file(stem: str) -> bool:
+    """True when a slide-file stem is an alternative rendering (``<sid>_vN``),
+    not a canonical slide. Canonical stems never end in ``_v<digits>`` — a title
+    slug contains no underscore (slugify maps to hyphens), so the match is
+    unambiguous (D47)."""
+    return bool(VARIANT_RE.search(stem))
+
+
+def variant_files(root: Path, sid: str) -> list[Path]:
+    """A slide's renderings in ring order: canonical ``<sid>.md`` first, then
+    ``<sid>_v1.md``, ``<sid>_v2.md`` … in numeric order. Empty when the
+    canonical file is absent (D47)."""
+    canonical = root / "slides" / f"{sid}.md"
+    if not canonical.exists():
+        return []
+    sibs = [p for p in (root / "slides").glob(f"{sid}_v*.md")
+            if re.fullmatch(rf"{re.escape(sid)}_v\d+", p.stem)]
+    sibs.sort(key=lambda p: int(re.search(r"_v(\d+)$", p.stem).group(1)))
+    return [canonical, *sibs]
+
+
 def slide_files(root: Path) -> list[Path]:
-    return sorted((root / "slides").glob("*.md"))
+    # Variant files (<sid>_vN.md) are alternative renderings of an existing
+    # slide, not slides — invisible to order/validate/budget (D47).
+    return sorted(p for p in (root / "slides").glob("*.md")
+                  if not is_variant_file(p.stem))
 
 def order(root: Path) -> list[str]:
     """ACTIVE slide IDs in slides.md order.
@@ -1640,6 +1667,14 @@ def cmd_set_content(root: Path, a):
         notes_added=notes_added)
     print(json.dumps({"ok": True, "slide": a.slide, "notes_added": notes_added}))
 
+def cmd_get_variants(root: Path, a):
+    """Pure read: a slide's renderings (canonical + ``_vN``) by glob (D47)."""
+    files = variant_files(root, a.slide)
+    if not files:
+        sys.exit(f"ERROR: slide {a.slide} has no canonical slide file")
+    print(json.dumps({"ok": True, "slide": a.slide, "count": len(files),
+                      "files": [p.name for p in files]}))
+
 def cmd_validate(root: Path, a):
     errs = []
     ids = order(root)                      # active includes only
@@ -1703,6 +1738,7 @@ def main():
     pk = sub.add_parser("park-slide"); pk.add_argument("--slide", required=True); pk.add_argument("--reason", default="")
     up = sub.add_parser("unpark-slide"); up.add_argument("--slide", required=True)
     s = sub.add_parser("set-content"); s.add_argument("--slide", required=True); s.add_argument("--body-file", required=True)
+    gv = sub.add_parser("get-variants"); gv.add_argument("--slide", required=True)
     sub.add_parser("validate")
     a = ap.parse_args()
     root = find_deck_root(a.deck)
@@ -1713,7 +1749,7 @@ def main():
      "create-slide": cmd_create, "associate-nuggets": cmd_associate,
      "merge-slides": cmd_merge, "park-slide": cmd_park,
      "unpark-slide": cmd_unpark,
-     "set-content": cmd_set_content, "validate": cmd_validate}[a.cmd](root, a)
+     "set-content": cmd_set_content, "get-variants": cmd_get_variants, "validate": cmd_validate}[a.cmd](root, a)
 
 if __name__ == "__main__":
     main()
