@@ -339,7 +339,7 @@ def test_prewarm_refuses_existing_deck(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# D47 — transient status and pidfile ignored in git
+# transient status and pidfile ignored in git
 # ---------------------------------------------------------------------------
 
 
@@ -350,3 +350,22 @@ def test_gitignore_excludes_transient_preview_files(tmp_path):
     assert "node_modules/" in gi                        # unchanged
     assert ".draft-status.json" in gi                   # transient status
     assert "logs/serve_deck.json" in gi                 # server pidfile
+
+
+# ---------------------------------------------------------------------------
+# D47 — variant-cycling browser wiring (vite.config.ts + setup/shortcuts.ts)
+# ---------------------------------------------------------------------------
+
+
+def test_scaffold_writes_variant_browser_wiring(tmp_path):
+    deck = tmp_path / "deck"
+    deck.mkdir()
+    ans = _answers({"type": "builtin", "source": "default"})
+
+    scaffold_deck.scaffold(deck, ans)
+
+    assert (deck / "vite.config.ts").exists()
+    assert (deck / "setup" / "shortcuts.ts").exists()
+    vite = (deck / "vite.config.ts").read_text(encoding="utf-8")
+    assert "/__variant" in vite            # the cycle endpoint
+    assert "cycle-variant" in vite         # shells out to km

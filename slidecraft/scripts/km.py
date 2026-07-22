@@ -84,8 +84,35 @@ def assoc(root: Path) -> dict:
 def write_assoc(root: Path, a: dict):
     (root / "associations.json").write_text(json.dumps(a, indent=2, ensure_ascii=False), encoding="utf-8")
 
+VARIANT_RE = re.compile(r"_v\d+$")
+
+
+def is_variant_file(stem: str) -> bool:
+    """True when a slide-file stem is an alternative rendering (``<sid>_vN``),
+    not a canonical slide. Canonical stems never end in ``_v<digits>`` — a title
+    slug contains no underscore (slugify maps to hyphens), so the match is
+    unambiguous (D47)."""
+    return bool(VARIANT_RE.search(stem))
+
+
+def variant_files(root: Path, sid: str) -> list[Path]:
+    """A slide's renderings in ring order: canonical ``<sid>.md`` first, then
+    ``<sid>_v1.md``, ``<sid>_v2.md`` … in numeric order. Empty when the
+    canonical file is absent (D47)."""
+    canonical = root / "slides" / f"{sid}.md"
+    if not canonical.exists():
+        return []
+    sibs = [p for p in (root / "slides").glob(f"{sid}_v*.md")
+            if re.fullmatch(rf"{re.escape(sid)}_v\d+", p.stem)]
+    sibs.sort(key=lambda p: int(re.search(r"_v(\d+)$", p.stem).group(1)))
+    return [canonical, *sibs]
+
+
 def slide_files(root: Path) -> list[Path]:
-    return sorted((root / "slides").glob("*.md"))
+    # Variant files (<sid>_vN.md) are alternative renderings of an existing
+    # slide, not slides — invisible to order/validate/budget (D47).
+    return sorted(p for p in (root / "slides").glob("*.md")
+                  if not is_variant_file(p.stem))
 
 def order(root: Path) -> list[str]:
     """ACTIVE slide IDs in slides.md order.
@@ -1539,8 +1566,16 @@ def cmd_merge(root: Path, a):
          "merged_from": parts}, indent=2), encoding="utf-8")
     ids = order(root)
     pos = min((ids.index(s) for s in parts if s in ids), default=len(ids))
+    # D47: preserve each predecessor (and its existing variants) as a variant of
+    # the new merged slide, for provenance — the user can cycle back to see what
+    # was merged. The fresh union compose (orchestrator runs it after merge, D31)
+    # stays the active canonical <sid>.md. Renames only; the state .json is
+    # subsumed by the merged slide's single shared state file.
+    vn = 0
     for s in parts:
-        (root / "slides" / f"{s}.md").unlink(missing_ok=True)
+        for rendering in variant_files(root, s):   # canonical + its _vN, in order
+            vn += 1
+            rendering.replace(root / "slides" / f"{sid}_v{vn}.md")
         (root / "slides" / f"{s}.json").unlink(missing_ok=True)
         A.pop(s, None)
         if s in ids: ids.remove(s)
@@ -1715,6 +1750,48 @@ def cmd_set_content(root: Path, a):
         notes_added=notes_added)
     print(json.dumps({"ok": True, "slide": a.slide, "notes_added": notes_added}))
 
+def cmd_get_variants(root: Path, a):
+    """Pure read: a slide's renderings (canonical + ``_vN``) by glob (D47)."""
+    files = variant_files(root, a.slide)
+    if not files:
+        sys.exit(f"ERROR: slide {a.slide} has no canonical slide file")
+    print(json.dumps({"ok": True, "slide": a.slide, "count": len(files),
+                      "files": [p.name for p in files]}))
+
+
+CYCLE_TMP_SUFFIX = ".cycletmp"
+
+
+def cmd_cycle_variant(root: Path, a):
+    """Ring-rotate which of a slide's renderings is the canonical
+    ``slides/<sid>.md``, among it + its ``_vN`` siblings, by rename (D47).
+
+    ``up`` shifts forward (the next alternative becomes active); ``down`` is the
+    exact inverse. ``Path.replace`` is atomic per rename; a single ``.cycletmp``
+    scratch (not ``.md``, so no glob ever sees it) carries the file that would be
+    overwritten first. ``slides.md`` and the shared state ``.json`` are never
+    touched — the active file IS the selection."""
+    sd = root / "slides"
+    tmp = sd / f"{a.slide}{CYCLE_TMP_SUFFIX}"
+    tmp.unlink(missing_ok=True)                 # clear a stale interrupted cycle
+    paths = variant_files(root, a.slide)        # [canonical, _v1, …, _v(k-1)]
+    if len(paths) < 2:
+        print(json.dumps({"ok": True, "cycled": False, "count": len(paths)}))
+        return
+    if a.dir == "up":
+        paths[0].replace(tmp)                   # active -> temp
+        for i in range(1, len(paths)):
+            paths[i].replace(paths[i - 1])      # _vi -> _v(i-1) (v1 -> active)
+        tmp.replace(paths[-1])                  # old active -> last slot
+    else:                                       # down: reverse cascade
+        paths[-1].replace(tmp)                  # last -> temp
+        for i in range(len(paths) - 1, 0, -1):
+            paths[i - 1].replace(paths[i])      # _v(i-1) -> _vi (active -> v1)
+        tmp.replace(paths[0])                   # old last -> active
+    log(root, "km", "cycle-variant", slide=a.slide, dir=a.dir, count=len(paths))
+    print(json.dumps({"ok": True, "cycled": True, "count": len(paths),
+                      "dir": a.dir}))
+
 def cmd_validate(root: Path, a):
     errs = []
     ids = order(root)                      # active includes only
@@ -1780,6 +1857,8 @@ def main():
     s = sub.add_parser("set-content"); s.add_argument("--slide", required=True); s.add_argument("--body-file", required=True)
     stp = sub.add_parser("set-status"); stp.add_argument("--phase", required=True); stp.add_argument("--detail", default=""); stp.add_argument("--label", default="")
     sub.add_parser("clear-status")
+    gv = sub.add_parser("get-variants"); gv.add_argument("--slide", required=True)
+    cv = sub.add_parser("cycle-variant"); cv.add_argument("--slide", required=True); cv.add_argument("--dir", required=True, choices=["up", "down"])
     sub.add_parser("validate")
     a = ap.parse_args()
     root = find_deck_root(a.deck)
@@ -1790,8 +1869,10 @@ def main():
      "create-slide": cmd_create, "associate-nuggets": cmd_associate,
      "merge-slides": cmd_merge, "park-slide": cmd_park,
      "unpark-slide": cmd_unpark,
-     "set-content": cmd_set_content, "validate": cmd_validate,
-     "set-status": cmd_set_status, "clear-status": cmd_clear_status}[a.cmd](root, a)
+     "set-content": cmd_set_content,
+     "get-variants": cmd_get_variants, "cycle-variant": cmd_cycle_variant,
+     "set-status": cmd_set_status, "clear-status": cmd_clear_status,
+     "validate": cmd_validate}[a.cmd](root, a)
 
 if __name__ == "__main__":
     main()

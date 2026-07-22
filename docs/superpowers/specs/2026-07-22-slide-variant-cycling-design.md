@@ -218,6 +218,27 @@ to force a reload; or have `shortcuts.ts` call `$nav.go(current)` /
 `location.reload()` after the swap resolves. If **(b)** is not exposed, use the
 composer-emitted `<sid>` marker fallback (§6.2).
 
+### 9.1 Spike result (2026-07-22, on a live OneDrive-hosted deck)
+
+Run against a real Slidev deck under OneDrive (`reference-checker`):
+
+- **(b) filepath — ✅ confirmed.** `nav.currentSlideRoute.meta.slide.filepath`
+  returns the slide's source path (`…/slides/<sid>.md`); `currentSlideRoute` is a
+  plain object (no `.value` unwrap needed), and `nav.prevSlide/nextSlide/go/
+  currentPage` all exist — so `shortcuts.ts` needs **no** marker fallback.
+- **nav persistence — ✅ (via URL).** A full reload returns to the same slide index
+  (the URL carries it), so no `nav.go(current)` fallback is needed for the reload
+  path itself.
+- **(a) reload-on-rename — ❌ on OneDrive, FIXED via polling.** The rename did **not**
+  propagate to the running dev server — confirmed that even a forced full browser
+  reload showed stale content, because Vite's native FS-event watcher never fires on
+  OneDrive-synced folders. This is not a flaw in the rename mechanic; it is the
+  well-known Vite/chokidar limitation on OneDrive/network/WSL drives. **Fix applied:**
+  the scaffolded `vite.config.ts` sets `server.watch.usePolling: true` (interval 300ms),
+  which reads mtimes directly and catches the rename. **Still to confirm live** on a
+  freshly-scaffolded deck (this deck predated the wiring): that with polling on, a
+  `cycle-variant` rename reloads the deck in place on the same slide.
+
 ## 10. Test plan
 
 Deterministic `km` logic is unit-tested like the existing `test_km_*.py`; browser
