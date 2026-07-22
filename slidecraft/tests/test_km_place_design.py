@@ -8,7 +8,7 @@ from pathlib import Path
 
 from slidecraft.scripts import km
 from slidecraft.tests.test_km_plan import _add_nugget, _create
-from slidecraft.tests.test_km_write_skeleton import _write_skeleton, _md, _add_image_nugget
+from slidecraft.tests.test_km_write_skeleton import _write_skeleton, _md
 
 
 def _place(deck: Path, sid: str, role: str, stype: str, reply: str, asset=None):
@@ -105,3 +105,16 @@ def test_partial_placement_leaves_slide_planned(deck, tmp_path, capsys):
     _place(deck, sid, "left", "text", "- only left")
     out = json.loads(capsys.readouterr().out)
     assert out["slide_state"] == "planned"             # right still pending
+
+    md = _md(deck, sid)
+    assert "- only left" in md                          # left section placed
+    assert md.count("· pending") == 1                   # only right still a wireframe
+    assert "> 🚧 **text** — r" in md                     # right's placeholder untouched
+
+
+def test_sanitize_icons_neutralizes_paired_hallucinated_tag():
+    out = km.sanitize_icons("<div><carbon-bogus></carbon-bogus>"
+                            "<carbon-arrow-right/></div>")
+    assert "carbon-bogus" not in out            # both tags of the bad icon gone
+    assert "<carbon-circle-solid/>" in out      # replaced with the fallback
+    assert "<carbon-arrow-right/>" in out       # allowlisted icon kept

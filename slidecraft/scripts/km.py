@@ -1480,10 +1480,11 @@ def cmd_design_brief(root: Path, a):
 ICON_ALLOWLIST_FILE = (Path(__file__).resolve().parent.parent
                        / "references" / "icon-allowlist.txt")
 ICON_FALLBACK = "carbon-circle-solid"
-# Iconify-style icon components: <collection-name/> or <collection:name/>,
-# collection is a known short code. Kebab or colon form, self-closing or paired.
+# Iconify-style icon components: opening, self-closing, OR closing form of a
+# known-collection name (kebab or colon). We neutralize hallucinated icons in
+# any form so a paired <carbon-x></carbon-x> can't leave a mismatched tag.
 _ICON_TAG_RE = re.compile(
-    r"<((?:carbon|ph|mdi|tabler|ic|bi|fa|fa6-solid|lucide|material-symbols)"
+    r"</?((?:carbon|ph|mdi|tabler|ic|bi|fa|fa6-solid|lucide|material-symbols)"
     r"[-:][a-z0-9-]+)\s*/?>", re.I)
 
 
@@ -1492,19 +1493,22 @@ def _load_icon_allowlist() -> set[str]:
         return set()
     return {ln.strip().replace(":", "-").lower()
             for ln in ICON_ALLOWLIST_FILE.read_text(encoding="utf-8-sig").splitlines()
-            if ln.strip() and not ln.startswith("#")}
+            if ln.strip() and not ln.strip().startswith("#")}
 
 
 def sanitize_icons(markup: str) -> str:
     """Replace any Iconify icon component whose name is not allow-listed with a
-    safe fallback, so a hallucinated icon never crashes the Vite transform. The
-    component library forbids hand-drawn objects → real icon + label, and this
-    guarantees the 'real' part deterministically."""
+    safe fallback, in opening/self-closing OR paired form, so a hallucinated
+    icon never crashes the Vite transform."""
     allow = _load_icon_allowlist()
 
     def repl(m):
         name = m.group(1).replace(":", "-").lower()
-        return m.group(0) if name in allow else f"<{ICON_FALLBACK}/>"
+        if name in allow:
+            return m.group(0)                        # keep allowlisted (any form)
+        if m.group(0).lstrip().startswith("</"):
+            return ""                                # drop the closing tag of a bad icon
+        return f"<{ICON_FALLBACK}/>"                 # replace opening/self-closing
     return _ICON_TAG_RE.sub(repl, markup)
 
 
