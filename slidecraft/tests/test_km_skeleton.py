@@ -5,7 +5,6 @@ shared nugget_info_section helper."""
 from __future__ import annotations
 
 import json
-from argparse import Namespace
 from pathlib import Path
 
 from slidecraft.scripts import km

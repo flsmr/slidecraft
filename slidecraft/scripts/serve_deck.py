@@ -87,7 +87,8 @@ def pid_alive(pid: int) -> bool:
         return False
     if IS_WINDOWS:
         out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}"],
-                             capture_output=True, text=True)
+                             capture_output=True, text=True,
+                             encoding="utf-8", errors="ignore")
         return str(pid) in out.stdout
     try:
         os.kill(pid, 0)
