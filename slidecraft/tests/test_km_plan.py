@@ -80,7 +80,7 @@ def _write_plan(deck: Path, plan: dict, tmp_path: Path):
 # Park mechanics (D34)
 # ---------------------------------------------------------------------------
 
-def test_park_moves_include_to_parked_block_and_frees_budget(deck, capsys):
+def test_park_moves_include_to_backup_appendix_and_frees_budget(deck, capsys):
     for i in range(6):                      # budget (6) full
         _create(deck, f"Slide {i}")
     victims = km.order(deck)
@@ -92,7 +92,10 @@ def test_park_moves_include_to_parked_block_and_frees_budget(deck, capsys):
 
     md = (deck / "slides.md").read_text(encoding="utf-8")
     assert victims[0] not in km.order(deck)          # out of the active order
-    assert "<!-- parked" in md and victims[0] in md  # …but still referenced
+    assert "<!-- parked" not in md                   # no longer hidden (D46)
+    assert km.BACKUP_TITLE in md and victims[0] in md  # rendered in the appendix
+    body = (deck / "slides" / f"{victims[0]}.md").read_text(encoding="utf-8")
+    assert km.needs_composition(body)                # a digest preview, not composed
     stj = _state(deck, victims[0])
     assert stj["state"] == "parked"
     assert stj["parked_reason"] == "off-storyline"
@@ -109,10 +112,20 @@ def test_park_refuses_locked_slide(deck, capsys):
     assert "locked" in str(ei.value)
 
 
-def test_unpark_restores_state_and_needs_free_slot(deck, capsys):
+def _compose_body(deck: Path, sid: str, text: str = "Real composed content."):
+    """Give a slide a real (non-placeholder) body, as the composer would."""
+    (deck / "slides" / f"{sid}.md").write_text(
+        f"---\nlayout: default\ntitle: {sid}\n---\n\n# {sid}\n\n{text}\n",
+        encoding="utf-8")
+
+
+def test_unpark_restores_composed_body_and_needs_free_slot(deck, capsys):
     a = _create(deck, "A")
     _set_state(deck, a, "composed")
+    _compose_body(deck, a)                   # a real body — park must not clobber it
     km.cmd_park(deck, Namespace(slide=a, reason="make room"))
+    assert not km.needs_composition(         # composed body kept in the appendix
+        (deck / "slides" / f"{a}.md").read_text(encoding="utf-8"))
     for i in range(6):
         _create(deck, f"Fill {i}")
     capsys.readouterr()
@@ -130,6 +143,21 @@ def test_unpark_restores_state_and_needs_free_slot(deck, capsys):
     assert "parked_reason" not in _state(deck, a)
 
 
+def test_unpark_of_a_digest_slide_resets_to_pending_for_recompose(deck, capsys):
+    """A never-composed parked slide is a digest preview, not a real slide (D46):
+    unparking it discards the digest and asks for a real composition."""
+    a = _create(deck, "A")                   # never composed -> digest on park
+    km.cmd_park(deck, Namespace(slide=a, reason="off-storyline"))
+    capsys.readouterr()
+
+    km.cmd_unpark(deck, Namespace(slide=a))
+    out = json.loads(capsys.readouterr().out.strip())
+    assert out["needs_compose"] is True
+    assert _state(deck, a)["state"] == "pending"     # awaiting a real compose
+    body = (deck / "slides" / f"{a}.md").read_text(encoding="utf-8")
+    assert "awaiting composition" in body and km.DIGEST_MARK not in body
+
+
 def test_create_parked_uses_no_active_slot(deck, capsys):
     for i in range(6):
         _create(deck, f"Fill {i}")
@@ -138,6 +166,17 @@ def test_create_parked_uses_no_active_slot(deck, capsys):
     assert _state(deck, sid)["state"] == "parked"
     assert sid not in km.order(deck)
     assert sid in (deck / "slides.md").read_text(encoding="utf-8")
+
+
+def test_directly_parked_slide_shows_the_nugget_digest(deck, capsys):
+    """A directly-parked create is never composed, so km fills a digest preview
+    body from the nugget's distilled ``information`` (D46) — no composer call."""
+    _add_nugget(deck, "n1", information="- half a millimetre tolerance\n- STL/FDM")
+    sid = _create(deck, "Side detail", nuggets="n1", parked=True)
+    body = (deck / "slides" / f"{sid}.md").read_text(encoding="utf-8")
+    assert km.needs_composition(body)                    # marked as a preview
+    assert "half a millimetre tolerance" in body         # the miner's digest shows
+    assert "Verbatim passage backing n1." in body        # raw text in speaker notes
 
 
 def test_validate_green_with_parked_and_reports_them(deck, capsys):
@@ -150,6 +189,8 @@ def test_validate_green_with_parked_and_reports_them(deck, capsys):
     assert out["ok"] is True
     assert out["parked"] == [a]
     assert out["slides"] == 1               # active only
+    assert out["backup_slides"] == [        # listed with title + reason (D46)
+        {"slide": a, "title": "A", "reason": "r"}]
 
 
 # ---------------------------------------------------------------------------

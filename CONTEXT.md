@@ -3,7 +3,7 @@
 A Claude Code toolkit that turns source material into structured, traceable, and reusable
 Slidev decks via a workflow of agents whose file and state mutations run through
 deterministic scripts (the knowledge manager, `km.py`). This glossary is the ubiquitous
-language of the agentic presentation framework (`architecture_proposal.md` = what/why,
+language of the agentic presentation framework (`ARCHITECTURE.md` = what/why,
 `SPEC.md` = how).
 
 ## Language
@@ -84,9 +84,9 @@ _Avoid_: figure nugget, asset, visual
 
 **Backlog**:
 All nuggets that no slide references. Now **largely vestigial**: every nugget always gets a
-slide, and low-priority material is hidden as a **parked slide** (D34), not left unplaced.
-Backlog therefore only appears transiently during corrections (a dissociate without a
-re-associate). Hidden knowledge is visible parked slides, not an abstract pool.
+slide, and low-priority / off-storyline material is set aside as a **Backup slide** (D34/D46),
+not left unplaced. Backlog therefore only appears transiently during corrections (a dissociate
+without a re-associate). Set-aside knowledge is *visible Backup slides*, not an abstract pool.
 _Avoid_: pool, orphans, unused nuggets
 
 ### Composition concepts
@@ -96,6 +96,42 @@ A slide that gives the deck its shape instead of carrying source knowledge: cove
 section divider, recap, quiz, references, thank-you. Identified by an empty knowledge-nugget
 association list — a structural slide cites no sources.
 _Avoid_: framing slide, non-content slide, scaffolding slide, template slide
+
+**Backup slide**:
+A parked slide, rendered in the **"Backup Slides" appendix** at the end of `slides.md` rather
+than hidden (D46). Its knowledge is off the current storyline but preserved for the human to
+review and keep-or-hide in the final polish. A bodyless one shows a **deterministic digest**
+of its nuggets' `information` (no composer call); an already-composed one keeps its real body.
+Excluded from the [[budget]] by its `parked` state; un-parking a digest one resets it to `pending`
+and recomposes (an un-parked slide that kept a real composed body is simply restored).
+The knowledge manager auto-manages the "Backup Slides" divider that opens the appendix.
+_Avoid_: parked pool, hidden slide, trash, appendix pool
+
+**Variant**:
+An alternative rendering of one slide, coexisting on disk as `slides/<title>--<stamp>_vN.md`.
+All variants of a slide share one identity — the same nuggets, title, and [[slide state]] (a
+single state `.json`) — and differ only in the composed body. The one **without** a `_vN`
+postfix is the [[active variant]]; `slides.md` includes only it. Variants are never deleted
+and are invisible to `order` / `validate` / [[budget]] (they are renderings of an existing
+slide, not new slides). Today they arise only from a [[merge]] (each predecessor is kept as a
+variant); differentiated *creation* of design alternatives (image vs. diagram vs. text
+"lanes") is a later feature (D47).
+_Avoid_: version, alternative slide, copy, draft
+
+**Active variant**:
+The postfix-less `slides/<title>--<stamp>.md` — the [[variant]] `slides.md` renders. Because
+the deck shows it, **the active variant IS the current selection**: choosing is not a separate
+commit, just leaving a variant active. Selection therefore changes by **renaming files**, never
+by editing `slides.md` (D47).
+_Avoid_: chosen slide, selected version, canonical slide, primary
+
+**Variant cycling**:
+Auditing a slide's [[variant|variants]] in place with **↑/↓**: an arrow ring-rotates which file
+is the [[active variant]] (a pure rename by the knowledge manager, `cycle-variant`), the dev
+server reloads, and the alternative renders on the same slide. Whatever is active when the user
+moves on is the pick — no gallery, no picker button, no manifest; the filename is the whole
+state (D47).
+_Avoid_: variant picker, gallery, carousel
 
 **Decision point**:
 Claude Code's structured option-list question (the AskUserQuestion mechanism) put to the
@@ -120,11 +156,13 @@ _Avoid_: limit, cap, quota
 
 **Merge**:
 The consolidation of two content slides into a new one to free a budget slot: the knowledge
-manager mechanically **unions their nugget associations** and retires the originals, then
-the **Lead workflow invokes a Composer** (assemble → invoke → persist, D40/D41) to
-recompose the merged slide (D31 — the script never writes prose; the Composer always runs
-after). Routine, not exceptional. Sibling move:
-**parking** a lower-priority slide instead of merging (Triage, D34).
+manager mechanically **unions their nugget associations** and **preserves each original as a
+[[variant]] of the new slide** (renamed `_vN`, for provenance — the user can [[variant cycling|cycle]]
+back to see what was merged; D47), then the **Lead workflow invokes a Composer** (assemble →
+invoke → persist, D40/D41) to recompose the merged slide as the [[active variant]] (D31 — the
+script never writes prose; the Composer always runs after). Routine, not exceptional. Sibling move:
+**parking** a lower-priority slide instead of merging (Triage, D34) — the parked slide moves
+into the rendered [[Backup slide|Backup appendix]] for human review, not into hiding (D46).
 _Avoid_: combine, condense, rewrite
 
 **Theme capabilities**:
@@ -243,14 +281,16 @@ _Avoid_: mapping, linkage
 
 **Slide state**:
 The per-slide lifecycle value (`slides/<title>--<stamp>.json`) governing what agents may
-change automatically. It binds agents only — the user may hand-edit any slide in any state.
+change automatically. A slide's [[variant|variants]] share this **one** state file — they are
+the same slide (D47). It binds agents only — the user may hand-edit any slide in any state.
 v1 enum: `pending` (skeleton, body not yet written — marks in-flight or interrupted
 composition; `validate` flags any left at run
 end), `draft` (composed, pipeline-owned, agents may modify), `locked` (composed,
 user-owned, agents *propose* not edit — set **only by explicit user lock**). More states
-added only after testing. **Active-vs-parked is not a state** — it lives in `slides.md` as
-a commented include (D34). Dropped: `needs-polishing` / `reviewed` (no workflow branches
-on them yet).
+added only after testing. **Parked is a transient state overlay** (`state:"parked"`, km's source of truth): it shelves the
+slide's prior lifecycle value in `state_before_park` and restores it on unpark (D46); the rendered
+"Backup Slides" appendix in `slides.md` mirrors it. `composed` is the post-compose value.
+Dropped: `needs-polishing` / `reviewed` (no workflow branches on them yet).
 _Avoid_: sidecar, status, lock flag
 
 **Hand-edit guard**:
@@ -264,8 +304,11 @@ _Avoid_: auto-lock, dirty flag
 **Knowledge manager**:
 The deterministic script suite (`km.py`) through which every deck mutation **and every
 brief assembly** flows — validating, logged. Mutation subcommands: `create-nugget` (+ image
-denormalization, D45), `create-slide`, `merge-slides`, `park-slide` / `unpark-slide`,
-`set-content`, `write-slide` (semantic → physical, D43), `validate`. Assemble subcommands:
+denormalization, D45), `create-slide`, `merge-slides`, `park-slide` / `unpark-slide` (park renders the slide into the
+"Backup Slides" appendix with a deterministic digest body; unpark resets it to `pending` for
+recompose — D46), `set-content`, `write-slide` (semantic → physical, D43), `cycle-variant` (rotate the
+[[active variant]] by rename — D47), `validate`. Read subcommands: `get-variants` (enumerate a
+slide's [[variant|variants]] by glob — D47). Assemble subcommands:
 `mine-brief`, `plan-brief`, `compose-brief` (D40). Called by the **orchestrator** — roles
 are pure functions and never call scripts themselves (D40). Payloads are passed as files,
 never CLI args (D28). Roles decide; the knowledge manager executes. (No MCP in v1 — D27.)

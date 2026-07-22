@@ -39,9 +39,14 @@ up and nothing to run.
 - **When the budget is full**, merge the two *least distinct* content slides — the
   closest topics, judged by their titles and digests — to free a slot. Structural
   slides are never merge candidates.
-- **Park rather than delete.** A lower-priority or off-storyline slide is parked: it
-  keeps its content and can return later. Every nugget must end on a slide — a
-  nugget that fits nowhere goes on a slide created directly parked.
+- **Park rather than delete.** Knowledge that is off the story you are telling — or too
+  low-priority to earn an active slot — is **parked**, never dropped. A parked slide keeps
+  its content and moves into the deck's rendered **"Backup Slides" appendix** at the end,
+  where the human can review what you set aside and decide later whether to keep or hide it;
+  a parked slide can also be un-parked back into the flow if the story shifts. This is your
+  tool for discarding irrelevant material without losing it: every nugget must still end on
+  a slide — a nugget that fits nowhere in the storyline goes on a slide created directly
+  parked, and it will show a plain distilled summary of its knowledge in the appendix.
 
 ## Locked slides
 

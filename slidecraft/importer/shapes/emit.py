@@ -403,6 +403,24 @@ def _para_block_style(deviations: dict) -> str:
 # Run emission (HTML and markdown variants)
 # ---------------------------------------------------------------------------
 
+#: The glyph PowerPoint bakes into a slide-number field placeholder
+#: (``<a:fld type="slidenum">``) when the deck has never been presented.
+#: We turn it into Slidev's live page-number binding so the exported deck
+#: shows a real, auto-incrementing page number instead of the literal glyph.
+SLIDENUM_GLYPH = "‹#›"  # ‹#›
+_PAGE_EXPR = "{{ $page }}"
+_PAGE_SENTINEL = "\x00SLIDEV_PAGE\x00"
+
+
+def _sub_slidenum(text: str) -> tuple[str, bool]:
+    """Replace the slide-number glyph with a sentinel that survives HTML
+    escaping. Returns (text, had_glyph); caller swaps the sentinel for the
+    raw Vue ``{{ $page }}`` expression AFTER escaping."""
+    if SLIDENUM_GLYPH in text:
+        return text.replace(SLIDENUM_GLYPH, _PAGE_SENTINEL), True
+    return text, False
+
+
 def _emit_run_html(text: str, deviations: dict) -> str:
     """Emit a run as HTML — used inside block-level HTML (``<p>``) contexts
     and for baked layout/master content.
@@ -410,7 +428,10 @@ def _emit_run_html(text: str, deviations: dict) -> str:
     Escapes the user text and applies styling via ``<span>``, ``<strong>``,
     ``<em>``, ``<u>``, ``<s>``.
     """
+    text, had_page = _sub_slidenum(text)
     escaped = _escape_html(text)
+    if had_page:
+        escaped = escaped.replace(_PAGE_SENTINEL, _PAGE_EXPR)
     if not deviations:
         return escaped
 
@@ -447,6 +468,8 @@ def _emit_run_markdown(text: str, deviations: dict) -> str:
     paragraph is processed as text; ``<``/``>``/``&`` would only need
     escaping if they form HTML, which the shape model does not produce.
     """
+    # Slide-number field glyph → Slidev's live page number (raw Vue expr).
+    text = text.replace(SLIDENUM_GLYPH, _PAGE_EXPR)
     if not deviations:
         return text
 

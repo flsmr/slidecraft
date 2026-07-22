@@ -133,15 +133,18 @@ Read `plan.json`'s `steps` and run them **in order**. Each step's `op` is a km s
 - `create-slide` → `create-slide --title <t> [--nuggets a,b] [--parked] [--after <id|end>] [--intended-function <f>]` — a **structural** step (its plan entry has `"structural": true` and no nuggets) is just a create with `--nuggets` omitted; there is no `--structural` flag
 - `associate-nuggets` → `associate-nuggets --slide <id> --nuggets a,b`
 - `merge-slides` → `merge-slides --slides a,b [--title <t>]` (retires its inputs, returns the new id)
-- `park-slide` → `park-slide --slide <id> [--reason <r>]`
-- `unpark-slide` → `unpark-slide --slide <id>`
+- `park-slide` → `park-slide --slide <id> [--reason <r>]` — moves the slide into the rendered **"Backup Slides" appendix** (km auto-manages the divider); a bodyless slide gets a deterministic digest body from its nuggets' `information`, a composed slide keeps its body (D46). Not budget-counted.
+- `unpark-slide` → `unpark-slide --slide <id>` — needs a free active slot. It returns **`needs_compose`**: `true` when the slide was a digest preview (discarded → reset to `pending`, must be recomposed); `false` when it kept a real composed body (simply restored — no compose).
 
 The budget gate refuses a create once active slides hit `max_slides` (park/merge frees a
 slot first — the plan is already validated to respect this). Capture the `slide_id` each
 create and merge returns.
 
-**Compose after every create and every merge** (skip parked creates — a parked slide is not
-shown). Clean invoke each time:
+**Compose after every create and every merge, and after an unpark that reports
+`needs_compose: true`.** Skip **parked creates** — km already wrote their digest body (D46), and a
+directly-parked slide is not part of the main flow. An unpark of a digest slide (`needs_compose:
+true`) discards the digest and needs a real composition, so treat it like a create; an unpark that
+restored a real body (`needs_compose: false`) is already done. Clean invoke each time:
 
 ```
 python "<KM>"   --deck <deck> compose-brief --slide <slide_id> --out <brief>
@@ -173,7 +176,8 @@ python "<KM>" --deck <deck> validate
 non-zero exit as a hard failure and surface the `errors`. On success, report:
 
 - the ordered slide list;
-- any **parked** slides + why (off-storyline, or a composition that failed);
+- the **Backup Slides** appendix: each parked slide + why (off-storyline, or a composition that
+  failed) — these render at the end for the human to review and keep-or-hide (D46);
 - any **dropped** nuggets / figures the miners could not produce (flagged in phase 2);
 - unresolved `FIGURE NEEDED` markers;
 - and, on an aborted run, the storyteller error that stopped it.

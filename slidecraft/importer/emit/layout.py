@@ -233,8 +233,13 @@ def _placeholder_style(ph: Placeholder, frame_anchor: str = "t") -> str:
     # Decide what to emit for width/height based on autofit/wrap.
     if not ph.wrap_text and ph.shape_autofit:
         # Both axes dynamic — text in one continuous line, box grows.
+        # spAutoFit ("resize shape to fit text") genuinely HUGS the text in
+        # PowerPoint — it does not keep a minimum width. Emitting a min-width
+        # here made filled/coloured title bars (e.g. the IU cover + section
+        # bars) stay 320px+ wide regardless of their text; the background is
+        # meant to be exactly as wide as the words. Keep only min-HEIGHT so a
+        # single line of text still fills the designed bar height uniformly.
         size_parts = [
-            f"min-width:{ph.width_px:.4g}px",
             f"width:max-content",
             f"min-height:{ph.height_px:.4g}px",
             f"height:max-content",
@@ -564,7 +569,17 @@ def _emit_layout_vue(slide: Slide, canvas_width: int, canvas_height: int) -> str
             anchor = ph.text_frame.anchor if ph.text_frame else "t"
             style = _placeholder_style(ph, frame_anchor=anchor)
             slot = slot_name_for_placeholder(ph)
-            lines.append(f'{_INDENT * 3}<div class="{slot}" style="{style}">')
+            # Hide the whole wrapper when the deck supplies no content for this
+            # slot. Without this, an unfilled placeholder still paints its
+            # background — the IU agenda's coloured number badges and extra
+            # rows showed as stray orange/teal blocks on slides that only use
+            # a few of them. `$slots['name']` is falsy when the slide markdown
+            # omits the matching `::name::` block, so empty placeholders drop
+            # out of the DOM entirely (matching PowerPoint, where an empty
+            # placeholder is invisible).
+            lines.append(
+                f'{_INDENT * 3}<div v-if="$slots[\'{slot}\']" class="{slot}" style="{style}">'
+            )
             # Inner stacking block — the wrapper's single flex item (see
             # _placeholder_style: the vertical anchor rides on align-items,
             # which needs exactly one child on the cross axis).
@@ -690,8 +705,17 @@ def _emit_layout_vue(slide: Slide, canvas_width: int, canvas_height: int) -> str
     for shape in slide.text_shapes:
         if shape.text_frame is None:
             continue
+        # Also pin line-height on the <p> rule. Slidev's global reset sets
+        # `p { line-height: 1.5 }` DIRECTLY on <p>, which beats any value the
+        # wrapper div inherits down — so a multi-line text shape spreads far
+        # wider than PowerPoint and, when bottom-anchored + clipped (the IU ©
+        # disclaimer), loses its top line. Emit the shape's PPT line spacing
+        # here, defaulting to 1.2 (single), so the <p> rule wins.
+        lsp = shape.default_para.line_spacing_pct if shape.default_para else None
+        lh = (lsp / 100.0) if lsp else 1.2
         lines.append(
-            f".slidev-layout .txt-{shape.shape_id} :deep(p) {{ margin: 0; }}"
+            f".slidev-layout .txt-{shape.shape_id} :deep(p) "
+            f"{{ margin: 0; line-height: {lh:.4g}; }}"
         )
 
     # Picture-placeholder slot ergonomics. When the deck author overrides the
@@ -850,7 +874,23 @@ def _emit_layout_vue(slide: Slide, canvas_width: int, canvas_height: int) -> str
     lines.append("</style>")
     lines.append("")
 
-    return "\n".join(lines)
+    vue = "\n".join(lines)
+
+    # If any baked text carried a slide-number field ({{ $page }}), the
+    # layout must pull $page from Slidev's slide context so the binding
+    # resolves inside a theme layout. Inject the import + destructure into
+    # the <script setup> (creating one if this layout has no asset imports).
+    if "{{ $page }}" in vue:
+        setup = (
+            "import { useSlideContext } from '@slidev/client'\n"
+            "const { $page } = useSlideContext()"
+        )
+        if "<script setup>" in vue:
+            vue = vue.replace("<script setup>", f"<script setup>\n{setup}", 1)
+        else:
+            vue = f"<script setup>\n{setup}\n</script>\n\n{vue}"
+
+    return vue
 
 
 # ---------------------------------------------------------------------------

@@ -88,17 +88,24 @@ def slide_files(root: Path) -> list[Path]:
     return sorted((root / "slides").glob("*.md"))
 
 def order(root: Path) -> list[str]:
-    """ACTIVE slide IDs in slides.md order (src includes outside comments —
-    the parked block is an HTML comment, D34)."""
+    """ACTIVE slide IDs in slides.md order.
+
+    Since D46 the Backup-Slides appendix is rendered (uncommented), so the
+    comment boundary no longer separates active from parked. ``state:"parked"``
+    is the source of truth (see :func:`parked_ids`): read every ``src:`` include
+    and drop the ones whose slide is parked."""
     md = (root / "slides.md")
     if not md.exists():
         return []
     text = re.sub(r"<!--.*?-->", "", md.read_text(encoding="utf-8"), flags=re.S)
-    return re.findall(r"src:\s*\./slides/(.+?)\.md", text)
+    parked = set(parked_ids(root))
+    return [i for i in re.findall(r"src:\s*\./slides/(.+?)\.md", text)
+            if i not in parked]
 
 def parked_ids(root: Path) -> list[str]:
     """IDs of parked slides (state ``parked`` in the slide state file — the
-    single source of truth; the slides.md parked block mirrors it)."""
+    single source of truth; the slides.md Backup-Slides appendix mirrors it,
+    D46). Parking shelves the prior lifecycle state in ``state_before_park``."""
     out = []
     for p in sorted((root / "slides").glob("*.json")):
         try:
@@ -151,19 +158,46 @@ def write_order(root: Path, ids: list[str], parked: list[str] | None = None,
         head_lines.append(f"src: ./slides/{ids[0]}.md")
     head = "---\n" + "\n".join(head_lines) + "\n---\n"
     body = "".join(f"\n---\nsrc: ./slides/{i}.md\n---\n" for i in ids[1:])
-    # Parked slides ride in a commented block (D34): their includes are kept
-    # (visible, un-parkable) but Slidev never renders them.
+    # Parked slides render in the "Backup Slides" appendix at the very end (D46):
+    # an inline section divider (plain markdown in slides.md, not a slide file —
+    # so nothing counts it against the budget) followed by the parked includes.
+    # They are kept, visible for human review, and un-parkable. ``order()``
+    # excludes them by their parked STATE, not by position.
     if parked is None:
         parked = parked_ids(root)
     tail = ""
     if parked:
-        inner = "".join(f"---\nsrc: ./slides/{i}.md\n---\n" for i in parked)
-        tail = f"\n<!-- parked\n{inner}-->\n"
+        divider = (f"\n---\nlayout: default\n---\n\n# {BACKUP_TITLE}\n\n"
+                   f"{BACKUP_NOTE}\n")
+        inner = "".join(f"\n---\nsrc: ./slides/{i}.md\n---\n" for i in parked)
+        tail = divider + inner
     (root / "slides.md").write_text(head + body + tail, encoding="utf-8")
+
+# The rendered "Backup Slides" appendix (D46). The divider is inline markdown
+# in slides.md — not a slide file — so no budget/validate path counts it.
+BACKUP_TITLE = "Backup Slides"
+BACKUP_NOTE = ("_Set aside from the main narrative by the storyteller — a distilled "
+               "summary of the source material, kept for your review. Keep or hide "
+               "these before presenting._")
+
+# Marker a digest (preview) body carries so park/unpark can tell a never-composed
+# slide from a real one without extra state bookkeeping (D46). Kept out of the
+# trailing position so it is never mistaken for speaker notes.
+DIGEST_MARK = "backup digest"
+
 
 def skeleton(title: str, nugget_ids: list[str]) -> str:
     return (f"---\nlayout: default\ntitle: {yaml_str(title)}\n---\n\n"
             f"<!-- awaiting composition; nuggets: {','.join(nugget_ids)} -->\n")
+
+
+def needs_composition(body: str) -> bool:
+    """True when a slide body is a placeholder, not a real composed slide: the
+    ``awaiting composition`` skeleton or a ``backup digest`` preview (D46). Both
+    mean "the composer never wrote this" — so a park keeps writing a digest over
+    it, and an unpark discards it and asks for a real composition."""
+    low = body.lower()
+    return "awaiting composition" in low or DIGEST_MARK in low
 
 def source_slug(name: str) -> str:
     """Slug of a source FILENAME (extension stripped) — matches source_converter.py.
@@ -439,7 +473,7 @@ def nugget_digests(root: Path) -> str:
 
 
 def deck_state_section(root: Path) -> str:
-    """The current deck for the planner: active order, parked block, budget —
+    """The current deck for the planner: active order, Backup appendix, budget —
     and whether this is a fresh draft (full plan) or a re-run (delta plan)."""
     ids = order(root)
     parked = parked_ids(root)
@@ -467,8 +501,8 @@ def deck_state_section(root: Path) -> str:
                          f'[{stj.get("state", "draft")}] ({tag})')
     if parked:
         lines.append("")
-        lines.append("Parked slides (content kept, not shown; un-parkable "
-                     "when a slot frees up):")
+        lines.append("Parked slides (content kept, shown in the Backup Slides "
+                     "appendix for review; un-parkable when a slot frees up):")
         for sid in parked:
             stj = load_state(root, sid)
             reason = stj.get("parked_reason", "")
@@ -480,7 +514,7 @@ def deck_state_section(root: Path) -> str:
 def cmd_plan_brief(root: Path, a):
     """Render the self-contained storyteller brief (D40/D42): planner role
     template + deck constraints + inlined storytelling craft + all nugget
-    digests + the current deck state (incl. the parked block)."""
+    digests + the current deck state (incl. the Backup appendix)."""
     c = ctx(root)
     inj = c.get("injection", {}).get("storyteller", {})
     deckb = c["deck"]
@@ -734,10 +768,22 @@ def offered_layouts(c: dict) -> dict[str, dict]:
     """Theme-capability layouts by their OFFERED name: the semantic alias
     when the theme ships one, else the physical layout name. The composer
     only ever sees offered names + role names; ``write-slide`` maps back to
-    physical (ADR-0001)."""
+    physical (ADR-0001).
+
+    When the theme ships a semantic map, a physical layout with no alias is
+    one of its UNMAPPED leftovers (semantic-layouts.json ``unmapped_layouts``):
+    it has no slot roles the composer can fill and frequently no default
+    ``<slot/>``, so composing onto it drops the content and renders a blank
+    slide. Never offer those. A theme with no semantic map at all (every entry
+    aliasless) keeps all its physical layouts — there is nothing else to give
+    the composer."""
     caps = c["theme"]["capabilities"]
+    entries = caps.get("layouts", [])
+    has_aliases = any(e.get("alias") for e in entries)
     offered: dict[str, dict] = {}
-    for entry in caps.get("layouts", []):
+    for entry in entries:
+        if has_aliases and not entry.get("alias"):
+            continue
         name = entry.get("alias") or entry["name"]
         offered.setdefault(name, entry)
     return offered
@@ -1266,7 +1312,12 @@ def cmd_create(root: Path, a):
              "created_at": time.strftime("%Y-%m-%dT%H:%M:%S")}
     if hint:
         state["intended_function"] = hint
-    (root / "slides" / f"{sid}.md").write_text(skeleton(a.title, nugs), encoding="utf-8")
+    # A directly-parked create is never composed — give it a digest preview body
+    # (D46) so it reads in the Backup appendix; an active create gets a skeleton
+    # for the composer to fill.
+    initial_body = (digest_body(root, a.title, nugs) if parked_flag
+                    else skeleton(a.title, nugs))
+    (root / "slides" / f"{sid}.md").write_text(initial_body, encoding="utf-8")
     save_state(root, sid, state)
     A = assoc(root); A[sid] = nugs; write_assoc(root, A)
     ids = order(root)
@@ -1284,8 +1335,11 @@ def cmd_create(root: Path, a):
 
 
 def cmd_park(root: Path, a):
-    """Move a slide out of the active order into the commented parked block
-    (D34): file + association preserved, budget slot freed."""
+    """Move a slide out of the active order into the rendered "Backup Slides"
+    appendix (D34/D46): file + association preserved, budget slot freed. A slide
+    that was never composed gets a deterministic digest preview body so it reads
+    in the appendix; a slide that already carries a composed (or hand-edited)
+    body keeps it — the digest is never allowed to overwrite real work."""
     sid = a.slide
     if not (root / "slides" / f"{sid}.json").exists():
         sys.exit(f"ERROR: slide {sid} does not exist")
@@ -1302,13 +1356,23 @@ def cmd_park(root: Path, a):
     if reason:
         stj["parked_reason"] = reason
     save_state(root, sid, stj)
-    write_order(root, [i for i in order(root) if i != sid])
+    # Give a never-composed slide a digest preview; keep a real body untouched.
+    sp = root / "slides" / f"{sid}.md"
+    if needs_composition(sp.read_text(encoding="utf-8-sig")):
+        sp.write_text(digest_body(root, stj.get("title", sid),
+                                  assoc(root).get(sid, [])), encoding="utf-8")
+    write_order(root, order(root))
     log(root, "km", "park-slide", slide=sid, reason=reason)
     print(json.dumps({"ok": True, "slide": sid, "state": "parked"}))
 
 
 def cmd_unpark(root: Path, a):
-    """Return a parked slide to the active order (needs a free slot, D34)."""
+    """Return a parked slide to the active order (needs a free slot, D34/D46).
+
+    A digest preview (or a still-uncomposed skeleton) is not a real slide, so it
+    is discarded and the slide comes back as ``pending`` for the orchestrator to
+    compose (``needs_compose: true``). A slide that kept a real composed body is
+    restored to its pre-park state and needs no recomposition."""
     sid = a.slide
     if not (root / "slides" / f"{sid}.json").exists():
         sys.exit(f"ERROR: slide {sid} does not exist")
@@ -1321,14 +1385,24 @@ def cmd_unpark(root: Path, a):
     if cur >= budget:
         print(json.dumps({"error": "budget_full", "current": cur, "max": budget}))
         sys.exit(3)
-    stj["state"] = stj.pop("state_before_park", "draft")
+    sp = root / "slides" / f"{sid}.md"
+    needs_compose = needs_composition(sp.read_text(encoding="utf-8-sig"))
+    if needs_compose:
+        # Discard the digest preview; the composer writes the real slide next.
+        sp.write_text(skeleton(stj.get("title", sid),
+                               assoc(root).get(sid, [])), encoding="utf-8")
+        stj["state"] = "pending"
+        stj.pop("state_before_park", None)
+    else:
+        stj["state"] = stj.pop("state_before_park", "draft")
     stj.pop("parked_reason", None)
     stj.pop("parked_at", None)
     save_state(root, sid, stj)
-    write_order(root, order(root) + [sid],
+    write_order(root, [i for i in order(root) if i != sid] + [sid],
                 parked=[p for p in parked if p != sid])
-    log(root, "km", "unpark-slide", slide=sid)
-    print(json.dumps({"ok": True, "slide": sid, "state": stj["state"]}))
+    log(root, "km", "unpark-slide", slide=sid, needs_compose=needs_compose)
+    print(json.dumps({"ok": True, "slide": sid, "state": stj["state"],
+                      "needs_compose": needs_compose}))
 
 
 def cmd_associate(root: Path, a):
@@ -1476,6 +1550,35 @@ def build_presenter_notes(root: Path, sid: str) -> str:
     return notes_comment("Source material (verbatim) — presenter reference:"
                          "\n\n" + "\n\n".join(blocks))
 
+def digest_body(root: Path, title: str, nugget_ids: list[str]) -> str:
+    """A deterministic preview body for a Backup slide (D46): the miner's
+    distilled ``information`` for each associated nugget, so a human roughly
+    knows what the parked knowledge is about. NOT composed prose — a mechanical
+    assembly of already-distilled miner output, the same carve-out to D31 as the
+    verbatim presenter-notes fill (D39). Verbatim source rides in speaker notes.
+
+    Carries :data:`DIGEST_MARK` so park/unpark can tell it from a real slide."""
+    nugs = [n for n in (load_nugget(root, nid) for nid in nugget_ids) if n]
+    parts = [f"---\nlayout: default\ntitle: {yaml_str(title)}\n---\n",
+             f"<!-- {DIGEST_MARK}: distilled nugget information, awaiting review -->\n",
+             f"\n# {title}\n"]
+    multi = len(nugs) > 1
+    for n in nugs:
+        if multi:
+            parts.append(f"\n## {n.get('title', '')}\n")
+        info = str(n.get("information", "")).strip()
+        if info:
+            parts.append("\n" + info + "\n")
+    body = "".join(parts)
+    notes = [f"[{nugget_locator(n)}]\n{raw}"
+             for n in nugs if (raw := nugget_raw(n))]
+    if notes:
+        body = body.rstrip() + "\n\n" + notes_comment(
+            "Source material (verbatim) — presenter reference:\n\n"
+            + "\n\n".join(notes))
+    return body
+
+
 def has_presenter_notes(body: str) -> bool:
     """True when a composed body already ends with speaker notes.
 
@@ -1563,8 +1666,16 @@ def cmd_validate(root: Path, a):
     budget = int(ctx(root)["deck"]["max_slides"])
     if len(active_files) > budget:
         errs.append(f"budget exceeded: {len(active_files)} > {budget}")
+    # Backup slides are valid, finished deck members (D46) — listed for the run
+    # report with title + reason, never flagged like a stray placeholder.
+    backup = []
+    for sid in parked:
+        stj = load_state(root, sid)
+        backup.append({"slide": sid, "title": stj.get("title", sid),
+                       "reason": stj.get("parked_reason", "")})
     print(json.dumps({"ok": not errs, "slides": len(active_files),
-                      "parked": parked, "errors": errs}, indent=2))
+                      "parked": parked, "backup_slides": backup,
+                      "errors": errs}, indent=2))
     # Exit non-zero on failure so the /draft-deck orchestrator can gate on the
     # exit code (ticket 17) instead of parsing stdout. This is the final deck
     # gate, never a shim persist step — so exit 1 here is unambiguous and does
