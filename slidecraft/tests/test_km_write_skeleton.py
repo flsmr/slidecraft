@@ -77,6 +77,7 @@ def test_source_image_section_is_placed_without_a_designer(deck, tmp_path, capsy
 
     assert out["pending_sections"] == []
     assert out["placed_sections"] == ["body"]
+    assert out["state"] == "composed"           # nothing pending -> promoted
     md = _md(deck, sid)
     assert "/extracted/fig1.png" in md          # the real asset placed
     stj = km.load_state(deck, sid)
@@ -91,6 +92,43 @@ def test_structural_slide_bypasses_sections(deck, tmp_path, capsys):
     out = json.loads(capsys.readouterr().out)
     assert out["pending_sections"] == []
     assert "Object Tracking" in _md(deck, sid)
+
+
+def test_omitted_content_role_falls_back_to_layout_default(deck, tmp_path, capsys):
+    # The conftest test theme ships all-{} content defaults; seed one on this
+    # deck's OWN deck-context.json copy of the "content" layout entry so the
+    # sec-is-None branch has a real default to fall back to (design §4: "Omitted
+    # roles fall back to the layout's defaults").
+    ctx_path = deck / "deck-context.json"
+    c = json.loads(ctx_path.read_text(encoding="utf-8"))
+    entry = next(e for e in c["theme"]["capabilities"]["layouts"]
+                if e["name"] == "content")
+    entry["defaults"] = {"body": "FALLBACK BODY DEFAULT"}
+    ctx_path.write_text(json.dumps(c, ensure_ascii=False), encoding="utf-8")
+
+    sid = _create(deck, "Defaults Slide", nuggets="")       # structural: no nuggets
+    capsys.readouterr()
+    _write_skeleton(deck, sid, {"layout": "content", "concept_type": "structural",
+                                "title": "Defaults Slide", "sections": {}})
+    capsys.readouterr()
+
+    assert "FALLBACK BODY DEFAULT" in _md(deck, sid)
+
+
+def test_structural_slide_may_use_out_of_scope_layout(deck, tmp_path, capsys):
+    # "closing" is an offered theme layout but has no content role (only
+    # "title"), so it is out of D4 scope for planner_layouts. A structural
+    # slide (no nuggets, empty sections) validates against offered_layouts,
+    # not planner_layouts, so it must still be accepted.
+    sid = _create(deck, "Thanks", nuggets="")               # structural: no nuggets
+    capsys.readouterr()
+    _write_skeleton(deck, sid, {"layout": "closing", "concept_type": "structural",
+                                "title": "Thanks", "sections": {}})
+    out = json.loads(capsys.readouterr().out)
+
+    assert out["pending_sections"] == []
+    assert out["state"] == "composed"
+    assert "Thanks" in _md(deck, sid)
 
 
 def test_invalid_layout_is_a_rejection(deck, tmp_path, capsys):

@@ -1214,7 +1214,9 @@ ASPECT_BY_ROLE = {"body": "16:9", "left": "1:1", "right": "1:1"}
 
 def content_roles_for(entry: dict) -> list[str]:
     """A layout entry's CONTENT-area roles (design §4): its roles map minus
-    `title`/`image`, or `["body"]` when the layout ships no roles map."""
+    `title`/`image`. Falls back to `["body"]` whenever that computes to an
+    empty set — a layout with no roles map at all, but also one whose roles
+    map has only `title`/`image` entries (e.g. a title-only closing layout)."""
     roles = entry.get("roles") or {}
     content = [r for r in roles if r not in ("title", "image")]
     return content or ["body"]
@@ -1342,6 +1344,12 @@ def cmd_write_skeleton(root: Path, a):
         sec = sections.get(role)
         slot = roles.get(role)
         if sec is None:
+            default_md = str((entry.get("defaults") or {}).get(role, "")).strip()
+            if default_md:
+                if slot:
+                    parts.append(f"\n::{slot}::\n{default_md}\n")
+                else:
+                    parts.append(f"\n{default_md}\n")
             plan_sections[role] = {"type": "text", "instructions": "",
                                    "nuggets": [], "status": "placed"}
             continue
@@ -1352,7 +1360,8 @@ def cmd_write_skeleton(root: Path, a):
             fig = next(nid for nid in nug_ids
                        if (load_nugget(root, nid) or {}).get("kind") == "image")
             asset = str((load_nugget(root, fig) or {})["asset"])
-            block = f'<img src="{asset}" alt="{title}">'
+            alt = (instructions or title).replace('"', "'")
+            block = f'<img src="{asset}" alt="{alt}">'
             status = "placed"; placed.append(role)
         else:
             block = _wireframe_placeholder(stype, instructions)
