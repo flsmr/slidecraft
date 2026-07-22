@@ -30,6 +30,18 @@ def test_parse_catalog_block_absent_returns_none():
     assert km.parse_catalog_block("<script setup></script>") is None
 
 
+def test_parse_catalog_block_joins_continuation_lines():
+    text = ("<catalog>\n"
+            "use: A long routing hint that wraps\n"
+            "across two lines into one value.\n"
+            "looks: One line.\n"
+            "fill: One line.\n"
+            "</catalog>")
+    parsed = km.parse_catalog_block(text)
+    assert parsed["use"] == "A long routing hint that wraps across two lines into one value."
+    assert parsed["looks"] == "One line."
+
+
 def test_component_catalog_renders_present_and_flags_missing(tmp_path):
     d = tmp_path / "components"
     d.mkdir()
