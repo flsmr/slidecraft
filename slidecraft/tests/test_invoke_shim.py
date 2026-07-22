@@ -355,6 +355,23 @@ def test_role_registry_views_agree():
     assert set(invoke_shim.ROLE_TERMINALS) == set(invoke_shim.DEFAULT_EXECUTORS)
 
 
+def test_designer_roles_have_default_executors():
+    for role in ("text-designer", "diagram-designer", "image-designer"):
+        assert role in invoke_shim.ROLES
+    assert invoke_shim.DEFAULT_EXECUTORS["text-designer"]["model"] == "gdpr.gpt-5.6-sol"
+    assert invoke_shim.DEFAULT_EXECUTORS["diagram-designer"]["model"] == "gdpr.gpt-5.6-sol"
+    assert invoke_shim.DEFAULT_EXECUTORS["image-designer"]["model"] == "nano-banana-pro"
+
+
+def test_deck_overrides_designer_model(tmp_path):
+    ctx = tmp_path / "deck-context.json"
+    ctx.write_text(json.dumps({"executors": {
+        "image-designer": {"executor": "owui", "model": "some-other-image-model"}}}),
+        encoding="utf-8")
+    spec = invoke_shim.resolve_executor_spec("image-designer", tmp_path)
+    assert spec["model"] == "some-other-image-model"
+
+
 # ---------- image capability is declared, not discovered by crashing ----------
 
 

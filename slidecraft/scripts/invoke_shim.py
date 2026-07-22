@@ -86,6 +86,18 @@ ROLES = {
         "terminal": "abort",
         "executor": {"executor": "claude-subagent", "model": None},
     },
+    "text-designer": {
+        "terminal": "drop",
+        "executor": {"executor": "owui", "model": "gdpr.gpt-5.6-sol"},
+    },
+    "diagram-designer": {
+        "terminal": "drop",
+        "executor": {"executor": "owui", "model": "gdpr.gpt-5.6-sol"},
+    },
+    "image-designer": {
+        "terminal": "drop",
+        "executor": {"executor": "owui", "model": "nano-banana-pro"},
+    },
 }
 
 # Derived views (kept for a stable public surface). The executor dicts are
