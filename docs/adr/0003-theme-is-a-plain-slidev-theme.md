@@ -1,6 +1,6 @@
 # A theme is a plain Slidev theme carrying its own style guide
 
-Under the agentic framework (`architecture_proposal.md`, D19), deck *shape* comes from the
+Under the agentic framework (`ARCHITECTURE.md`), deck *shape* comes from the
 storyteller and storytelling skills, and a theme is **its own repository, visuals-only**. We
 decided a theme is a plain `slidev-theme-<slug>/` npm package — `package.json` (with
 `slidev.defaults`), `layouts/*.vue` (physical-name `<slot name="…">` regions), optional

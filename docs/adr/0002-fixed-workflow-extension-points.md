@@ -14,5 +14,5 @@ new named extension point — generalize by extraction, same discipline as the r
 project.
 
 Status: superseded (2026-07-16) — skeletons and extension points were culled with the
-agentic-framework pivot (`architecture_proposal.md`, D19); per-deck-type variation now
+agentic-framework pivot (see `ARCHITECTURE.md`); per-deck-type variation now
 comes from storytelling skills, per-deck configuration from the deck context.

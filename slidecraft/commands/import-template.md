@@ -227,4 +227,4 @@ browser.
 10. **Offer next steps**:
     - Preview the deck in the browser: `cd <output-base>/deck && npx slidev` (defaults to `slides.md` — no need to name it explicitly)
     - If corporate fonts aren't on Google Fonts, explain how to add .woff2 files under `<theme-dir>/styles/` and add `@font-face` declarations
-    - Suggest creating a fresh presentation that consumes this theme via the deck workflow (`/init-deck`, see `architecture_proposal.md`)
+    - Suggest creating a fresh presentation that consumes this theme via the deck workflow (`/init-deck`, see `ARCHITECTURE.md`)

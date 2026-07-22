@@ -85,7 +85,7 @@ deps don't.
 ```
 
 Deck building (`/init-deck` → `/draft-deck` → `/improve-deck`) is under construction; the design
-is in `SPEC.md` (the how) and `architecture_proposal.md` (the what/why), with the domain
+is in `SPEC.md` (the how) and `ARCHITECTURE.md` (the what/why), with the domain
 vocabulary in `CONTEXT.md`.
 
 ## Recommended Directory Layout
@@ -146,7 +146,7 @@ slidecraft/                        # repo root
 │   └── tests/
 ├── legacy/                        # Quarantined previous-generation pipeline (NOT loaded)
 ├── SPEC.md                        # Implementation spec (the how)
-├── architecture_proposal.md       # The agentic framework design (the what/why)
+├── ARCHITECTURE.md                # The agentic framework design (the what/why)
 ├── CONTEXT.md                     # Domain glossary (ubiquitous language)
 ├── docs/                          # ADRs, source-conversion-limitations, project docs
 ├── LICENSE                        # MIT
