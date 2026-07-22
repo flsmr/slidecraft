@@ -111,3 +111,42 @@ def test_cycle_leaves_slides_md_and_state_untouched(deck, capsys):
     assert (deck / "slides.md").read_text(encoding="utf-8") == slides_md
     assert (deck / "slides" / "sX.json").read_text(encoding="utf-8") == state
     assert not list((deck / "slides").glob("*.cycletmp"))  # scratch cleaned
+
+
+def _nugget(deck: Path, nid: str) -> None:
+    (deck / "nuggets").mkdir(exist_ok=True)
+    (deck / "nuggets" / f"{nid}.json").write_text(json.dumps(
+        {"nugget_id": nid, "kind": "text", "source": "s.md", "page": 1,
+         "title": nid, "information": "i", "raw_text": "r"}), encoding="utf-8")
+
+
+def test_merge_preserves_predecessors_as_variants(deck, capsys):
+    # Two content slides A (with its own variant) and B.
+    _nugget(deck, "n1"); _nugget(deck, "n2")
+    km.cmd_create(deck, Namespace(title="A", nuggets="n1", after="end",
+                                  parked=False, intended_function=None))
+    km.cmd_create(deck, Namespace(title="B", nuggets="n2", after="end",
+                                  parked=False, intended_function=None))
+    capsys.readouterr()
+    a_id = next(p.stem for p in km.slide_files(deck) if p.stem.startswith("a--"))
+    b_id = next(p.stem for p in km.slide_files(deck) if p.stem.startswith("b--"))
+    # Give A a hand-made alternative rendering.
+    (deck / "slides" / f"{a_id}.md").write_text("A-CANON", encoding="utf-8")
+    (deck / "slides" / f"{a_id}_v1.md").write_text("A-ALT", encoding="utf-8")
+    (deck / "slides" / f"{b_id}.md").write_text("B-CANON", encoding="utf-8")
+
+    km.cmd_merge(deck, Namespace(slides=f"{a_id},{b_id}", title="Merged"))
+    out = json.loads(capsys.readouterr().out)
+    m_id = out["slide_id"]
+
+    # Predecessor .md/.json gone; merged slide has 3 variant renderings.
+    assert not (deck / "slides" / f"{a_id}.md").exists()
+    assert not (deck / "slides" / f"{a_id}.json").exists()
+    assert not (deck / "slides" / f"{b_id}.json").exists()
+    variant_bodies = {p.read_text(encoding="utf-8")
+                      for p in km.variant_files(deck, m_id)[1:]}  # the _vN
+    assert variant_bodies == {"A-CANON", "A-ALT", "B-CANON"}
+    # Union association + single active slide in order.
+    assoc = json.loads((deck / "associations.json").read_text(encoding="utf-8"))
+    assert assoc[m_id] == ["n1", "n2"]
+    assert km.order(deck).count(m_id) == 1

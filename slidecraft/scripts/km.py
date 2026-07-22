@@ -1502,8 +1502,16 @@ def cmd_merge(root: Path, a):
          "merged_from": parts}, indent=2), encoding="utf-8")
     ids = order(root)
     pos = min((ids.index(s) for s in parts if s in ids), default=len(ids))
+    # D47: preserve each predecessor (and its existing variants) as a variant of
+    # the new merged slide, for provenance — the user can cycle back to see what
+    # was merged. The fresh union compose (orchestrator runs it after merge, D31)
+    # stays the active canonical <sid>.md. Renames only; the state .json is
+    # subsumed by the merged slide's single shared state file.
+    vn = 0
     for s in parts:
-        (root / "slides" / f"{s}.md").unlink(missing_ok=True)
+        for rendering in variant_files(root, s):   # canonical + its _vN, in order
+            vn += 1
+            rendering.replace(root / "slides" / f"{sid}_v{vn}.md")
         (root / "slides" / f"{s}.json").unlink(missing_ok=True)
         A.pop(s, None)
         if s in ids: ids.remove(s)
