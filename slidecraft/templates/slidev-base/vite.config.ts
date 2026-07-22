@@ -49,9 +49,11 @@ export default defineConfig({
       })
     },
   }],
+  // D47 Task 0 spike (2026-07-22): on OneDrive/network/WSL drives Vite's native
+  // FS-event watcher never fires, so cycle-variant's rename does not reach the
+  // running dev server (confirmed: even a full browser reload showed stale
+  // content). Polling reads file mtimes directly and DOES catch the rename, so
+  // the deck reloads in place — required for the in-place up/down UX to work on
+  // OneDrive-hosted decks, which is where these decks live.
+  server: { watch: { usePolling: true, interval: 300 } },
 })
-
-// Task 0 fallback A: if the spike found the deck does not reload on rename,
-// append a touch of slides.md after a successful cycle — simplest:
-//   spawnSync('node', ['-e', 'require("fs").utimesSync("slides.md", new Date(), new Date())'])
-// Add only if the spike required it.
