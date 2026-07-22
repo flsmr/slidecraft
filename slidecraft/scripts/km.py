@@ -1675,6 +1675,40 @@ def cmd_get_variants(root: Path, a):
     print(json.dumps({"ok": True, "slide": a.slide, "count": len(files),
                       "files": [p.name for p in files]}))
 
+
+CYCLE_TMP_SUFFIX = ".cycletmp"
+
+
+def cmd_cycle_variant(root: Path, a):
+    """Ring-rotate which of a slide's renderings is the canonical
+    ``slides/<sid>.md``, among it + its ``_vN`` siblings, by rename (D47).
+
+    ``up`` shifts forward (the next alternative becomes active); ``down`` is the
+    exact inverse. ``Path.replace`` is atomic per rename; a single ``.cycletmp``
+    scratch (not ``.md``, so no glob ever sees it) carries the file that would be
+    overwritten first. ``slides.md`` and the shared state ``.json`` are never
+    touched — the active file IS the selection."""
+    sd = root / "slides"
+    tmp = sd / f"{a.slide}{CYCLE_TMP_SUFFIX}"
+    tmp.unlink(missing_ok=True)                 # clear a stale interrupted cycle
+    paths = variant_files(root, a.slide)        # [canonical, _v1, …, _v(k-1)]
+    if len(paths) < 2:
+        print(json.dumps({"ok": True, "cycled": False, "count": len(paths)}))
+        return
+    if a.dir == "up":
+        paths[0].replace(tmp)                   # active -> temp
+        for i in range(1, len(paths)):
+            paths[i].replace(paths[i - 1])      # _vi -> _v(i-1) (v1 -> active)
+        tmp.replace(paths[-1])                  # old active -> last slot
+    else:                                       # down: reverse cascade
+        paths[-1].replace(tmp)                  # last -> temp
+        for i in range(len(paths) - 1, 0, -1):
+            paths[i - 1].replace(paths[i])      # _v(i-1) -> _vi (active -> v1)
+        tmp.replace(paths[0])                   # old last -> active
+    log(root, "km", "cycle-variant", slide=a.slide, dir=a.dir, count=len(paths))
+    print(json.dumps({"ok": True, "cycled": True, "count": len(paths),
+                      "dir": a.dir}))
+
 def cmd_validate(root: Path, a):
     errs = []
     ids = order(root)                      # active includes only
@@ -1739,6 +1773,7 @@ def main():
     up = sub.add_parser("unpark-slide"); up.add_argument("--slide", required=True)
     s = sub.add_parser("set-content"); s.add_argument("--slide", required=True); s.add_argument("--body-file", required=True)
     gv = sub.add_parser("get-variants"); gv.add_argument("--slide", required=True)
+    cv = sub.add_parser("cycle-variant"); cv.add_argument("--slide", required=True); cv.add_argument("--dir", required=True, choices=["up", "down"])
     sub.add_parser("validate")
     a = ap.parse_args()
     root = find_deck_root(a.deck)
@@ -1749,7 +1784,7 @@ def main():
      "create-slide": cmd_create, "associate-nuggets": cmd_associate,
      "merge-slides": cmd_merge, "park-slide": cmd_park,
      "unpark-slide": cmd_unpark,
-     "set-content": cmd_set_content, "get-variants": cmd_get_variants, "validate": cmd_validate}[a.cmd](root, a)
+     "set-content": cmd_set_content, "get-variants": cmd_get_variants, "cycle-variant": cmd_cycle_variant, "validate": cmd_validate}[a.cmd](root, a)
 
 if __name__ == "__main__":
     main()
