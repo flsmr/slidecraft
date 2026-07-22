@@ -382,6 +382,22 @@ def write_launchers(root: Path, created: list):
             created.append(f"(WARNING: launcher template not found at {tpl}; {name} not copied)")
 
 
+def write_variant_scaffold(root: Path, created: list):
+    """Copy the D47 variant-cycling dev-server wiring into the deck:
+    vite.config.ts (the /__variant endpoint) + setup/shortcuts.ts (↑/↓ remap)."""
+    base = Path(__file__).resolve().parent.parent / "templates" / "slidev-base"
+    (root / "setup").mkdir(exist_ok=True)
+    for rel in ("vite.config.ts", "setup/shortcuts.ts"):
+        tpl = base / rel
+        dest = root / rel
+        if tpl.is_file():
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(tpl, dest)
+            created.append(str(dest.relative_to(root)))
+        else:
+            created.append(f"(WARNING: variant template not found at {tpl})")
+
+
 def write_associations(root: Path, created: list):
     (root / "associations.json").write_text("{}", encoding="utf-8")
     created.append("associations.json")
@@ -465,6 +481,7 @@ def scaffold(root: Path, ans: dict) -> dict:
     write_package_json(root, ans, theme, created)
     write_gitignore(root, created)
     write_launchers(root, created)
+    write_variant_scaffold(root, created)
 
     return {
         "phase": "full",

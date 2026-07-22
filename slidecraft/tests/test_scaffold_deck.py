@@ -336,3 +336,22 @@ def test_prewarm_refuses_existing_deck(tmp_path):
     ans = {"topic": "X", "theme": {"type": "builtin", "source": "default"}}
     with pytest.raises(SystemExit):
         scaffold_deck.prewarm(deck, ans)
+
+
+# ---------------------------------------------------------------------------
+# D47 — variant-cycling browser wiring (vite.config.ts + setup/shortcuts.ts)
+# ---------------------------------------------------------------------------
+
+
+def test_scaffold_writes_variant_browser_wiring(tmp_path):
+    deck = tmp_path / "deck"
+    deck.mkdir()
+    ans = _answers({"type": "builtin", "source": "default"})
+
+    scaffold_deck.scaffold(deck, ans)
+
+    assert (deck / "vite.config.ts").exists()
+    assert (deck / "setup" / "shortcuts.ts").exists()
+    vite = (deck / "vite.config.ts").read_text(encoding="utf-8")
+    assert "/__variant" in vite            # the cycle endpoint
+    assert "cycle-variant" in vite         # shells out to km
