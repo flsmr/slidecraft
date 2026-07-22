@@ -1475,6 +1475,123 @@ def cmd_design_brief(root: Path, a):
                       "role": designer, "brief": a.out, "chars": len(body)}))
 
 
+# ---------- design persist (Stage-2 persist, §6, ticket sdd-8) ----------
+
+ICON_ALLOWLIST_FILE = (Path(__file__).resolve().parent.parent
+                       / "references" / "icon-allowlist.txt")
+ICON_FALLBACK = "carbon-circle-solid"
+# Iconify-style icon components: <collection-name/> or <collection:name/>,
+# collection is a known short code. Kebab or colon form, self-closing or paired.
+_ICON_TAG_RE = re.compile(
+    r"<((?:carbon|ph|mdi|tabler|ic|bi|fa|fa6-solid|lucide|material-symbols)"
+    r"[-:][a-z0-9-]+)\s*/?>", re.I)
+
+
+def _load_icon_allowlist() -> set[str]:
+    if not ICON_ALLOWLIST_FILE.exists():
+        return set()
+    return {ln.strip().replace(":", "-").lower()
+            for ln in ICON_ALLOWLIST_FILE.read_text(encoding="utf-8-sig").splitlines()
+            if ln.strip() and not ln.startswith("#")}
+
+
+def sanitize_icons(markup: str) -> str:
+    """Replace any Iconify icon component whose name is not allow-listed with a
+    safe fallback, so a hallucinated icon never crashes the Vite transform. The
+    component library forbids hand-drawn objects → real icon + label, and this
+    guarantees the 'real' part deterministically."""
+    allow = _load_icon_allowlist()
+
+    def repl(m):
+        name = m.group(1).replace(":", "-").lower()
+        return m.group(0) if name in allow else f"<{ICON_FALLBACK}/>"
+    return _ICON_TAG_RE.sub(repl, markup)
+
+
+_ANY_FENCE_RE = re.compile(r"```[a-zA-Z]*[ \t]*\n(.*?)```", re.S)
+
+
+def _strip_fence(text: str) -> str:
+    """Return the last fenced block's contents if the reply is fenced, else the
+    whole (trimmed) reply — a designer may or may not fence its output."""
+    fences = _ANY_FENCE_RE.findall(text)
+    return (fences[-1] if fences else text).strip()
+
+
+def cmd_place_design(root: Path, a):
+    """Stage-2 persist (§6): deterministically extract + place ONE designer's
+    reply into its content area, sanitize (diagram), swap the wireframe, update
+    the section status, and promote the slide to `composed` when the last
+    pending section lands. Network-free: an image reply is already downloaded
+    (--asset). Rejection = exit 1 (retryable)."""
+    sid, role, stype = a.slide, a.section, a.type
+    sp = root / "slides" / f"{sid}.md"
+    stj = load_state(root, sid)
+    plan = stj.get("plan") or {}
+    sec = (plan.get("sections") or {}).get(role)
+    if not sec:
+        gate_exit(f"ERROR: slide {sid} has no planned section {role!r}")
+    physical = plan["layout"]
+    entry = next((e for e in ctx(root)["theme"]["capabilities"]["layouts"]
+                  if e["name"] == physical), {})
+    slot = (entry.get("roles") or {}).get(role)
+
+    if stype == "image":
+        if not a.asset:
+            gate_exit("ERROR: place-design --type image requires --asset")
+        block = f'<img src="{a.asset}" alt="{plan.get("title", sid)}">'
+    else:
+        reply = Path(a.file).read_text(encoding="utf-8-sig")
+        content = _strip_fence(reply)
+        if not content.strip():
+            sys.exit("ERROR: designer returned empty content")   # exit 1: retry
+        if stype == "diagram":
+            content = sanitize_icons(content)
+            # A full SFC (has <template>) is written to a component file; an
+            # inline component invocation is placed verbatim.
+            if "<template" in content.lower():
+                comp = f"Sec_{sid}_{role}"
+                (root / "components").mkdir(exist_ok=True)
+                (root / "components" / f"{comp}.vue").write_text(content, encoding="utf-8")
+                block = f"<{comp} />"
+            else:
+                block = content
+        else:  # text
+            block = content
+
+    # Swap the wireframe placeholder in the slot for the real block.
+    md = sp.read_text(encoding="utf-8-sig")
+    md = _replace_slot_body(md, slot, block) if slot else _append_block(md, block)
+    for asset in missing_assets(root, md):
+        sys.exit(f"ERROR: referenced asset '{asset}' does not exist "
+                 f"(expected under public/: public{asset})")
+    sp.write_text(md, encoding="utf-8")
+
+    sec["status"] = "placed"
+    if all(s.get("status") in ("placed", "failed")
+           for s in plan["sections"].values()):
+        stj["state"] = "composed"
+    save_state(root, sid, stj)
+    log(root, "km", "place-design", slide=sid, section=role, type=stype,
+        slide_state=stj["state"])
+    print(json.dumps({"ok": True, "slide": sid, "section": role,
+                      "status": "placed", "slide_state": stj["state"]}))
+
+
+def _replace_slot_body(md: str, slot: str, block: str) -> str:
+    """Replace the body of a `::slot::` region (up to the next `::` or EOF)
+    with `block`. The wireframe placeholder written by write-skeleton is the
+    current body; this swaps it for the designer's result."""
+    pattern = re.compile(rf"(::{re.escape(slot)}::\n)(.*?)(?=\n::|\Z)", re.S)
+    if not pattern.search(md):
+        return md.rstrip() + f"\n\n::{slot}::\n{block}\n"
+    return pattern.sub(lambda m: m.group(1) + block + "\n", md, count=1)
+
+
+def _append_block(md: str, block: str) -> str:
+    return md.rstrip() + f"\n\n{block}\n"
+
+
 # ---------- nugget validation + persist core ----------
 
 class Rejection(Exception):
@@ -2148,6 +2265,7 @@ def main():
     ws = sub.add_parser("write-slide"); ws.add_argument("--slide", required=True); ws.add_argument("--file", required=True)
     wsk = sub.add_parser("write-skeleton"); wsk.add_argument("--slide", required=True); wsk.add_argument("--file", required=True)
     db = sub.add_parser("design-brief"); db.add_argument("--slide", required=True); db.add_argument("--section", required=True); db.add_argument("--out", required=True)
+    pd = sub.add_parser("place-design"); pd.add_argument("--slide", required=True); pd.add_argument("--section", required=True); pd.add_argument("--type", required=True, choices=["text", "diagram", "image"]); pd.add_argument("--file", required=True); pd.add_argument("--asset", default=None)
     c = sub.add_parser("create-slide"); c.add_argument("--title", required=True); c.add_argument("--nuggets", default=""); c.add_argument("--after", default="end"); c.add_argument("--parked", action="store_true"); c.add_argument("--intended-function", dest="intended_function", default=None)
     an = sub.add_parser("associate-nuggets"); an.add_argument("--slide", required=True); an.add_argument("--nuggets", required=True)
     m = sub.add_parser("merge-slides"); m.add_argument("--slides", required=True); m.add_argument("--title", default="")
@@ -2167,6 +2285,7 @@ def main():
      "compose-brief": cmd_compose_brief, "write-slide": cmd_write_slide,
      "write-skeleton": cmd_write_skeleton,
      "design-brief": cmd_design_brief,
+     "place-design": cmd_place_design,
      "create-slide": cmd_create, "associate-nuggets": cmd_associate,
      "merge-slides": cmd_merge, "park-slide": cmd_park,
      "unpark-slide": cmd_unpark,
