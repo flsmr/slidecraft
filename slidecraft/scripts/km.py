@@ -305,6 +305,58 @@ def normalize(s: str) -> str:
 # repo and in the installed toolkit, D33).
 AGENTS_DIR = Path(__file__).resolve().parent.parent / "agents"
 SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
+COMPONENTS_DIR = Path(__file__).resolve().parent.parent / "components"
+
+# Infra / non-diagram files that never appear in the diagram catalog: the
+# shared card primitive, the footer, and any private (_-prefixed) module.
+CATALOG_EXCLUDE = {"GenBox", "SlideFooter"}
+
+_CATALOG_RE = re.compile(r"<catalog>\s*(.*?)\s*</catalog>", re.S | re.I)
+
+
+def parse_catalog_block(text: str) -> dict | None:
+	"""Parse a component's ``<catalog>`` custom SFC block into its three
+	fields (``use`` / ``looks`` / ``fill``). Returns ``None`` when the block
+	is absent. Vite ignores unknown top-level blocks, so this metadata never
+	affects the Slidev build."""
+	m = _CATALOG_RE.search(text)
+	if not m:
+		return None
+	fields: dict[str, str] = {}
+	key = None
+	for line in m.group(1).splitlines():
+		fm = re.match(r"^(use|looks|fill)\s*:\s*(.*)$", line.strip(), re.I)
+		if fm:
+			key = fm.group(1).lower()
+			fields[key] = fm.group(2).strip()
+		elif key and line.strip():          # continuation line
+			fields[key] = (fields[key] + " " + line.strip()).strip()
+	return {"use": fields.get("use", ""), "looks": fields.get("looks", ""),
+			"fill": fields.get("fill", "")}
+
+
+def component_catalog(components_dir: Path) -> tuple[str, list[str]]:
+	"""Render ``%COMPONENT-CATALOG%`` from every diagram component's
+	``<catalog>`` block (D14). Returns ``(table, missing)``: ``table`` is a
+	compact per-component stanza list; ``missing`` names components with no
+	block (listed name-only, flagged so their metadata gets backfilled).
+	A component's NAME is its filename (the diagram designer selects by name)."""
+	stanzas: list[str] = []
+	missing: list[str] = []
+	for p in sorted(components_dir.glob("*.vue")):
+		name = p.stem
+		if name in CATALOG_EXCLUDE or name.startswith("_"):
+			continue
+		parsed = parse_catalog_block(p.read_text(encoding="utf-8-sig"))
+		if parsed is None:
+			missing.append(name)
+			stanzas.append(f"- **{name}** — (no catalog metadata)")
+			continue
+		stanzas.append(
+			f"- **{name}** — use: {parsed['use']}\n"
+			f"  looks: {parsed['looks']}\n"
+			f"  fill: {parsed['fill']}")
+	return "\n".join(stanzas), missing
 
 
 def gate_exit(msg: str):
