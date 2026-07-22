@@ -482,3 +482,32 @@ def test_second_run_delta_plan_mines_only_new_input(deck, tmp_path):
     for name, text in before.items():
         assert after.get(name) == text, f"slide {name} was modified on re-run"
     assert len(after) == len(before) + 1               # exactly one slide added
+
+
+# ==========================================================================
+# Status slide: threaded mid-run, cleared at the end, never budgeted
+# ==========================================================================
+
+def test_status_slide_is_threaded_and_cleared_without_costing_budget(deck, tmp_path):
+    """The transient status slide appears mid-run and is removed at the end; it
+    never consumes a budget slot (final active count == the plan's real slides)."""
+    _seed_inputs(deck)
+
+    # Set a status BEFORE drafting (as /draft-deck §0 does) and assert it shows
+    # up uncounted, then run the normal draft which clears it at the end.
+    km.cmd_set_status(deck, Namespace(phase="mine", detail="0/2",
+                                      label="Mining sources…"))
+    mid = (deck / "slides.md").read_text(encoding="utf-8")
+    assert "Mining sources…" in mid
+    assert km.order(deck) == []                        # status alone counts 0
+
+    report = draft_deck(deck, tmp_path / "run1",
+                        text_responses=[CH9_MINE, EMPTY_MINE],
+                        image_responses=[IMG_MINE], build=_full_plan)
+    km.cmd_clear_status(deck, Namespace())             # as §5 does on success
+
+    assert report["validate_ok"] is True
+    assert report["validate"]["slides"] == 4           # exactly the 4 real slides
+    final = (deck / "slides.md").read_text(encoding="utf-8")
+    assert "Mining sources…" not in final              # cleared
+    assert not (deck / ".draft-status.json").exists()

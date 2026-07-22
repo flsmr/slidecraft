@@ -60,6 +60,11 @@ preview isn't a long wait:
    It is best-effort: if npm/Node is missing or offline, skip it silently; the launcher installs
    on first run as a fallback.
 
+This background `npm install` is the **only** preparation the preview needs —
+there is no separate "build" step; `/draft-deck` starts the Slidev dev server
+directly from `slides.md`. Finishing it here is what lets that server start
+instantly.
+
 ## 4. Interview — part 2 (length, type, setting, metadata)
 
 Continue with **AskUserQuestion** (batched) while the install runs:
@@ -111,5 +116,9 @@ launcher waits for it either way). Then show the scaffold summary and instruct:
 > Deck initialized (~{max_slides} slides for {duration} min at ~1.5 min/slide). Put your source
 > files (PDF, Markdown, text) into `input/`, then run `/draft-deck`. To preview the deck at any
 > time, double-click `show_slide_deck.cmd` (Windows) or `show_slide_deck.sh` (macOS/Linux).
+
+`/draft-deck` now opens the live preview itself (§0 of that command) as soon as it starts, so
+the double-click launcher above is the manual/fallback path — useful for reopening the preview
+later, or if the automatic launch reported `no-preview`.
 
 No content is generated at this stage.

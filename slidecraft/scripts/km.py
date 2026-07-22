@@ -142,6 +142,33 @@ def preserved_headmatter_lines(root: Path) -> list[str]:
         kept.append(line)
     return kept
 
+STATUS_FILE = ".draft-status.json"
+
+
+def status_block(root: Path) -> str:
+    """Inline markdown for the transient status slide (body content placed after
+    the headmatter block, so it becomes slide 1). Empty string when there is no
+    `.draft-status.json` — the sole trigger. Never a `src:` import and never a
+    slide file, so order()/budget/validate never count it."""
+    p = root / STATUS_FILE
+    if not p.exists():
+        return ""
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return ""
+    label = str(d.get("label", "")).strip() or "Drafting…"
+    phase = str(d.get("phase", "")).strip()
+    detail = str(d.get("detail", "")).strip()
+    phase_line = " ".join(x for x in (phase, detail) if x)
+    lines = [f"# ⏳ {label}", ""]
+    if phase_line:
+        lines.append(f"**Phase:** {phase_line}")
+        lines.append("")
+    lines.append("_Temporary drafting status — removed when the deck is done._")
+    return "\n".join(lines) + "\n"
+
+
 def write_order(root: Path, ids: list[str], parked: list[str] | None = None,
                 c: dict | None = None):
     c = ctx(root) if c is None else c
@@ -154,10 +181,18 @@ def write_order(root: Path, ids: list[str], parked: list[str] | None = None,
     # makes slide 1 the real cover.
     head_lines = [f"theme: {theme_ref}", f"title: {title}"]
     head_lines += preserved_headmatter_lines(root)
-    if ids:
-        head_lines.append(f"src: ./slides/{ids[0]}.md")
-    head = "---\n" + "\n".join(head_lines) + "\n---\n"
-    body = "".join(f"\n---\nsrc: ./slides/{i}.md\n---\n" for i in ids[1:])
+    status = status_block(root)
+    if status:
+        # Status slide is slide 1 (the headmatter block's own body); do NOT
+        # fold a slide src into the headmatter. Every real slide follows as a
+        # src import (including what would have been the folded first slide).
+        head = "---\n" + "\n".join(head_lines) + "\n---\n\n" + status + "\n"
+        body = "".join(f"\n---\nsrc: ./slides/{i}.md\n---\n" for i in ids)
+    else:
+        if ids:
+            head_lines.append(f"src: ./slides/{ids[0]}.md")
+        head = "---\n" + "\n".join(head_lines) + "\n---\n"
+        body = "".join(f"\n---\nsrc: ./slides/{i}.md\n---\n" for i in ids[1:])
     # Parked slides render in the "Backup Slides" appendix at the very end (D46):
     # an inline section divider (plain markdown in slides.md, not a slide file —
     # so nothing counts it against the budget) followed by the parked includes.
@@ -186,9 +221,16 @@ BACKUP_NOTE = ("_Set aside from the main narrative by the storyteller — a dist
 DIGEST_MARK = "backup digest"
 
 
-def skeleton(title: str, nugget_ids: list[str]) -> str:
+def skeleton(root: Path, title: str, nugget_ids: list[str]) -> str:
+    """Placeholder body for a created-but-uncomposed slide. Shows a banner and
+    the distilled nugget information, so a live-watched deck reveals what the
+    slide will be about while the composer works. Keeps the literal
+    `awaiting composition` marker (inside a comment) that needs_composition()
+    keys off; MUST NOT emit DIGEST_MARK (that reads as a parked digest)."""
     return (f"---\nlayout: default\ntitle: {yaml_str(title)}\n---\n\n"
-            f"<!-- awaiting composition; nuggets: {','.join(nugget_ids)} -->\n")
+            f"> 🚧 **Composer is drafting this slide…**\n"
+            f"<!-- awaiting composition; nuggets: {','.join(nugget_ids)} -->\n"
+            + nugget_info_section(root, title, nugget_ids))
 
 
 def needs_composition(body: str) -> bool:
@@ -1316,7 +1358,7 @@ def cmd_create(root: Path, a):
     # (D46) so it reads in the Backup appendix; an active create gets a skeleton
     # for the composer to fill.
     initial_body = (digest_body(root, a.title, nugs) if parked_flag
-                    else skeleton(a.title, nugs))
+                    else skeleton(root, a.title, nugs))
     (root / "slides" / f"{sid}.md").write_text(initial_body, encoding="utf-8")
     save_state(root, sid, state)
     A = assoc(root); A[sid] = nugs; write_assoc(root, A)
@@ -1332,6 +1374,27 @@ def cmd_create(root: Path, a):
     log(root, "storyteller", "create-slide", slide=sid, nuggets=nugs,
         title=a.title, parked=parked_flag)
     print(json.dumps({"slide_id": sid, "nuggets": nugs, "parked": parked_flag}))
+
+
+def cmd_set_status(root: Path, a):
+    data = {"phase": a.phase, "detail": getattr(a, "detail", "") or "",
+            "label": getattr(a, "label", "") or "",
+            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+    (root / STATUS_FILE).write_text(
+        json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    write_order(root, order(root))
+    log(root, "orchestrator", "set-status", **data)
+    print(json.dumps({"status": "set", **data}, ensure_ascii=False))
+
+
+def cmd_clear_status(root: Path, a):
+    p = root / STATUS_FILE
+    existed = p.exists()
+    if existed:
+        p.unlink()
+    write_order(root, order(root))
+    log(root, "orchestrator", "clear-status", existed=existed)
+    print(json.dumps({"status": "cleared", "existed": existed}))
 
 
 def cmd_park(root: Path, a):
@@ -1389,7 +1452,7 @@ def cmd_unpark(root: Path, a):
     needs_compose = needs_composition(sp.read_text(encoding="utf-8-sig"))
     if needs_compose:
         # Discard the digest preview; the composer writes the real slide next.
-        sp.write_text(skeleton(stj.get("title", sid),
+        sp.write_text(skeleton(root, stj.get("title", sid),
                                assoc(root).get(sid, [])), encoding="utf-8")
         stj["state"] = "pending"
         stj.pop("state_before_park", None)
@@ -1468,7 +1531,8 @@ def cmd_merge(root: Path, a):
     title = a.title or "Merged: " + " + ".join(A_title(root, s) for s in parts)
     st = stamp(root)
     sid = f"{slugify(title)}--{st}"
-    (root / "slides" / f"{sid}.md").write_text(skeleton(title, merged_nugs), encoding="utf-8")
+    (root / "slides" / f"{sid}.md").write_text(
+        skeleton(root, title, merged_nugs), encoding="utf-8")
     (root / "slides" / f"{sid}.json").write_text(json.dumps(
         {"slide_id": sid, "state": "draft", "title": title,
          "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -1550,6 +1614,25 @@ def build_presenter_notes(root: Path, sid: str) -> str:
     return notes_comment("Source material (verbatim) — presenter reference:"
                          "\n\n" + "\n\n".join(blocks))
 
+def nugget_info_section(root: Path, title: str, nugget_ids: list[str]) -> str:
+    """Distilled `information` for each nugget as a markdown section: an
+    `# <title>` heading, then per-nugget (a `## <nugget title>` subhead when
+    there is more than one) the nugget's already-distilled `information`. The
+    single source of truth for "show the knowledge" — shared by digest_body
+    (Backup preview, D46) and skeleton (awaiting-composition placeholder). No
+    frontmatter, no markers, no speaker notes — the callers wrap it."""
+    nugs = [n for n in (load_nugget(root, nid) for nid in nugget_ids) if n]
+    parts = [f"\n# {title}\n"]
+    multi = len(nugs) > 1
+    for n in nugs:
+        if multi:
+            parts.append(f"\n## {n.get('title', '')}\n")
+        info = str(n.get("information", "")).strip()
+        if info:
+            parts.append("\n" + info + "\n")
+    return "".join(parts)
+
+
 def digest_body(root: Path, title: str, nugget_ids: list[str]) -> str:
     """A deterministic preview body for a Backup slide (D46): the miner's
     distilled ``information`` for each associated nugget, so a human roughly
@@ -1559,17 +1642,9 @@ def digest_body(root: Path, title: str, nugget_ids: list[str]) -> str:
 
     Carries :data:`DIGEST_MARK` so park/unpark can tell it from a real slide."""
     nugs = [n for n in (load_nugget(root, nid) for nid in nugget_ids) if n]
-    parts = [f"---\nlayout: default\ntitle: {yaml_str(title)}\n---\n",
-             f"<!-- {DIGEST_MARK}: distilled nugget information, awaiting review -->\n",
-             f"\n# {title}\n"]
-    multi = len(nugs) > 1
-    for n in nugs:
-        if multi:
-            parts.append(f"\n## {n.get('title', '')}\n")
-        info = str(n.get("information", "")).strip()
-        if info:
-            parts.append("\n" + info + "\n")
-    body = "".join(parts)
+    body = (f"---\nlayout: default\ntitle: {yaml_str(title)}\n---\n"
+            f"<!-- {DIGEST_MARK}: distilled nugget information, awaiting review -->\n"
+            + nugget_info_section(root, title, nugget_ids))
     notes = [f"[{nugget_locator(n)}]\n{raw}"
              for n in nugs if (raw := nugget_raw(n))]
     if notes:
@@ -1703,6 +1778,8 @@ def main():
     pk = sub.add_parser("park-slide"); pk.add_argument("--slide", required=True); pk.add_argument("--reason", default="")
     up = sub.add_parser("unpark-slide"); up.add_argument("--slide", required=True)
     s = sub.add_parser("set-content"); s.add_argument("--slide", required=True); s.add_argument("--body-file", required=True)
+    stp = sub.add_parser("set-status"); stp.add_argument("--phase", required=True); stp.add_argument("--detail", default=""); stp.add_argument("--label", default="")
+    sub.add_parser("clear-status")
     sub.add_parser("validate")
     a = ap.parse_args()
     root = find_deck_root(a.deck)
@@ -1713,7 +1790,8 @@ def main():
      "create-slide": cmd_create, "associate-nuggets": cmd_associate,
      "merge-slides": cmd_merge, "park-slide": cmd_park,
      "unpark-slide": cmd_unpark,
-     "set-content": cmd_set_content, "validate": cmd_validate}[a.cmd](root, a)
+     "set-content": cmd_set_content, "validate": cmd_validate,
+     "set-status": cmd_set_status, "clear-status": cmd_clear_status}[a.cmd](root, a)
 
 if __name__ == "__main__":
     main()

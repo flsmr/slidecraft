@@ -336,3 +336,17 @@ def test_prewarm_refuses_existing_deck(tmp_path):
     ans = {"topic": "X", "theme": {"type": "builtin", "source": "default"}}
     with pytest.raises(SystemExit):
         scaffold_deck.prewarm(deck, ans)
+
+
+# ---------------------------------------------------------------------------
+# D47 — transient status and pidfile ignored in git
+# ---------------------------------------------------------------------------
+
+
+def test_gitignore_excludes_transient_preview_files(tmp_path):
+    created = []
+    scaffold_deck.write_gitignore(tmp_path, created)
+    gi = (tmp_path / ".gitignore").read_text(encoding="utf-8")
+    assert "node_modules/" in gi                        # unchanged
+    assert ".draft-status.json" in gi                   # transient status
+    assert "logs/serve_deck.json" in gi                 # server pidfile

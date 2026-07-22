@@ -18,9 +18,10 @@ their JSON output; the nondeterministic work happens behind the shim.
 
 `<toolkit>` is the plugin root the wrapper passes. Shorthands used below:
 
-- `<KM>`   = `<toolkit>/slidecraft/scripts/km.py`
-- `<SHIM>` = `<toolkit>/slidecraft/scripts/invoke_shim.py`
-- `<CONV>` = `<toolkit>/slidecraft/scripts/source_converter.py`
+- `<KM>`    = `<toolkit>/slidecraft/scripts/km.py`
+- `<SHIM>`  = `<toolkit>/slidecraft/scripts/invoke_shim.py`
+- `<CONV>`  = `<toolkit>/slidecraft/scripts/source_converter.py`
+- `<SERVE>` = `<toolkit>/slidecraft/scripts/serve_deck.py`
 
 Run every script with `--deck <deck-root>` (or from the deck's CWD). Do all work in a scratch
 dir for the transient brief / result / payload files (e.g. `logs/draft/`); they are not deck
@@ -47,6 +48,23 @@ The shim exit codes are the terminal signal — **read them, never ignore them**
 `{out}` is a literal placeholder the shim replaces with the parsed-output file — pass it
 verbatim. (Do **not** confuse the shim's exit 3 with km's own exit 3 = `budget_full`.)
 
+## 0. Start the live preview (background) + status
+
+Kick this off first, concurrently with the pipeline — it must not block mining:
+
+    python "<SERVE>" --deck <deck>         # run with the tool's run_in_background
+
+Read its one-line JSON: `served` (browser opening) / `reused` (already live) /
+`no-preview` (Node or npm missing — continue drafting; files still update, the
+user previews later via `show_slide_deck`). Record which, for the final report.
+
+Then set the first status so the browser shows progress immediately:
+
+    python "<KM>" --deck <deck> set-status --phase convert --label "Converting inputs…"
+
+The status slide is inline and **uncounted** (never consumes a budget slot).
+Update it at each phase transition below; clear it at the end.
+
 ## 1. Convert (deterministic)
 
 ```
@@ -57,6 +75,10 @@ Turns each new file in `input/` into `sources/<slug>.json` (paged text + image r
 the images extracted to `public/extracted/`). Idempotent — already-converted inputs are
 skipped. A source record carries `original_file`, `pages`, and an `images` list; each image
 record has an `image_source_id`, its `/extracted/…` `path`, `page`, and `context_text`.
+
+Once conversion produces the source count `<N sources>`, update the status:
+
+    python "<KM>" --deck <deck> set-status --phase mine --detail "0/<N sources>" --label "Mining sources…"
 
 ## 2. Mine (one invoke per text source + per extracted image)
 
@@ -91,7 +113,11 @@ python "<KM>" --deck <deck> mark-mined --source <S>
 ```
 
 This stamps `mined_at` and moves the input to `input/processed/`, so a re-run skips it
-(delta behavior, D18).
+(delta behavior, D18). Then bump the status detail with the running count of sources mined:
+
+```
+python "<KM>" --deck <deck> set-status --phase mine --detail "<done>/<N>" --label "Mining sources…"
+```
 
 **Miner terminal (drop).** A shim exit 3 or 4 on a miner means that source's text — or that
 one figure — produced no nugget. **Flag it** in the run report (e.g. "figure
@@ -102,6 +128,10 @@ Collect the created nugget ids from each `result.json` / the `persist-nuggets` o
 storyteller places every one.
 
 ## 3. Plan (one storyteller invoke)
+
+Before the storyteller invoke, update the status:
+
+    python "<KM>" --deck <deck> set-status --phase plan --label "Planning deck structure…"
 
 ```
 python "<KM>"   --deck <deck> plan-brief --out <brief>
@@ -144,7 +174,12 @@ create and merge returns.
 `needs_compose: true`.** Skip **parked creates** — km already wrote their digest body (D46), and a
 directly-parked slide is not part of the main flow. An unpark of a digest slide (`needs_compose:
 true`) discards the digest and needs a real composition, so treat it like a create; an unpark that
-restored a real body (`needs_compose: false`) is already done. Clean invoke each time:
+restored a real body (`needs_compose: false`) is already done. As slides are composed, keep a
+running count in the status:
+
+    python "<KM>" --deck <deck> set-status --phase compose --detail "<composed>/<total>" --label "Composing slides…"
+
+Clean invoke each time:
 
 ```
 python "<KM>"   --deck <deck> compose-brief --slide <slide_id> --out <brief>
@@ -168,6 +203,15 @@ python "<KM>" --deck <deck> park-slide --slide <slide_id> --reason "composition 
 
 ## 5. Validate + report
 
+On success, clear the transient status slide so the finished deck is clean:
+
+    python "<KM>" --deck <deck> clear-status
+
+On an **aborted** run (storyteller terminal, §3), do NOT clear — instead set a
+terminal status so the browser reflects the stop, then surface the error:
+
+    python "<KM>" --deck <deck> set-status --phase aborted --label "Draft aborted — see report"
+
 ```
 python "<KM>" --deck <deck> validate
 ```
@@ -180,7 +224,9 @@ non-zero exit as a hard failure and surface the `errors`. On success, report:
   failed) — these render at the end for the human to review and keep-or-hide (D46);
 - any **dropped** nuggets / figures the miners could not produce (flagged in phase 2);
 - unresolved `FIGURE NEEDED` markers;
-- and, on an aborted run, the storyteller error that stopped it.
+- and, on an aborted run, the storyteller error that stopped it;
+- whether the live preview was active (served / reused / no-preview) and, if serving, that it
+  stays running — close the window / Ctrl-C to stop it.
 
 Tell the user they can preview with `show_slide_deck.cmd`. Every content slide should trace
 to nuggets; the budget is respected; presenter notes are verbatim provenance.
