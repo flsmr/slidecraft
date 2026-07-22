@@ -193,17 +193,17 @@ def parse_structured(raw: str) -> dict:
 # ---------- executors ----------
 
 class OwuiExecutor:
-    """OpenAI-compatible chat against the IU Open WebUI deployment.
+    """OpenAI-compatible chat against an Open WebUI deployment.
 
-    Auth reuses the owui skill's mechanism: an explicit token, else
-    ``OPENWEBUI_TOKEN`` from the environment, else the skill's ``.env``
-    (which may also carry ``OPENWEBUI_BASE_URL``). Resolution is lazy (at
-    ``run`` time) so construction is network- and auth-free for tests. An
+    Auth AND endpoint reuse the owui skill's mechanism: an explicit value,
+    else the environment (``OPENWEBUI_TOKEN`` / ``OPENWEBUI_BASE_URL``), else
+    the skill's ``.env``. Neither is baked in — the deployment URL is
+    site-specific and lives in config, never in the repo. Resolution is lazy
+    (at ``run`` time) so construction is network- and auth-free for tests. An
     image travels as a base64 data-URL content part; the encoding is
     memoized so retries do not re-read/re-encode the file.
     """
 
-    DEFAULT_BASE_URL = "https://ai-chat.app.iu-it.org"
     supports_image = True
 
     def __init__(self, model, token=None, base_url=None, timeout=300):
@@ -232,8 +232,11 @@ class OwuiExecutor:
     @property
     def base_url(self) -> str:
         url = (self._base_url or os.getenv("OPENWEBUI_BASE_URL")
-               or self._read_env_fallback("OPENWEBUI_BASE_URL")
-               or self.DEFAULT_BASE_URL)
+               or self._read_env_fallback("OPENWEBUI_BASE_URL"))
+        if not url:
+            raise RuntimeError(
+                "No OWUI base URL: pass base_url=, set OPENWEBUI_BASE_URL, or "
+                f"add it to the owui skill's .env at {self._env_fallback_path()}")
         return url.rstrip("/")
 
     def _resolve_token(self) -> str:
