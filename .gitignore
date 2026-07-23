@@ -65,5 +65,4 @@ cards_prompt.txt
 tickets/
 
 # Local agent-skills config (machine-local conventions, not part of the public plugin)
-CLAUDE.md
 docs/agents/
