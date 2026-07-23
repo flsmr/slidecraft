@@ -69,11 +69,21 @@ by construction. It emits **one JSON report**:
   - whether the live preview was `served`/`reused`/`no-preview`, and that a served preview stays
     running (close the window / Ctrl-C to stop it).
   - In **digest** mode, stop here — `plan`/`compose`/`validate` are `null` by design (not run).
-- **`status: "error"`** — the one case you investigate. `stopped_at` names the phase (`mine` or
-  `plan`) and `stopped_detail` carries the errors. A `mine` stop is a transport/infra failure
-  (e.g. OWUI unreachable) — fix the cause and **re-run the same command**; it resumes from the
-  un-mined source. A `plan` stop is an invalid plan after retries (nothing was composed) — surface
-  the errors; re-running re-plans once the inputs/nuggets are sound.
+    In **full** mode they are also `null` when there was nothing to do (no unplaced nuggets and
+    nothing left to compose — e.g. re-running on an already-finished deck); that is a success,
+    not an error.
+- **`status: "error"`** — the one case you investigate. `stopped_at` names the phase and
+  `stopped_detail.errors` carries the specifics — **read them to tell the cause apart**, then
+  **re-run the same command** (it resumes from where it stopped by re-deriving state):
+  - a **`mine`** stop is a transport/infra failure invoking a miner (e.g. OWUI unreachable); it
+    resumes from the un-mined source once the cause is fixed.
+  - a **`plan`** stop can be any of three causes, all surfaced here: the storyteller produced an
+    invalid plan after retries (nothing is composed off an invalid plan), a transport/infra
+    failure while invoking the storyteller (e.g. OWUI/Claude CLI unreachable), or a deterministic
+    km step failing while executing an already-written plan. `stopped_detail.errors` distinguishes
+    them — a validation message points at the nuggets/plan; a transport message points at the
+    executor being down. Re-running resumes once the underlying cause (bad inputs, or a downed
+    service) is resolved.
 
 Tell the user they can preview any time with `show_slide_deck.cmd` (Windows) / `show_slide_deck.sh`
 (macOS/Linux). Every content slide traces to nuggets and the slide budget is respected.
