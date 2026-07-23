@@ -18,10 +18,11 @@ their JSON output; the nondeterministic work happens behind the shim.
 
 `<toolkit>` is the plugin root the wrapper passes. Shorthands used below:
 
-- `<KM>`    = `<toolkit>/slidecraft/scripts/km.py`
-- `<SHIM>`  = `<toolkit>/slidecraft/scripts/invoke_shim.py`
-- `<CONV>`  = `<toolkit>/slidecraft/scripts/source_converter.py`
-- `<SERVE>` = `<toolkit>/slidecraft/scripts/serve_deck.py`
+- `<KM>`      = `<toolkit>/slidecraft/scripts/km.py`
+- `<SHIM>`    = `<toolkit>/slidecraft/scripts/invoke_shim.py`
+- `<CONV>`    = `<toolkit>/slidecraft/scripts/source_converter.py`
+- `<COMPOSE>` = `<toolkit>/slidecraft/scripts/compose_deck.py`
+- `<SERVE>`   = `<toolkit>/slidecraft/scripts/serve_deck.py`
 
 Run every script with `--deck <deck-root>` (or from the deck's CWD). Do all work in a scratch
 dir for the transient brief / result / payload files (e.g. `logs/draft/`); they are not deck
@@ -156,49 +157,53 @@ unplaced), records it to `plan.json`, and returns an **executable step list** (a
 draft with a flagged error** and compose nothing — a deck is never composed off an invalid
 plan. Report the errors from `result.json`.
 
-## 4. Execute the plan + compose
+## 4. Execute the plan + compose (two-stage)
 
-Read `plan.json`'s `steps` and run them **in order**. Each step's `op` is a km subcommand:
+Read `plan.json`'s `steps` and run them **in order**. Each step's `op` is a km subcommand —
+but do **not** compose per-create. Creating/merging a content slide leaves it needing
+composition; the batch driver in the next step owns that.
 
 - `create-slide` → `create-slide --title <t> [--nuggets a,b] [--parked] [--after <id|end>] [--intended-function <f>]` — a **structural** step (its plan entry has `"structural": true` and no nuggets) is just a create with `--nuggets` omitted; there is no `--structural` flag
 - `associate-nuggets` → `associate-nuggets --slide <id> --nuggets a,b`
 - `merge-slides` → `merge-slides --slides a,b [--title <t>]` (retires its inputs, returns the new id)
 - `park-slide` → `park-slide --slide <id> [--reason <r>]` — moves the slide into the rendered **"Backup Slides" appendix** (km auto-manages the divider); a bodyless slide gets a deterministic digest body from its nuggets' `information`, a composed slide keeps its body (D46). Not budget-counted.
-- `unpark-slide` → `unpark-slide --slide <id>` — needs a free active slot. It returns **`needs_compose`**: `true` when the slide was a digest preview (discarded → reset to `pending`, must be recomposed); `false` when it kept a real composed body (simply restored — no compose).
+- `unpark-slide` → `unpark-slide --slide <id>` — needs a free active slot. It returns **`needs_compose`**: `true` when the slide was a digest preview (discarded → reset to `pending`, so the driver will recompose it); `false` when it kept a real composed body (simply restored — nothing to recompose).
 
 The budget gate refuses a create once active slides hit `max_slides` (park/merge frees a
-slot first — the plan is already validated to respect this). Capture the `slide_id` each
-create and merge returns.
+slot first — the plan is already validated to respect this). Skip nothing here for composition:
+a **parked create** already has its digest body (D46) and is not part of the main flow; every
+other active, uncomposed slide is picked up automatically by the driver below.
 
-**Compose after every create and every merge, and after an unpark that reports
-`needs_compose: true`.** Skip **parked creates** — km already wrote their digest body (D46), and a
-directly-parked slide is not part of the main flow. An unpark of a digest slide (`needs_compose:
-true`) discards the digest and needs a real composition, so treat it like a create; an unpark that
-restored a real body (`needs_compose: false`) is already done. As slides are composed, keep a
-running count in the status:
+Then run the batch driver **once**; it owns all planner + designer OWUI calls (D7):
+
+```
+python "<COMPOSE>" --deck <deck> --run-label <run>
+```
+
+For each to-compose slide (active, unlocked, not yet composed — in deck order) it runs
+`km compose-brief` → the planner (invoke shim) → `km write-skeleton` (validates the plan,
+renders a visible **wireframe**, and PLACES any `source-image` area from the mined figure);
+then it builds every pending content section **concurrently** via `design_section.py`
+(`km design-brief` → the area's designer → `km place-design`). A wireframe renders the instant
+a slide is planned and each area fills in as its designer lands — free live-preview progress.
+Update the status while it runs:
 
     python "<KM>" --deck <deck> set-status --phase compose --detail "<composed>/<total>" --label "Composing slides…"
 
-Clean invoke each time:
+Read the driver's JSON report and fold it into the run report:
+
+- `composed` — slides finished (all sections placed, or structural title-only);
+- `parked` — a slide whose **planner** exhausted (cap-2 retries) → parked + flagged, so the
+  deck stays valid and the gap is visible (its Backup entry carries the reason);
+- `failed_sections` — an **area whose designer** exhausted: its wireframe stays visible and the
+  section is flagged (the slide is still a valid `planned` file — never silently dropped);
+- `figure_needed` — areas that still want a generated figure.
+
+To **re-generate one area** (human-in-the-loop, e.g. redo a diagram or a generated image), run
+the same driver scoped to a single slide+section — same code path, idempotent:
 
 ```
-python "<KM>"   --deck <deck> compose-brief --slide <slide_id> --out <brief>
-python "<SHIM>" --role slide-composer --brief-file <brief> --deck <deck> --out <result> \
-               -- python "<KM>" --deck <deck> write-slide --slide <slide_id> --file {out}
-```
-
-The composer sees only *its* slide's routed fields (verbatim `raw_text` for text nuggets,
-the figure's `asset` + `description` for image slides — never the `information` digest or a
-figure's `visible_text`; D42) and returns semantic role-keyed JSON. `write-slide` maps the
-semantic roles to physical slots, applies layout defaults, validates layout + asset, fills
-empty presenter notes verbatim from the nuggets (D39), stamps `concept_type`, and turns a
-non-empty `figure_needed` into a `FIGURE NEEDED` marker.
-
-**Composer terminal (park).** A shim exit 3 means this slide could not be composed. **Park it
-and flag it** so the deck stays valid and the gap is visible:
-
-```
-python "<KM>" --deck <deck> park-slide --slide <slide_id> --reason "composition failed after 3 attempts"
+python "<COMPOSE>" --deck <deck> --slide <slide_id> --section <role>
 ```
 
 ## 5. Validate + report
@@ -220,10 +225,13 @@ python "<KM>" --deck <deck> validate
 non-zero exit as a hard failure and surface the `errors`. On success, report:
 
 - the ordered slide list;
-- the **Backup Slides** appendix: each parked slide + why (off-storyline, or a composition that
-  failed) — these render at the end for the human to review and keep-or-hide (D46);
+- the **Backup Slides** appendix: each parked slide + why (off-storyline, or a **planner** that
+  exhausted, §4) — these render at the end for the human to review and keep-or-hide (D46);
+- any **`failed_sections`** the driver reported: an area whose designer exhausted keeps a visible
+  wireframe on an otherwise-valid `planned` slide — flag each so the human can re-run that one
+  area (`--slide <id> --section <role>`);
 - any **dropped** nuggets / figures the miners could not produce (flagged in phase 2);
-- unresolved `FIGURE NEEDED` markers;
+- unresolved figures (`figure_needed`);
 - and, on an aborted run, the storyteller error that stopped it;
 - whether the live preview was active (served / reused / no-preview) and, if serving, that it
   stays running — close the window / Ctrl-C to stop it.

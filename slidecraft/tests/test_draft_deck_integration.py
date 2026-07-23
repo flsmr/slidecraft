@@ -1,17 +1,28 @@
-"""Ticket 17 — /draft-deck orchestrator end-to-end, at the CLI seams.
+"""Ticket 17 / Task 14 — /draft-deck orchestrator end-to-end, at the CLI seams.
 
 The v1 orchestrator IS the ``/draft-deck`` command (an LLM lead running the
 deterministic scripts); its target form is a Workflow over the same seams. This
 test drives that documented phase sequence — convert -> mine (one invoke per
 text source + per extracted image) -> plan -> execute-plan (create/associate/
-merge/park; compose after every create and merge) -> validate — over a fixture
-deck with a **fake executor** (canned miner/storyteller/composer outputs), and
-asserts the deck reaches a green ``validate``. No test touches a live LLM.
+merge/park; NO per-create compose) -> **two-stage compose** (compose_deck: plan
+every slide -> write-skeleton -> designers per section -> place) -> validate —
+over a fixture deck with a **fake executor** (canned miner / storyteller /
+planner / designer outputs), and asserts the deck reaches a green ``validate``.
+No test touches a live LLM.
 
 ``draft_deck`` below is the test harness that mirrors the command doc: it calls
-the real km CLI and the real invoke shim, only the executor is faked. It also
-collects the per-role terminals (drop/park/abort) into a run report, so the
+the real km CLI, the real invoke shim, and the real ``compose_deck`` driver —
+only the executor is faked. It also collects the per-role terminals (miner drop,
+planner park, storyteller abort, designer failure) into a run report, so the
 "flagged, never silent" behavior is asserted at the seam the orchestrator owns.
+
+Two-stage determinism: ``compose_deck`` runs Stage-2 designers concurrently, and
+``wire_fake_executor`` replays canned replies by a global per-role counter, so
+the reply a section gets depends on designer-call ORDER. The harness passes
+``max_workers=1`` to force job order = deck order (to-compose slides) then
+section order, and the canned lists are ordered to match; assertions still
+prefer "reply present in the right slide's md" over global ordering to stay
+robust.
 """
 from __future__ import annotations
 
@@ -22,7 +33,7 @@ import sys
 from argparse import Namespace
 from pathlib import Path
 
-from slidecraft.scripts import invoke_shim, km, source_converter
+from slidecraft.scripts import compose_deck, invoke_shim, km, source_converter
 from slidecraft.tests.conftest import wire_fake_executor
 
 KM = str(Path(km.__file__))
@@ -87,22 +98,38 @@ CH10_MINE = _text_batch(
      "raw_text": RAW_3, "page": 1})
 
 
-def _compose(layout, concept, content, image=None) -> str:
-    obj = {"layout": layout, "concept_type": concept, "content": content}
-    if image:
-        obj["image"] = image
-    return json.dumps(obj)
+# --- canned two-stage outputs: planner plan-JSON + designer replies --------
+#
+# Stage-1 (slide-composer / planner) returns ONE plan-JSON per to-compose slide.
+# Stage-2 designers return ONE prose/markup reply per pending content section.
+# A *structural* slide (empty sections) renders title + layout defaults only —
+# write-skeleton promotes it to composed with NO designer call. A *source-image*
+# section is PLACED by write-skeleton (the figure asset), also no designer.
+
+def _plan(layout, concept, title, sections) -> str:
+    return json.dumps({"layout": layout, "concept_type": concept,
+                       "title": title, "sections": sections})
 
 
-COVER = _compose("cover", "structural",
-                 {"title": "Object Tracking", "meta": "Dr. Jane Roe · 2026"})
-CONTENT = _compose("content", "define",
-                   {"title": "Tracking estimates state",
-                    "body": "- estimate state over time\n- from measurements"})
-FIGURE = _compose("figure", "process", {"title": "The tracking loop"},
-                  image={"asset": IMG_ASSET, "alt": "predict-update loop"})
-CLOSING = _compose("closing", "structural", {})
-BAD_COMPOSE = _compose("no-such-layout", "define", {"title": "T"})
+def _plan_structural(title) -> str:
+    return _plan("content", "structural", title, {})
+
+
+def _plan_text(title, nuggets, concept="define", instructions="define it") -> str:
+    return _plan("content", concept, title,
+                 {"body": {"type": "text", "instructions": instructions,
+                           "nuggets": list(nuggets)}})
+
+
+def _plan_source_image(title, nuggets, concept="process",
+                       instructions="place the loop figure") -> str:
+    return _plan("content", concept, title,
+                 {"body": {"type": "source-image", "instructions": instructions,
+                           "nuggets": list(nuggets)}})
+
+
+# The text-designer's built body for the "Core idea" slide (Stage-2).
+DESIGN_CORE_BODY = "- estimate state over time\n- from measurements"
 
 
 # --- deck fixture seeding -------------------------------------------------
@@ -142,18 +169,35 @@ def _invoke(role, brief, deck, result, persist_argv, image=None) -> int:
     return invoke_shim.main(argv)
 
 
+# Roles wired from build()'s return, in (deck-context role, build key) pairs.
+_DESIGNER_WIRING = (("slide-composer", "planner"),
+                    ("text-designer", "text_designer"),
+                    ("diagram-designer", "diagram_designer"),
+                    ("image-designer", "image_designer"))
+
+
 def draft_deck(deck: Path, scratch: Path, *, text_responses, image_responses,
-               build, park_reason="composition failed after 3 attempts") -> dict:
+               build) -> dict:
     """Drive the documented /draft-deck sequence with fake executors.
 
     ``text_responses`` / ``image_responses`` are the canned miner outputs (in
-    invocation order). ``build(deck, nuggets_by_kind) -> {"plan", "composer"}``
-    supplies the storyteller plan (referencing the real, just-mined nugget ids)
-    and the composer outputs in step order.
+    invocation order). ``build(deck, nuggets_by_kind)`` supplies:
+
+      - ``"plan"``: the storyteller plan (referencing the real, just-mined
+        nugget ids), and
+      - ``"planner"``: one Stage-1 plan-JSON per to-compose slide, in deck
+        (creation) order, plus
+      - ``"text_designer"`` / ``"diagram_designer"`` / ``"image_designer"``:
+        one Stage-2 reply per pending section of that role, in job order.
+
+    The create/associate/merge/park steps run first (NO per-create compose);
+    then ``compose_deck`` runs the whole two-stage pass ONCE at max_workers=1
+    (deterministic replay order), and its report folds into the run report.
     """
     scratch.mkdir(parents=True, exist_ok=True)
     report = {"dropped": [], "parked": [], "created": [], "aborted": False,
-              "abort_errors": [], "validate": None, "validate_ok": False}
+              "abort_errors": [], "failed_sections": [],
+              "validate": None, "validate_ok": False}
 
     wire_fake_executor(deck, scratch, "knowledge-miner", text_responses)
     if image_responses:
@@ -199,7 +243,6 @@ def draft_deck(deck: Path, scratch: Path, *, text_responses, image_responses,
     built = build(deck, by_kind)
     wire_fake_executor(deck, scratch, "storyteller",
                        [json.dumps(built["plan"])])
-    wire_fake_executor(deck, scratch, "slide-composer", built["composer"])
 
     pbrief = scratch / "plan.md"
     _cap(lambda: km.cmd_plan_brief(deck, Namespace(out=str(pbrief))))
@@ -212,21 +255,8 @@ def draft_deck(deck: Path, scratch: Path, *, text_responses, image_responses,
             pres.read_text(encoding="utf-8")).get("errors", [])
         return report
 
-    # 4. Execute the plan + compose after every create and merge
+    # 4. Execute the plan (NO per-create compose — the driver composes later)
     steps = json.loads((deck / "plan.json").read_text(encoding="utf-8"))["steps"]
-
-    def compose(sid):
-        cbrief = scratch / f"compose-{sid}.md"
-        _cap(lambda: km.cmd_compose_brief(
-            deck, Namespace(slide=sid, out=str(cbrief))))
-        cres = scratch / f"compose-{sid}.result.json"
-        rc = _invoke("slide-composer", cbrief, deck, cres,
-                     ["write-slide", "--slide", sid, "--file", "{out}"])
-        if rc != 0:                                   # composer terminal: park
-            _cap(lambda: km.cmd_park(
-                deck, Namespace(slide=sid, reason=park_reason)))
-            report["parked"].append(sid)
-
     for step in steps:
         op = step["op"]
         if op == "create-slide":
@@ -234,22 +264,30 @@ def draft_deck(deck: Path, scratch: Path, *, text_responses, image_responses,
                 title=s["title"], nuggets=",".join(s["nuggets"]),
                 after=s["after"], parked=s["parked"],
                 intended_function=s["intended_function"])))
-            sid = out["slide_id"]
-            report["created"].append(sid)
-            if not step["parked"]:
-                compose(sid)
+            report["created"].append(out["slide_id"])
         elif op == "associate-nuggets":
             _cap(lambda s=step: km.cmd_associate(deck, Namespace(
                 slide=s["slide"], nuggets=",".join(s["nuggets"]))))
         elif op == "merge-slides":
-            out = _cap(lambda s=step: km.cmd_merge(deck, Namespace(
+            _cap(lambda s=step: km.cmd_merge(deck, Namespace(
                 slides=",".join(s["slides"]), title=s["title"])))
-            compose(out["slide_id"])
         elif op == "park-slide":
             _cap(lambda s=step: km.cmd_park(deck, Namespace(
                 slide=s["slide"], reason=s["reason"])))
         elif op == "unpark-slide":
             _cap(lambda s=step: km.cmd_unpark(deck, Namespace(slide=s["slide"])))
+
+    # 4b. Two-stage compose — wire the planner + designer fakes (only the roles
+    #     with canned replies), then run the batch driver ONCE. max_workers=1
+    #     keeps the global-counter replay deterministic (design-call order =
+    #     deck order, then section order).
+    for role, key in _DESIGNER_WIRING:
+        responses = built.get(key) or []
+        if responses:
+            wire_fake_executor(deck, scratch, role, responses)
+    cd = compose_deck.compose_deck(deck, run_label="test", max_workers=1)
+    report["parked"].extend(cd["parked"])
+    report["failed_sections"] = cd["failed_sections"]
 
     # 5. Validate (non-zero exit is the gate)
     vres = scratch / "validate.result.json"
@@ -301,7 +339,14 @@ def _full_plan(deck, by_kind):
          "intended_function": "process"},
         {"action": "create", "structural": True, "title": "Summary"},
     ], "notes": ""}
-    return {"plan": plan, "composer": [COVER, CONTENT, FIGURE, CLOSING]}
+    # Planner plans in DECK (creation) order; one text-designer reply for the
+    # single pending content section (the figure is a placed source-image).
+    return {"plan": plan,
+            "planner": [_plan_structural("Object Tracking"),
+                        _plan_text("Tracking estimates state", [t1, t2]),
+                        _plan_source_image("The tracking loop", [img1]),
+                        _plan_structural("Summary")],
+            "text_designer": [DESIGN_CORE_BODY]}
 
 
 def _assoc(deck: Path) -> dict:
@@ -324,6 +369,7 @@ def test_full_draft_reaches_green_validate(deck, tmp_path):
     assert report["validate"]["slides"] == 4
     assert report["validate"]["parked"] == []
     assert report["dropped"] == [] and report["parked"] == []
+    assert report["failed_sections"] == []
     assert report["aborted"] is False
     assert len(report["created"]) == 4
 
@@ -334,18 +380,19 @@ def test_full_draft_reaches_green_validate(deck, tmp_path):
     assert placed == all_nuggets                       # nothing left unplaced
     assert len(all_nuggets) == 3                       # 2 text + 1 image
 
-    # The composed content slide carries verbatim presenter notes (D39) and
-    # its assertion body; the figure slide places the real asset.
+    # The content slide carries the Stage-2 DESIGNER's placed text in its
+    # physical slot (verbatim presenter notes / composer slot markers are NOT
+    # part of the two-stage path in v1 — see the plan's deferred list). The
+    # figure slide places the real asset from its source-image section, no
+    # designer (write-skeleton places it).
     content_sid = [s for s, n in A.items() if len(n) == 2][0]
     content_md = (deck / "slides" / f"{content_sid}.md").read_text(encoding="utf-8")
-    assert RAW_1 in content_md and RAW_2 in content_md      # verbatim notes
-    assert "::heading::" in content_md                      # physical slot
+    assert "estimate state over time" in content_md    # designer-built body
     figure_sid = [s for s, n in A.items()
                   if any((km.load_nugget(deck, x) or {}).get("kind") == "image"
                          for x in n)][0]
     figure_md = (deck / "slides" / f"{figure_sid}.md").read_text(encoding="utf-8")
     assert IMG_ASSET in figure_md
-    assert "Predict" in figure_md                           # image visible_text notes
 
 
 # ==========================================================================
@@ -367,7 +414,10 @@ def test_miner_drop_is_flagged_and_pipeline_continues(deck, tmp_path):
             {"action": "create", "structural": True, "title": "Cover"},
             {"action": "create", "title": "The loop", "nuggets": [img1]},
         ], "notes": ""}
-        return {"plan": plan, "composer": [COVER, FIGURE]}
+        # Both slides compose without a designer: structural + placed source-image.
+        return {"plan": plan,
+                "planner": [_plan_structural("Cover"),
+                            _plan_source_image("The loop", [img1])]}
 
     # chapter-9 is mined first: its three attempts (initial + cap-2 retries)
     # all get the bad output and exhaust to the drop terminal; figures' empty
@@ -384,34 +434,49 @@ def test_miner_drop_is_flagged_and_pipeline_continues(deck, tmp_path):
     assert kinds == ["image"]
 
 
-def test_composer_park_terminal_keeps_deck_green(deck, tmp_path):
-    """A slide the composer cannot produce is parked + flagged; validate stays
-    green with the failed slide in the parked block."""
+def test_designer_failure_is_flagged(deck, tmp_path):
+    """A content section whose designer never yields usable output is flagged in
+    the run report and leaves its wireframe visible; the slide stays `planned`
+    (NOT parked — a designer exhaustion is not a planner park) and validate stays
+    green: a planned slide with a rendered wireframe is a valid slide file."""
     _seed_inputs(deck)
 
-    def plan_with_doomed_last(deck, by_kind):
+    def plan_with_failing_body(deck, by_kind):
         t1, t2 = by_kind["text"][:2]
         (img1,) = by_kind["image"]
         plan = {"plan": [
             {"action": "create", "structural": True, "title": "Cover"},
             {"action": "create", "title": "Core", "nuggets": [t1, t2]},
-            # The figure slide is composed LAST; its bad output repeats through
-            # the cap-2 retries and exhausts to the park terminal.
-            {"action": "create", "title": "Doomed figure", "nuggets": [img1]},
+            # The figure keeps D34 satisfied (every nugget placed); it composes
+            # fine as a source-image while the Core text section fails.
+            {"action": "create", "title": "The loop", "nuggets": [img1]},
         ], "notes": ""}
-        return {"plan": plan, "composer": [COVER, CONTENT, BAD_COMPOSE]}
+        # The Core text-designer returns EMPTY on every attempt (the fake
+        # repeats its last reply), so place-design rejects empty content and
+        # design_one exhausts → compose_deck records a failed_section.
+        return {"plan": plan,
+                "planner": [_plan_structural("Cover"),
+                            _plan_text("Core", [t1, t2]),
+                            _plan_source_image("The loop", [img1])],
+                "text_designer": [""]}
 
     report = draft_deck(deck, tmp_path / "run1",
                         text_responses=[CH9_MINE, EMPTY_MINE],
-                        image_responses=[IMG_MINE], build=plan_with_doomed_last)
+                        image_responses=[IMG_MINE], build=plan_with_failing_body)
 
-    assert len(report["parked"]) == 1
-    doomed = report["parked"][0]
-    assert report["validate_ok"] is True
-    assert report["validate"]["parked"] == [doomed]
-    assert report["validate"]["slides"] == 2           # cover + core active
-    stj = km.load_state(deck, doomed)
-    assert stj["state"] == "parked" and "composition failed" in stj["parked_reason"]
+    assert report["failed_sections"], "the exhausted designer must be flagged"
+    fs = report["failed_sections"][0]
+    assert fs["section"] == "body"
+    assert report["parked"] == []                      # a designer fail never parks
+    assert report["validate_ok"] is True               # deck stays green
+    assert report["validate"]["slides"] == 3           # cover + core + loop active
+
+    # The flagged slide stayed `planned` with its wireframe still visible.
+    core_sid = fs["slide"]
+    stj = km.load_state(deck, core_sid)
+    assert stj["state"] == "planned"
+    core_md = (deck / "slides" / f"{core_sid}.md").read_text(encoding="utf-8")
+    assert "pending" in core_md                        # wireframe placeholder
 
 
 def test_storyteller_abort_composes_nothing(deck, tmp_path):
@@ -422,7 +487,7 @@ def test_storyteller_abort_composes_nothing(deck, tmp_path):
         plan = {"plan": [
             {"action": "create", "title": "Ghost", "nuggets": ["no-such-id"]}],
             "notes": ""}
-        return {"plan": plan, "composer": [CONTENT]}
+        return {"plan": plan}     # abort precedes compose; no planner needed
 
     report = draft_deck(deck, tmp_path / "run1",
                         text_responses=[CH9_MINE, EMPTY_MINE],
@@ -459,9 +524,10 @@ def test_second_run_delta_plan_mines_only_new_input(deck, tmp_path):
         plan = {"plan": [
             {"action": "create", "title": "Deep trackers", "nuggets": fresh,
              "intended_function": "finding"}], "notes": ""}
-        return {"plan": plan, "composer": [
-            _compose("content", "finding",
-                     {"title": "Deep trackers", "body": "- deep networks"})]}
+        # The one new content slide: a text section built by the text-designer.
+        return {"plan": plan,
+                "planner": [_plan_text("Deep trackers", fresh, concept="finding")],
+                "text_designer": ["- deep networks"]}
 
     report = draft_deck(deck, tmp_path / "run2",
                         text_responses=[CH10_MINE],  # only chapter-10 unmined

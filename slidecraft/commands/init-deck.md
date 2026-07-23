@@ -122,3 +122,12 @@ the double-click launcher above is the manual/fallback path — useful for reope
 later, or if the automatic launch reported `no-preview`.
 
 No content is generated at this stage.
+
+> **Note (D8 — the convert→mine→plan chain lives in `/draft-deck`, not here).** `/init-deck`
+> only scaffolds; it runs no LLM. The first phase of `/draft-deck` is the deterministic
+> **convert** over whatever files are already in `input/`, and mining follows immediately —
+> so by the time the storyteller plans, every input has been converted and mined into nuggets
+> (nuggets exist *before* planning). The convert→mine ordering is owned by the orchestrator on
+> purpose: `source_converter.py` never invokes a miner, because mining is an LLM seam that must
+> stay behind the invoke shim (ADR-0001). Dropping new inputs later and re-running `/draft-deck`
+> picks them up the same way (delta behavior, D18).
