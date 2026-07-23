@@ -237,7 +237,7 @@ non-zero exit as a hard failure and surface the `errors`. On success, report:
   stays running — close the window / Ctrl-C to stop it.
 
 Tell the user they can preview with `show_slide_deck.cmd`. Every content slide should trace
-to nuggets; the budget is respected; presenter notes are verbatim provenance.
+to nuggets and the budget is respected.
 
 > **Note (D35, target):** the deterministic form of this orchestration is a Workflow
 > (`draft_deck.js`) over the *same* seams — miners in `parallel()`, the storyteller as a
