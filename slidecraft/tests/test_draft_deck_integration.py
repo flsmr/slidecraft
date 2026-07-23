@@ -34,6 +34,7 @@ from argparse import Namespace
 from pathlib import Path
 
 from slidecraft.scripts import compose_deck, invoke_shim, km, source_converter
+from slidecraft.scripts import draft_deck as dd   # the real driver (A2/A3)
 from slidecraft.tests.conftest import wire_fake_executor
 
 KM = str(Path(km.__file__))
@@ -577,3 +578,74 @@ def test_status_slide_is_threaded_and_cleared_without_costing_budget(deck, tmp_p
     final = (deck / "slides.md").read_text(encoding="utf-8")
     assert "Mining sources…" not in final              # cleared
     assert not (deck / ".draft-status.json").exists()
+
+
+# ==========================================================================
+# The real driver (draft_deck.py, design §5): digest mode + fail-fast/resume
+# ==========================================================================
+
+def test_digest_mode_mines_then_stops(deck, tmp_path):
+    """Digest mode runs convert + mine and STOPS — plan/compose/validate are
+    null (not run at all, §5.2). A re-run mines nothing (delta, §5.3)."""
+    _seed_inputs(deck)
+    wire_fake_executor(deck, tmp_path, "knowledge-miner", [CH9_MINE, EMPTY_MINE])
+    wire_fake_executor(deck, tmp_path, "image-miner", [IMG_MINE], image_arg=True)
+
+    report = dd.run(deck, mode="digest")
+
+    assert report["status"] == "ok"
+    assert report["mode"] == "digest"
+    assert report["mine"]["sources_mined"] == 2
+    assert report["mine"]["nuggets_created"] == 3      # 2 text + 1 image
+    assert report["mine"]["dropped"] == []
+    assert report["plan"] is None                      # not run at all
+    assert report["compose"] is None
+    assert report["validate"] is None
+    assert list((deck / "slides").glob("*.md")) == []  # nothing composed
+
+    # Re-run: every source is now marked mined → nothing to mine.
+    report2 = dd.run(deck, mode="digest")
+    assert report2["mine"]["sources_mined"] == 0
+    assert report2["mine"]["nuggets_created"] == 0
+
+
+def _count_nuggets(deck):
+    return len(list((deck / "nuggets").glob("*.json")))
+
+
+def _wire_boom(deck, tmp_path, role):
+    """Point a role at a `cmd` executor that exits non-zero → the shim records
+    status='error' (an infra failure no re-invoke can fix)."""
+    respdir = tmp_path / f"boom-{role}"
+    respdir.mkdir(parents=True)
+    script = tmp_path / "boom.py"
+    script.write_text("import sys; sys.exit(1)", encoding="utf-8")
+    ctx_path = deck / "deck-context.json"
+    ctx = json.loads(ctx_path.read_text(encoding="utf-8"))
+    ctx.setdefault("executors", {})[role] = {
+        "executor": "cmd", "command": [sys.executable, str(script)]}
+    ctx_path.write_text(json.dumps(ctx, indent=2), encoding="utf-8")
+
+
+def test_mine_infra_error_stops_then_resumes(deck, tmp_path):
+    """A shim `error` mid-mine stops the run at `mine` (the source stays
+    unmined); a re-run with a healthy executor resumes and mines it (§5.3/§5.4)."""
+    _seed_inputs(deck)
+    _wire_boom(deck, tmp_path, "knowledge-miner")
+
+    stopped = dd.run(deck, mode="digest")
+    assert stopped["status"] == "error"
+    assert stopped["stopped_at"] == "mine"
+    assert _count_nuggets(deck) == 0                   # nothing persisted
+    # chapter-9 was never marked mined → still unmined.
+    unmined = [p.stem for p in (deck / "sources").glob("*.json")
+               if not json.loads(p.read_text(encoding="utf-8")).get("mined_at")]
+    assert TEXT_SLUG in unmined
+
+    # Heal the executor and resume (distinct role dirs → no mkdir collision).
+    wire_fake_executor(deck, tmp_path, "knowledge-miner", [CH9_MINE, EMPTY_MINE])
+    wire_fake_executor(deck, tmp_path, "image-miner", [IMG_MINE], image_arg=True)
+    resumed = dd.run(deck, mode="digest")
+    assert resumed["status"] == "ok"
+    assert resumed["mine"]["sources_mined"] == 2
+    assert _count_nuggets(deck) == 3
