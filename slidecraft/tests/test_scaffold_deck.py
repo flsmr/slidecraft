@@ -167,6 +167,74 @@ def test_footer_derived_from_presenter_only(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Cover-slot resolution (design §4)
+# ---------------------------------------------------------------------------
+
+def _caps(*layouts):
+    return {"layouts": list(layouts), "components": []}
+
+
+def test_cover_layout_prefers_semantic_alias():
+    caps = _caps({"name": "slide1", "slots": ["body-26"], "alias": "cover",
+                  "roles": {"title": "body-26"}, "intent": "Deck cover."},
+                 {"name": "cover", "slots": ["default"]})
+    assert scaffold_deck.cover_layout(caps)["name"] == "slide1"   # alias wins
+
+
+def test_cover_layout_falls_back_to_physical_name():
+    caps = _caps({"name": "content", "slots": ["heading"]},
+                 {"name": "cover", "slots": ["default"]})
+    assert scaffold_deck.cover_layout(caps)["name"] == "cover"
+
+
+def test_cover_layout_none_when_absent():
+    caps = _caps({"name": "content", "slots": ["heading"]})
+    assert scaffold_deck.cover_layout(caps) is None
+
+
+def test_cover_questions_semantic_combined_field_asked_verbatim():
+    # `meta` is a combined field — with the synonym table dropped it is asked
+    # verbatim like any other slot (no composition). `title`/`date` are dropped.
+    caps = _caps({"name": "slide1", "slots": ["body-26", "body-12", "body-1"],
+                  "alias": "cover",
+                  "roles": {"title": "body-26", "meta": "body-12",
+                            "date": "body-1"},
+                  "intent": "Deck cover: title; author+date in meta."})
+    ids = [q["id"] for q in scaffold_deck.cover_slot_questions(caps)]
+    assert ids == ["meta"]                       # title + date dropped
+
+
+def test_cover_questions_semantic_standalone_field():
+    caps = _caps({"name": "slide1", "slots": ["h", "p"], "alias": "cover",
+                  "roles": {"title": "h", "presenter": "p"},
+                  "intent": "Cover."})
+    ids = [q["id"] for q in scaffold_deck.cover_slot_questions(caps)]
+    assert ids == ["presenter"]
+
+
+def test_cover_questions_physical_fallback():
+    caps = _caps({"name": "cover", "slots": ["default", "author", "title"]})
+    ids = [q["id"] for q in scaffold_deck.cover_slot_questions(caps)]
+    assert ids == ["author"]                     # default + title dropped
+
+
+def test_cover_questions_empty_when_no_cover_layout():
+    caps = _caps({"name": "content", "slots": ["heading"]})
+    assert scaffold_deck.cover_slot_questions(caps) == []
+
+
+def test_cover_answers_stored_verbatim_in_deck_context(tmp_path):
+    theme_dir = _make_theme(tmp_path / "theme", styleguide=False)
+    deck = tmp_path / "deck"
+    deck.mkdir()
+    ans = _answers({"type": "local", "source": str(theme_dir)},
+                   cover={"meta": "Dr. Jane Roe · 2026-07-23"})
+    scaffold_deck.scaffold(deck, ans)
+    ctx = json.loads((deck / "deck-context.json").read_text(encoding="utf-8"))
+    assert ctx["deck"]["cover"] == {"meta": "Dr. Jane Roe · 2026-07-23"}
+
+
+# ---------------------------------------------------------------------------
 # D38 — duration → slides pacing (max_slides derived when not given)
 # ---------------------------------------------------------------------------
 
