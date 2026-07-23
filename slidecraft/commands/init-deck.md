@@ -63,11 +63,13 @@ As soon as topic + theme are known:
    free-text question per role/slot name it exposes, **skipping** `date`, `title`, and a bare
    `default`. If there is no cover layout, ask no metadata questions.
 
-## 4. Interview part 2 — length, type, setting, cover metadata
+## 4. Interview part 2 — audience, length, type, setting, cover metadata
 
 Continue with **AskUserQuestion** (batched, up to 4 per call) while the install runs. Walk the
-remaining spec questions in order — `language`, `deck_type`, `setting`, `max_duration_minutes` —
-plus any **cover-slot questions** from step 3. For each spec question:
+remaining spec questions in order — `audience`, `language`, `deck_type`, `setting`,
+`max_duration_minutes` — plus any **cover-slot questions** from step 3. `audience` is the one
+**branching** question (its `Students` option triggers a `deck_subtype` follow-up), so it is where
+the follow-up resolution below actually fires; the others are leaves. For each spec question:
 
 - Ask it exactly as declared. After the answer, resolve the follow-up deterministically:
   ```
