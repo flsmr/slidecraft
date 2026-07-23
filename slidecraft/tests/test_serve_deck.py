@@ -85,5 +85,23 @@ def test_server_status_none_stale_live(tmp_path):
     )[0] == "live"
 
 
+def test_pick_port_returns_start_when_all_free():
+    assert serve_deck.pick_port(is_port_open=lambda p: False) == 3030
+
+
+def test_pick_port_skips_busy_ports():
+    busy = {3030, 3031}
+    assert serve_deck.pick_port(is_port_open=lambda p: p in busy) == 3032
+
+
+def test_pick_port_returns_none_when_all_busy():
+    assert serve_deck.pick_port(is_port_open=lambda p: True) is None
+
+
+def test_pick_port_honors_custom_range():
+    assert serve_deck.pick_port(
+        is_port_open=lambda p: p < 3035, ports=range(3030, 3041)) == 3035
+
+
 class _Rc:
     def __init__(self, code): self.returncode = code

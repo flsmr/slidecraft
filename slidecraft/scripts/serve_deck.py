@@ -105,6 +105,19 @@ def port_open(port: int, host: str = "127.0.0.1", timeout: float = 0.3) -> bool:
         return s.connect_ex((host, port)) == 0
 
 
+PORT_RANGE = range(3030, 3041)   # 3030–3040 inclusive (§6)
+
+
+def pick_port(*, is_port_open=port_open, ports=PORT_RANGE) -> int | None:
+    """First free port in `ports` (busy = something already listening), or
+    None if every candidate is occupied (§6). Uses the same liveness probe
+    as server_status so the choice is consistent with reuse detection."""
+    for p in ports:
+        if not is_port_open(p):
+            return p
+    return None
+
+
 def server_status(root: Path, *, alive=pid_alive, is_port_open=port_open):
     """('live'|'stale'|'none', pidfile_or_None). Live iff the recorded pid is
     running AND its port answers."""
@@ -158,9 +171,15 @@ def main(argv=None) -> int:
         _emit({"status": "no-preview", "reason": ready})
         return 1
 
-    pid = _spawn_slidev(root, a.port, open_browser=not a.no_open)
-    write_pidfile(root, pid, a.port)
-    _emit({"status": "served", "pid": pid, "port": a.port})
+    start = a.port
+    port = pick_port(ports=range(start, start + 11))
+    if port is None:
+        _emit({"status": "no-preview",
+               "reason": f"ports {start}-{start + 10} all in use"})
+        return 1
+    pid = _spawn_slidev(root, port, open_browser=not a.no_open)
+    write_pidfile(root, pid, port)
+    _emit({"status": "served", "pid": pid, "port": port})
     return 0
 
 
