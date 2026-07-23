@@ -231,7 +231,6 @@ non-zero exit as a hard failure and surface the `errors`. On success, report:
   wireframe on an otherwise-valid `planned` slide — flag each so the human can re-run that one
   area (`--slide <id> --section <role>`);
 - any **dropped** nuggets / figures the miners could not produce (flagged in phase 2);
-- unresolved figures (`figure_needed`);
 - and, on an aborted run, the storyteller error that stopped it;
 - whether the live preview was active (served / reused / no-preview) and, if serving, that it
   stays running — close the window / Ctrl-C to stop it.

@@ -90,16 +90,30 @@ def compose_deck(deck, *, slide=None, section=None, run_label=None,
     with tempfile.TemporaryDirectory(prefix="compose-deck-") as td:
         scratch = Path(td)
         slides = [slide] if slide else to_compose_set(deck)
-        # Stage 1: plan every slide (writes wireframes; places source-image).
+        # Stage 1: plan slides that have no plan yet (writes wireframes; places
+        # source-image). A slide that is ALREADY planned is resumed rather than
+        # re-planned — re-planning would re-run write-skeleton, which rewrites
+        # the whole slide from scratch and resets every section (including
+        # already-placed siblings) to a pending wireframe. This makes a scoped
+        # `--section` redo safe (siblings + placed work untouched) and makes
+        # the batch driver itself resumable (an interrupted/re-run batch picks
+        # up pending — and retries failed — sections instead of wiping them).
         pending_by_slide: dict[str, list[str]] = {}
         for sid in slides:
-            if km.load_state(deck, sid).get("state") == "parked":
+            stj = km.load_state(deck, sid)
+            if stj.get("state") == "parked":
                 continue
-            res = _plan_slide(deck, sid, scratch, run_label)
-            if not res:
-                report["parked"].append(sid)
-                continue
-            secs = [section] if section else res["pending_sections"]
+            existing = stj.get("plan")
+            if existing:
+                pending = [r for r, s in (existing.get("sections") or {}).items()
+                          if s.get("status") in ("pending", "failed")]
+            else:
+                res = _plan_slide(deck, sid, scratch, run_label)
+                if not res:
+                    report["parked"].append(sid)
+                    continue
+                pending = res["pending_sections"]
+            secs = [section] if section else pending
             pending_by_slide[sid] = secs
 
         # Stage 2: build every pending section concurrently (bounded). Sections
