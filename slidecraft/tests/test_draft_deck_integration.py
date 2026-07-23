@@ -613,17 +613,20 @@ def _count_nuggets(deck):
     return len(list((deck / "nuggets").glob("*.json")))
 
 
-def _wire_boom(deck, tmp_path, role):
+def _wire_boom(deck, tmp_path, role, image_arg=False):
     """Point a role at a `cmd` executor that exits non-zero → the shim records
     status='error' (an infra failure no re-invoke can fix)."""
     respdir = tmp_path / f"boom-{role}"
     respdir.mkdir(parents=True)
     script = tmp_path / "boom.py"
     script.write_text("import sys; sys.exit(1)", encoding="utf-8")
+    command = [sys.executable, str(script)]
+    if image_arg:
+        command.append("{image}")
     ctx_path = deck / "deck-context.json"
     ctx = json.loads(ctx_path.read_text(encoding="utf-8"))
     ctx.setdefault("executors", {})[role] = {
-        "executor": "cmd", "command": [sys.executable, str(script)]}
+        "executor": "cmd", "command": command}
     ctx_path.write_text(json.dumps(ctx, indent=2), encoding="utf-8")
 
 
@@ -649,3 +652,37 @@ def test_mine_infra_error_stops_then_resumes(deck, tmp_path):
     assert resumed["status"] == "ok"
     assert resumed["mine"]["sources_mined"] == 2
     assert _count_nuggets(deck) == 3
+
+
+def test_mid_source_stop_does_not_duplicate_on_resume(deck, tmp_path):
+    """A source with BOTH minable text and an image: text mines first (persists
+    a nugget), then the image mine hits an infra error -> stop. On resume the
+    source must NOT re-persist the text nugget (no duplicate). Guards the
+    clear-before-remine fix; without it the resume would leave 3 nuggets."""
+    (deck / "sources").mkdir(exist_ok=True)
+    (deck / "public" / "extracted").mkdir(parents=True, exist_ok=True)
+    (deck / "public" / "extracted" / "combo-p1-img1.png").write_bytes(b"\x89PNG fake")
+    (deck / "sources" / "combo.json").write_text(json.dumps({
+        "source_id": "s-combo", "original_file": "combo.pdf", "type": "pdf",
+        "pages": [{"page": 1, "text": RAW_1}],
+        "images": [{"image_source_id": "combo-p1-img1",
+                    "path": "/extracted/combo-p1-img1.png", "page": 1,
+                    "context_text": "the loop"}],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    # Text miner yields a valid nugget (raw_text is a verbatim substring of the
+    # page); image miner errors on every attempt.
+    text_nug = _text_batch({"title": "Tracking", "information": "- estimate",
+                            "raw_text": RAW_1, "page": 1})
+    wire_fake_executor(deck, tmp_path, "knowledge-miner", [text_nug])
+    _wire_boom(deck, tmp_path, "image-miner", image_arg=True)
+
+    stopped = dd.run(deck, mode="digest")
+    assert stopped["status"] == "error" and stopped["stopped_at"] == "mine"
+    assert _count_nuggets(deck) == 1        # text persisted before the image boom
+
+    # Heal the image miner and resume.
+    wire_fake_executor(deck, tmp_path, "image-miner", [IMG_MINE], image_arg=True)
+    resumed = dd.run(deck, mode="digest")
+    assert resumed["status"] == "ok"
+    assert _count_nuggets(deck) == 2        # exactly one text + one image, no dup

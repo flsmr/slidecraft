@@ -81,6 +81,34 @@ def _nugget_count(deck: Path) -> int:
     return len(list((deck / "nuggets").glob("*.json")))
 
 
+def _clear_source_nuggets(deck: Path, original_file: str) -> None:
+    """Delete any nuggets already persisted for a source before (re-)mining it.
+    Only ever called for an UNMINED source, whose nuggets — if any — are
+    leftovers from a prior run that stopped mid-source before mark-mined, and
+    were therefore never planned or placed. Clearing them makes resume
+    duplicate-free without ever touching a fully-mined source's nuggets."""
+    for np in (deck / "nuggets").glob("*.json"):
+        try:
+            n = json.loads(np.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if n.get("source") == original_file:
+            np.unlink()
+
+
+def _checked(argv, phase: str, detail: dict | None = None):
+    """Run a deterministic km/converter subprocess; on a non-zero exit raise
+    _Stop(phase) instead of letting an uncaught CalledProcessError escape — so
+    the driver always returns its JSON report (honors main()'s contract even
+    under a transient OneDrive file lock). Returns the CompletedProcess on
+    success (callers that need stdout read it)."""
+    proc = _run(argv)
+    if proc.returncode != 0:
+        err = (proc.stderr or proc.stdout or f"exited {proc.returncode}").strip()
+        raise _Stop(phase, {**(detail or {}), "errors": [err]})
+    return proc
+
+
 # ---------- phases ----------
 
 def _convert(deck: Path) -> dict:
@@ -105,11 +133,15 @@ def _mine(deck: Path, scratch: Path) -> dict:
     for sp in sources:
         slug = sp.stem
         src = json.loads(sp.read_text(encoding="utf-8"))
+        # Resume-safe: drop any nuggets a prior stopped run already persisted
+        # for this (still-unmined) source, so re-mining never duplicates them.
+        _clear_source_nuggets(deck, src["original_file"])
 
         # a. text — one invoke over the whole source text
         tbrief = scratch / f"mine-{slug}.md"
-        _run([sys.executable, KM, "--deck", str(deck), "mine-brief",
-              "--source", slug, "--out", str(tbrief)], check=True)
+        _checked([sys.executable, KM, "--deck", str(deck), "mine-brief",
+                  "--source", slug, "--out", str(tbrief)], "mine",
+                 {"source": slug})
         tres = scratch / f"mine-{slug}.result.json"
         _run([sys.executable, SHIM, "--role", "knowledge-miner",
               "--brief-file", str(tbrief), "--deck", str(deck),
@@ -127,8 +159,9 @@ def _mine(deck: Path, scratch: Path) -> dict:
         for img in src.get("images", []):
             iid = img["image_source_id"]
             ibrief = scratch / f"mine-{iid}.md"
-            info = _run([sys.executable, KM, "--deck", str(deck), "mine-brief",
-                         "--image", iid, "--out", str(ibrief)], check=True)
+            info = _checked([sys.executable, KM, "--deck", str(deck),
+                             "mine-brief", "--image", iid, "--out", str(ibrief)],
+                            "mine", {"image": iid})
             asset = json.loads(info.stdout)["asset"]
             ires = scratch / f"mine-{iid}.result.json"
             _run([sys.executable, SHIM, "--role", "image-miner",
@@ -146,8 +179,8 @@ def _mine(deck: Path, scratch: Path) -> dict:
         # c. mark mined once text + every image were attempted (§5.4: only
         #    reached when nothing raised _Stop, so a stopped source stays
         #    unmined and the next run re-mines it — resume by construction).
-        _run([sys.executable, KM, "--deck", str(deck), "mark-mined",
-              "--source", slug], check=True)
+        _checked([sys.executable, KM, "--deck", str(deck), "mark-mined",
+                  "--source", slug], "mine", {"source": slug})
 
     return {"sources_mined": len(sources),
             "nuggets_created": _nugget_count(deck) - before,
