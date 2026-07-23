@@ -310,10 +310,15 @@ def build_injection(ans: dict, styleguide: str = "") -> dict:
     """
     topic = ans["topic"]
     miner = {"FOCUS-TOPIC": topic}
-    presenter = str(ans.get("presenter", ""))
-    institution = str(ans.get("institution", ""))
-    course = str(ans.get("course", ""))
-    date = str(ans.get("date", ""))
+    # Deck metadata for structural slides. Theme-derived cover-slot answers
+    # (deck.cover, §4) take precedence over the legacy presenter/institution/
+    # course/date fields when a cover slot of that exact name was captured;
+    # otherwise fall back to the legacy field (backward compat, no synonym table).
+    cover = ans.get("cover", {}) or {}
+    presenter = str(cover.get("presenter", ans.get("presenter", "")))
+    institution = str(cover.get("institution", ans.get("institution", "")))
+    course = str(cover.get("course", ans.get("course", "")))
+    date = str(cover.get("date", ans.get("date", "")))
     return {
         "knowledge-miner": dict(miner),
         "image-miner": dict(miner),
@@ -337,6 +342,10 @@ def build_injection(ans: dict, styleguide: str = "") -> dict:
             "COURSE": course,
             "DATE": date,
             "FOOTER": derive_footer(presenter, date),
+            # Full theme-derived cover-slot answers, verbatim — so a theme whose
+            # cover uses non-standard slot names (e.g. `meta`, `eyebrow`) still
+            # reaches the slide-composer for the cover/footer (§4).
+            "COVER": dict(cover),
         },
         "image-composer": {
             "AUDIENCE": ans["audience"],

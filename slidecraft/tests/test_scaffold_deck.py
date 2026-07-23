@@ -167,6 +167,44 @@ def test_footer_derived_from_presenter_only(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# C1 — deck.cover bridged into build_injection (footer/cover no longer empty)
+# ---------------------------------------------------------------------------
+
+
+def test_cover_presenter_date_drive_footer_injection():
+    ans = _answers({"type": "builtin", "source": "default"},
+                   cover={"presenter": "Dr. Jane Roe", "date": "2026-07-23"})
+    sc = scaffold_deck.build_injection(ans)["slide-composer"]
+    assert sc["PRESENTER"] == "Dr. Jane Roe"
+    assert sc["DATE"] == "2026-07-23"
+    assert sc["FOOTER"] == "Dr. Jane Roe · 2026-07-23"
+    assert sc["COVER"] == {"presenter": "Dr. Jane Roe", "date": "2026-07-23"}
+
+
+def test_cover_takes_precedence_over_legacy_fields():
+    ans = _answers({"type": "builtin", "source": "default"},
+                   presenter="Legacy Name", cover={"presenter": "Cover Name"})
+    assert scaffold_deck.build_injection(ans)["slide-composer"]["PRESENTER"] == "Cover Name"
+
+
+def test_legacy_presenter_still_populates_footer_without_cover():
+    ans = _answers({"type": "builtin", "source": "default"},
+                   presenter="Dr. X", date="2026-07-23")
+    sc = scaffold_deck.build_injection(ans)["slide-composer"]
+    assert sc["FOOTER"] == "Dr. X · 2026-07-23"
+    assert sc["COVER"] == {}
+
+
+def test_nonstandard_cover_slots_exposed_in_cover_map():
+    ans = _answers({"type": "builtin", "source": "default"},
+                   cover={"meta": "A · B", "eyebrow": "Lecture 4"})
+    sc = scaffold_deck.build_injection(ans)["slide-composer"]
+    assert sc["COVER"] == {"meta": "A · B", "eyebrow": "Lecture 4"}
+    assert sc["PRESENTER"] == ""      # theme has no presenter slot -> empty; meta carries it
+    assert sc["FOOTER"] == ""
+
+
+# ---------------------------------------------------------------------------
 # Cover-slot resolution (design §4)
 # ---------------------------------------------------------------------------
 
