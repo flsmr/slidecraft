@@ -686,3 +686,80 @@ def test_mid_source_stop_does_not_duplicate_on_resume(deck, tmp_path):
     resumed = dd.run(deck, mode="digest")
     assert resumed["status"] == "ok"
     assert _count_nuggets(deck) == 2        # exactly one text + one image, no dup
+
+
+def test_full_mode_via_real_driver_reaches_green(deck, tmp_path):
+    """Digest first (mines → real nugget ids), then wire the storyteller/planner/
+    designer fakes against those ids and run the REAL driver in full mode: it
+    mines nothing new (all marked), plans, executes, composes, validates green."""
+    _seed_inputs(deck)
+
+    # 1. Mine everything (digest) so real nugget ids exist.
+    wire_fake_executor(deck, tmp_path, "knowledge-miner", [CH9_MINE, EMPTY_MINE])
+    wire_fake_executor(deck, tmp_path, "image-miner", [IMG_MINE], image_arg=True)
+    assert dd.run(deck, mode="digest")["mine"]["sources_mined"] == 2
+
+    # 2. Build the plan against the just-mined ids and wire the fakes (distinct
+    #    roles → distinct responses-<role> dirs under tmp_path, no collision).
+    by_kind = {"text": [], "image": []}
+    for np_ in sorted((deck / "nuggets").glob("*.json")):
+        n = json.loads(np_.read_text(encoding="utf-8"))
+        by_kind.setdefault(n["kind"], []).append(n["nugget_id"])
+    built = _full_plan(deck, by_kind)
+    wire_fake_executor(deck, tmp_path, "storyteller", [json.dumps(built["plan"])])
+    wire_fake_executor(deck, tmp_path, "slide-composer", built["planner"])
+    wire_fake_executor(deck, tmp_path, "text-designer", built["text_designer"])
+
+    # 3. Full run through the real driver (max_workers=1 → deterministic replay).
+    report = dd.run(deck, mode="full", run_label="test", max_workers=1)
+
+    assert report["status"] == "ok"
+    assert report["plan"]["slides_planned"] == 4
+    assert report["compose"]["parked"] == []
+    assert report["validate"]["ok"] is True
+    assert report["validate"]["exit_ok"] is True
+    assert report["validate"]["slides"] == 4
+
+
+def test_full_mode_storyteller_abort_composes_nothing(deck, tmp_path):
+    """An invalid plan (unknown nugget id) → storyteller exhausted → stop at
+    `plan`; nothing is composed and no plan.json survives (§5.4)."""
+    _seed_inputs(deck)
+    wire_fake_executor(deck, tmp_path, "knowledge-miner", [CH9_MINE, EMPTY_MINE])
+    wire_fake_executor(deck, tmp_path, "image-miner", [IMG_MINE], image_arg=True)
+    dd.run(deck, mode="digest")
+
+    wire_fake_executor(deck, tmp_path, "storyteller", [json.dumps(
+        {"plan": [{"action": "create", "title": "Ghost",
+                   "nuggets": ["no-such-id"]}], "notes": ""})])
+
+    report = dd.run(deck, mode="full")
+    assert report["status"] == "error"
+    assert report["stopped_at"] == "plan"
+    assert list((deck / "slides").glob("*.md")) == []
+    assert not (deck / "plan.json").exists()
+
+
+def test_full_mode_nothing_to_do_reports_ok(deck, tmp_path):
+    """A full run on a fully-composed deck re-derives clean state and reports ok
+    without re-planning: plan stays null, compose composes nothing (§5.3)."""
+    _seed_inputs(deck)
+    # Reach a green deck first via the real driver.
+    wire_fake_executor(deck, tmp_path, "knowledge-miner", [CH9_MINE, EMPTY_MINE])
+    wire_fake_executor(deck, tmp_path, "image-miner", [IMG_MINE], image_arg=True)
+    dd.run(deck, mode="digest")
+    by_kind = {"text": [], "image": []}
+    for np_ in sorted((deck / "nuggets").glob("*.json")):
+        n = json.loads(np_.read_text(encoding="utf-8"))
+        by_kind.setdefault(n["kind"], []).append(n["nugget_id"])
+    built = _full_plan(deck, by_kind)
+    wire_fake_executor(deck, tmp_path, "storyteller", [json.dumps(built["plan"])])
+    wire_fake_executor(deck, tmp_path, "slide-composer", built["planner"])
+    wire_fake_executor(deck, tmp_path, "text-designer", built["text_designer"])
+    dd.run(deck, mode="full", max_workers=1)
+
+    # Now nothing is unplaced and nothing is to-compose.
+    report = dd.run(deck, mode="full", max_workers=1)
+    assert report["status"] == "ok"
+    assert report["plan"] is None                 # storyteller not re-invoked
+    assert report["compose"] is None or report["compose"]["composed"] == []

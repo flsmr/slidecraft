@@ -187,6 +187,88 @@ def _mine(deck: Path, scratch: Path) -> dict:
             "dropped": dropped}
 
 
+def _unplaced_nuggets(deck: Path) -> set[str]:
+    """Nugget ids not yet placed on any slide — the signal that planning is
+    needed. (`slide state for plan` in §5.3: an unplaced nugget has no slide.)"""
+    try:
+        assoc = json.loads((deck / "associations.json").read_text(
+            encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        assoc = {}
+    placed = {nid for nugs in assoc.values() for nid in nugs}
+    alln = {p.stem for p in (deck / "nuggets").glob("*.json")}
+    return alln - placed
+
+
+def _plan(deck: Path, scratch: Path) -> dict:
+    """One storyteller invoke → write-plan. Raises _Stop on a non-ok status —
+    a deck is never composed off an invalid plan (§5.4 abort)."""
+    pbrief = scratch / "plan.md"
+    _checked([sys.executable, KM, "--deck", str(deck), "plan-brief",
+              "--out", str(pbrief)], "plan")
+    pres = scratch / "plan.result.json"
+    _run([sys.executable, SHIM, "--role", "storyteller",
+          "--brief-file", str(pbrief), "--deck", str(deck),
+          "--out", str(pres), "--",
+          sys.executable, KM, "--deck", str(deck), "write-plan",
+          "--file", "{out}"])
+    status, _terminal, errors = _shim_status(pres)
+    if status != "ok":
+        raise _Stop("plan", {"errors": errors})
+    steps = json.loads((deck / "plan.json").read_text(
+        encoding="utf-8")).get("steps", [])
+    return {"slides_planned": sum(1 for s in steps
+                                  if s.get("op") == "create-slide")}
+
+
+def _execute_steps(deck: Path) -> None:
+    """Run plan.json's steps in order as km subcommands (NO per-create compose;
+    the batch driver owns composition). The plan is pre-validated to respect the
+    budget, so a step failure is infra — route through _checked so it still
+    reports rather than escaping as an uncaught error."""
+    steps = json.loads((deck / "plan.json").read_text(
+        encoding="utf-8")).get("steps", [])
+    for s in steps:
+        op = s["op"]
+        if op == "create-slide":
+            argv = ["create-slide", "--title", s["title"],
+                    "--after", s.get("after", "end")]
+            if s.get("nuggets"):
+                argv += ["--nuggets", ",".join(s["nuggets"])]
+            if s.get("parked"):
+                argv += ["--parked"]
+            if s.get("intended_function"):
+                argv += ["--intended-function", s["intended_function"]]
+        elif op == "associate-nuggets":
+            argv = ["associate-nuggets", "--slide", s["slide"],
+                    "--nuggets", ",".join(s["nuggets"])]
+        elif op == "merge-slides":
+            argv = ["merge-slides", "--slides", ",".join(s["slides"])]
+            if s.get("title"):
+                argv += ["--title", s["title"]]
+        elif op == "park-slide":
+            argv = ["park-slide", "--slide", s["slide"]]
+            if s.get("reason"):
+                argv += ["--reason", s["reason"]]
+        elif op == "unpark-slide":
+            argv = ["unpark-slide", "--slide", s["slide"]]
+        else:
+            continue
+        _checked([sys.executable, KM, "--deck", str(deck), *argv], "plan")
+
+
+def _validate(deck: Path) -> dict:
+    """`km validate` as the orchestrator does — via the CLI, gating on the exit
+    code. Not a fail-fast boundary: validate is a report the command surfaces."""
+    proc = _run([sys.executable, KM, "--deck", str(deck), "validate"])
+    try:
+        rep = json.loads(proc.stdout or "{}")
+    except json.JSONDecodeError:
+        rep = {}
+    rep["exit_ok"] = proc.returncode == 0
+    return rep
+
+
 # ---------- driver ----------
 
 def run(deck, *, mode: str, run_label=None, max_workers: int = 4) -> dict:
@@ -209,7 +291,17 @@ def run(deck, *, mode: str, run_label=None, max_workers: int = 4) -> dict:
 
 
 def _full(deck, scratch, report, run_label, max_workers):
-    raise NotImplementedError("full mode lands in Task A3")
+    """Full-mode tail: plan (only when nuggets are unplaced) → execute → compose
+    → validate. If nothing is unplaced and nothing is to-compose, report ok
+    without a no-op pass (§5.3)."""
+    if not (_unplaced_nuggets(deck) or compose_deck.to_compose_set(deck)):
+        return
+    if _unplaced_nuggets(deck):
+        report["plan"] = _plan(deck, scratch)        # may raise _Stop
+        _execute_steps(deck)
+    report["compose"] = compose_deck.compose_deck(
+        deck, run_label=run_label, max_workers=max_workers)
+    report["validate"] = _validate(deck)
 
 
 def main(argv=None) -> int:
