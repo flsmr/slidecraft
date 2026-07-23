@@ -5,129 +5,113 @@ argument-hint: (run inside the deck folder)
 
 # Init Deck
 
-Initialize a deck **in the current working directory**. The deck root *is* the folder
-Claude was launched in (D25 — no "output folder" question); every later script resolves the
-deck by walking up from CWD for `deck-context.json`. See `/CONTEXT.md` for the vocabulary and
-`/SPEC.md` for the mechanics (esp. D38 for the init-deck refinements below).
+Initialize a deck **in the current working directory** (D25 — the deck root *is* the folder
+Claude was launched in). The interview is **declared data**, walked mechanically: you call
+`AskUserQuestion` exactly as the spec declares, resolve each branch with a deterministic helper,
+and never improvise wording or research anything. The **only** time you exercise judgement is a
+branching question answered via **"Other"** (§ step 4).
 
-`<toolkit>` below is the plugin root the wrapper passes; the scaffold script is
-`<toolkit>/slidecraft/scripts/scaffold_deck.py`.
+`<toolkit>` is the plugin root the wrapper passes. Scripts used:
+
+- `<SCAFFOLD>` = `<toolkit>/slidecraft/scripts/scaffold_deck.py`
+- `<SCAN>`     = `<toolkit>/slidecraft/scripts/scan_theme.py`
+- `<IV>`       = `<toolkit>/slidecraft/scripts/init_interview.py`
+- Spec: `<toolkit>/slidecraft/data/init_questions.json`
 
 ## 1. Guard (fast — a single-file check)
 
-Check **only** whether `deck-context.json` already exists in the CWD (one stat / one `Glob`
-for `deck-context.json`). If it does, this folder is already a deck: **stop**, tell the user,
-and offer to open it or pick another folder. Do **not** re-scaffold.
+Check **only** whether `deck-context.json` already exists in the CWD (one stat / one `Glob`). If
+it does, this folder is already a deck: **stop**, tell the user, offer to open it or pick another
+folder. Do **not** re-scaffold and do **not** recursively scan the tree (slow on OneDrive, and
+unnecessary — the folder need not be empty).
 
-Do **not** enumerate or recursively scan the directory tree to decide anything — on a
-cloud-synced folder (OneDrive) a recursive listing is slow, and it is unnecessary: the folder
-need **not** be empty (the user may already have dropped files into `input/`). The single
-`deck-context.json` check is the whole guard.
+## 2. Interview part 1 — topic + theme (so the install can start early)
 
-## 2. Interview — part 1 (topic + theme, so the install can start early)
+Walk the spec's `topic` question, then ask the **theme** question (handled specially — it is *not*
+in the spec because its answer is compound). Ask both with **AskUserQuestion**, in the user's
+language:
 
-Ask with the **AskUserQuestion** tool, in the user's language. Batch these first, because the
-**theme** answer lets us start installing Slidev in the background while the rest of the
-interview runs (step 3):
-
-1. **Topic** — the deck's working title and thematic focus. In the help text, explain the
-   *user benefit*: this focus guides which knowledge is extracted from the provided sources and
-   keeps the slides on-topic. **Never** expose internal terms (no "FOCUS-TOPIC", no "miner",
-   no "injection") — the user should not have to think about the machinery.
-2. **Audience** — students / experts / management / customers / investors / general public / …
-3. **Language** — en / de / … (governs all composed content).
-4. **Theme** — where the Slidev theme comes from: the built-in `default`, a local folder
+1. **`topic`** — the deck's working title / thematic focus. In the help text explain the *user
+   benefit* (this focus guides which knowledge is extracted and keeps slides on-topic). Never
+   expose internal terms.
+2. **Theme** — where the Slidev theme comes from: built-in `default`, a local folder
    (`slidev-theme-<brand>/`), an npm package (`slidev-theme-*`), or a GitHub URL. Capture its
    `type` (builtin | local | npm | github) and `source`. (A **local** theme is copied into the
-   deck's `theme/` subfolder by the scaffold, so the deck stays self-contained and portable.)
+   deck's `theme/` subfolder by the scaffold, so the deck stays self-contained.)
 
-## 3. Prewarm + background install (only if this is a new deck)
+## 3. Prewarm + background install + scan (on the theme answer)
 
-As soon as topic + theme are known, lay down the npm project and start the install so the first
-preview isn't a long wait:
+As soon as topic + theme are known:
 
-1. Write a partial answers JSON (`topic` + `theme`, plus any other captured fields) to a temp
-   file and run:
+1. Write a partial answers JSON (`topic` + `theme`) to a temp file and run:
    ```
-   python "<toolkit>/slidecraft/scripts/scaffold_deck.py" --answers <partial.json> --prewarm
+   python "<SCAFFOLD>" --answers <partial.json> --prewarm
    ```
-   This creates the folders, **copies a local theme into `theme/`**, and writes
-   `package.json` / `.gitignore` / the launchers. Its JSON output includes
-   `node_modules_present`.
-2. If `node_modules_present` is `false` **and** Node/npm is available, start the install **in
-   the background** from the deck root (CWD), e.g. run `npm install --no-audit --no-fund` with
-   the Bash/PowerShell tool's `run_in_background`. Do not block on it — continue the interview.
-   It is best-effort: if npm/Node is missing or offline, skip it silently; the launcher installs
-   on first run as a fallback.
+   This creates folders, **copies a local theme into `theme/`**, and writes `package.json` /
+   `.gitignore` / launchers. Its JSON output includes `node_modules_present`.
+2. If `node_modules_present` is `false` **and** Node/npm is available, start `npm install
+   --no-audit --no-fund` **in the background** from the deck root (CWD) with the tool's
+   `run_in_background`. Do not block on it. Best-effort: skip silently if npm is missing/offline.
+3. **Scan the now-copied theme** to derive the cover-slot questions for part 2 — this rides the
+   same background window the install uses, so it adds no latency. For a **local** theme:
+   ```
+   python "<SCAN>" --type local --source ./theme
+   ```
+   (for builtin/npm/github pass the captured `type`/`source`). Feed the resulting `capabilities`
+   to `scaffold_deck.cover_slot_questions` — either import it, or replicate its rule: find the
+   layout whose `alias == "cover"` (else physical `name == "cover"`, else none); ask one
+   free-text question per role/slot name it exposes, **skipping** `date`, `title`, and a bare
+   `default`. If there is no cover layout, ask no metadata questions.
 
-This background `npm install` is the **only** preparation the preview needs —
-there is no separate "build" step; `/draft-deck` starts the Slidev dev server
-directly from `slides.md`. Finishing it here is what lets that server start
-instantly.
+## 4. Interview part 2 — length, type, setting, cover metadata
 
-## 4. Interview — part 2 (length, type, setting, metadata)
+Continue with **AskUserQuestion** (batched, up to 4 per call) while the install runs. Walk the
+remaining spec questions in order — `language`, `deck_type`, `setting`, `max_duration_minutes` —
+plus any **cover-slot questions** from step 3. For each spec question:
 
-Continue with **AskUserQuestion** (batched) while the install runs:
-
-5. **Length** — ask for the **maximum duration in minutes** (e.g. "Wie lange soll die
-   Vorlesung maximal werden?" → 30 / 45 / 60 / 90 / …). The slide budget is **derived** from
-   the duration at ~**1.5 minutes per slide** (the scaffold does the maths), so do **not** ask
-   for a slide count separately. Only if the user volunteers a specific maximum number of
-   slides, pass it as `max_slides` to override the estimate.
-6. **Deck type** — lecture / pitch / executive meeting / status report / conference talk /
-   workshop / … (selects the storytelling skill later; also refines the pacing).
-7. **Setting** — university course / trade fair / scientific conference / internal meeting / …
-8. **Deck metadata (optional, one batched question)** — the values structural slides need
-   (cover / footer / thank-you): **presenter** name, **institution/course** (optional), and a
-   **date** (default: today — offer it pre-filled, editable). These fill the cover, the running
-   footer, and the closing slide. Skipping them is fine — the fields default to empty. Capture
-   as `presenter`, `institution`, `course`, `date`.
+- Ask it exactly as declared. After the answer, resolve the follow-up deterministically:
+  ```
+  python "<IV>" follow-up --qid <question-id> --answer "<the answer>"
+  ```
+  - `follow_up` non-null → ask that follow-up question next.
+  - `llm_decides: true` → the user answered a **branching** question via **"Other"**: *this* is
+    where you (the LLM) decide whether a follow-up applies and, if so, ask a sensible one. This is
+    the sole judgement call in the whole command.
+  - both null/false → record the answer and move on (a leaf "Other" is just the answer — never a
+    branch).
+- **Length:** ask for the **maximum duration in minutes**; the slide budget is *derived* from it
+  (~1.5 min/slide; the scaffold does the maths) — do not ask for a slide count. Only if the user
+  volunteers a specific maximum, pass it as `max_slides`.
+- **Cover metadata:** the cover-slot questions replace the old fixed presenter/institution/course/
+  date batch. Fill a `date` slot programmatically with **today**; a `title` slot reuses the topic
+  (both are never asked). Collect the cover-slot answers into a `cover` object keyed by slot name.
 
 ## 5. Scaffold (deterministic, full)
 
-Write the complete answers to a temp JSON and run the scaffold from the deck root:
+Write the complete answers to a temp JSON and run from the deck root:
 
 ```
-python "<toolkit>/slidecraft/scripts/scaffold_deck.py" --answers <answers.json>
+python "<SCAFFOLD>" --answers <answers.json>
 ```
 
 `answers.json` keys: `topic, audience, language, deck_type, setting, max_duration_minutes,
-max_slides?, theme:{type, source}` plus the optional metadata `presenter, institution, course,
-date` (omit or pass `""` when not captured). `max_slides` is optional — omit it to let the
-script derive it from `max_duration_minutes`. This phase is idempotent over the prewarm (it
-re-does those steps as no-ops) and additionally:
-
-- writes `associations.json` (`{}`) and `slides.md` (theme + title headmatter),
-- writes **`deck-context.json`**: the `deck` block (interview answers, the **derived**
-  `max_slides`, and the optional presenter/institution/course/date metadata), the `theme` block
-  (with scanned `capabilities` — per-layout **slot roles + intents + defaults** where the theme
-  ships a `semantic-layouts.json` — and the theme's `styleguide.md` path), and the derived
-  per-agent **injection** blocks.
-
-Do not hand-write any of these files — the script owns the format. The script's JSON output
-reports the derived `max_slides` and `minutes_per_slide` — surface those to the user in the
-summary so the slide budget is transparent (and they can ask to change it).
+max_slides?, theme:{type, source}`, plus a `cover` object `{slot: value}` for the theme-derived
+metadata (omit slots the user skipped). `max_slides` is optional (derived from the duration when
+absent). This phase is idempotent over the prewarm and additionally writes `associations.json`,
+`slides.md`, and **`deck-context.json`** (the `deck` block incl. the derived `max_slides` and the
+`cover` map, the `theme` block with scanned `capabilities` + `styleguide.md` path, and the derived
+per-agent `injection` blocks). Do not hand-write any of these files — the script owns the format.
+The script reports the derived `max_slides` / `minutes_per_slide`; surface those so the budget is
+transparent.
 
 ## 6. Close
 
-If the background install is still running, mention it's finishing in the background (the
-launcher waits for it either way). Then show the scaffold summary and instruct:
+If the background install is still running, mention it's finishing (the launcher waits either
+way). Show the scaffold summary and instruct:
 
 > Deck initialized (~{max_slides} slides for {duration} min at ~1.5 min/slide). Put your source
-> files (PDF, Markdown, text) into `input/`, then run `/draft-deck`. To preview the deck at any
-> time, double-click `show_slide_deck.cmd` (Windows) or `show_slide_deck.sh` (macOS/Linux).
+> files (PDF, Markdown, text) into `input/`, then run `/draft-deck`. To preview at any time,
+> double-click `show_slide_deck.cmd` (Windows) or `show_slide_deck.sh` (macOS/Linux).
 
-`/draft-deck` now opens the live preview itself (§0 of that command) as soon as it starts, so
-the double-click launcher above is the manual/fallback path — useful for reopening the preview
-later, or if the automatic launch reported `no-preview`.
-
-No content is generated at this stage.
-
-> **Note (D8 — the convert→mine→plan chain lives in `/draft-deck`, not here).** `/init-deck`
-> only scaffolds; it runs no LLM. The first phase of `/draft-deck` is the deterministic
-> **convert** over whatever files are already in `input/`, and mining follows immediately —
-> so by the time the storyteller plans, every input has been converted and mined into nuggets
-> (nuggets exist *before* planning). The convert→mine ordering is owned by the orchestrator on
-> purpose: `source_converter.py` never invokes a miner, because mining is an LLM seam that must
-> stay behind the invoke shim (ADR-0001). Dropping new inputs later and re-running `/draft-deck`
-> picks them up the same way (delta behavior, D18).
+No content is generated at this stage — `/init-deck` runs no LLM role. The convert→mine→plan
+chain lives in `/draft-deck`.
