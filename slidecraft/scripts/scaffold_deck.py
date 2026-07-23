@@ -190,6 +190,56 @@ def theme_name(theme: dict) -> str:
     return theme["source"]
 
 
+# ---------------------------------------------------------------------------
+# Cover-slot resolution (design 2026-07-23 §4)
+# ---------------------------------------------------------------------------
+# Replaces the fixed presenter/institution/course/date question with
+# theme-derived questions, run after the theme is scanned. Slots never asked:
+# `date` (filled with today), `title` (reuses the topic), and a bare `default`
+# (one freeform area — nothing structured to ask). No synonym table, no
+# canonicalization — whatever the theme calls a slot is asked verbatim (§4.2).
+_COVER_SLOT_SKIP = {"date", "title", "default"}
+
+
+def cover_layout(capabilities: dict):
+    """The theme's cover layout entry from scanned capabilities (§4.1):
+    the layout whose semantic ``alias == "cover"``, else the layout whose
+    physical ``name == "cover"``, else ``None`` (no identifiable cover layout —
+    the caller skips cover questions entirely)."""
+    layouts = capabilities.get("layouts", [])
+    for entry in layouts:
+        if entry.get("alias") == "cover":
+            return entry
+    for entry in layouts:
+        if entry.get("name") == "cover":
+            return entry
+    return None
+
+
+def cover_slot_questions(capabilities: dict) -> list:
+    """The metadata questions derived from the cover layout's slots (§4.2).
+
+    Iterate the cover layout's semantic role names (when aliased) else its
+    physical slot names; drop the never-asked slots; every other slot becomes
+    one leaf/free-text question keyed by the slot name, verbatim. Returns ``[]``
+    when there is no cover layout or nothing askable."""
+    layout = cover_layout(capabilities)
+    if not layout:
+        return []
+    roles = layout.get("roles")          # semantic role -> physical (aliased)
+    slot_names = list(roles.keys()) if roles else list(layout.get("slots", []))
+    intent = layout.get("intent", "")
+    questions = []
+    for slot in slot_names:
+        if slot in _COVER_SLOT_SKIP:
+            continue
+        prompt = f'Cover slot "{slot}"'
+        if intent:
+            prompt += f" — {intent}"
+        questions.append({"id": slot, "prompt": prompt, "options": ["Skip"]})
+    return questions
+
+
 def theme_package(theme: dict):
     """(pkg_name, version) to add to package.json dependencies, or None.
 
@@ -260,10 +310,15 @@ def build_injection(ans: dict, styleguide: str = "") -> dict:
     """
     topic = ans["topic"]
     miner = {"FOCUS-TOPIC": topic}
-    presenter = str(ans.get("presenter", ""))
-    institution = str(ans.get("institution", ""))
-    course = str(ans.get("course", ""))
-    date = str(ans.get("date", ""))
+    # Deck metadata for structural slides. Theme-derived cover-slot answers
+    # (deck.cover, §4) take precedence over the legacy presenter/institution/
+    # course/date fields when a cover slot of that exact name was captured;
+    # otherwise fall back to the legacy field (backward compat, no synonym table).
+    cover = ans.get("cover", {}) or {}
+    presenter = str(cover.get("presenter", ans.get("presenter", "")))
+    institution = str(cover.get("institution", ans.get("institution", "")))
+    course = str(cover.get("course", ans.get("course", "")))
+    date = str(cover.get("date", ans.get("date", "")))
     return {
         "knowledge-miner": dict(miner),
         "image-miner": dict(miner),
@@ -287,6 +342,10 @@ def build_injection(ans: dict, styleguide: str = "") -> dict:
             "COURSE": course,
             "DATE": date,
             "FOOTER": derive_footer(presenter, date),
+            # Full theme-derived cover-slot answers, verbatim — so a theme whose
+            # cover uses non-standard slot names (e.g. `meta`, `eyebrow`) still
+            # reaches the slide-composer for the cover/footer (§4).
+            "COVER": dict(cover),
         },
         "image-composer": {
             "AUDIENCE": ans["audience"],
@@ -312,6 +371,9 @@ def build_deck_block(ans: dict) -> dict:
         "institution": str(ans.get("institution", "")),
         "course": str(ans.get("course", "")),
         "date": str(ans.get("date", "")),
+        # Theme-derived cover-slot answers, stored verbatim (§4.2). Absent when
+        # the theme has no identifiable cover layout, or nothing was captured.
+        "cover": dict(ans.get("cover", {})),
     }
 
 

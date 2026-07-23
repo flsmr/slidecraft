@@ -167,6 +167,112 @@ def test_footer_derived_from_presenter_only(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# C1 — deck.cover bridged into build_injection (footer/cover no longer empty)
+# ---------------------------------------------------------------------------
+
+
+def test_cover_presenter_date_drive_footer_injection():
+    ans = _answers({"type": "builtin", "source": "default"},
+                   cover={"presenter": "Dr. Jane Roe", "date": "2026-07-23"})
+    sc = scaffold_deck.build_injection(ans)["slide-composer"]
+    assert sc["PRESENTER"] == "Dr. Jane Roe"
+    assert sc["DATE"] == "2026-07-23"
+    assert sc["FOOTER"] == "Dr. Jane Roe · 2026-07-23"
+    assert sc["COVER"] == {"presenter": "Dr. Jane Roe", "date": "2026-07-23"}
+
+
+def test_cover_takes_precedence_over_legacy_fields():
+    ans = _answers({"type": "builtin", "source": "default"},
+                   presenter="Legacy Name", cover={"presenter": "Cover Name"})
+    assert scaffold_deck.build_injection(ans)["slide-composer"]["PRESENTER"] == "Cover Name"
+
+
+def test_legacy_presenter_still_populates_footer_without_cover():
+    ans = _answers({"type": "builtin", "source": "default"},
+                   presenter="Dr. X", date="2026-07-23")
+    sc = scaffold_deck.build_injection(ans)["slide-composer"]
+    assert sc["FOOTER"] == "Dr. X · 2026-07-23"
+    assert sc["COVER"] == {}
+
+
+def test_nonstandard_cover_slots_exposed_in_cover_map():
+    ans = _answers({"type": "builtin", "source": "default"},
+                   cover={"meta": "A · B", "eyebrow": "Lecture 4"})
+    sc = scaffold_deck.build_injection(ans)["slide-composer"]
+    assert sc["COVER"] == {"meta": "A · B", "eyebrow": "Lecture 4"}
+    assert sc["PRESENTER"] == ""      # theme has no presenter slot -> empty; meta carries it
+    assert sc["FOOTER"] == ""
+
+
+# ---------------------------------------------------------------------------
+# Cover-slot resolution (design §4)
+# ---------------------------------------------------------------------------
+
+def _caps(*layouts):
+    return {"layouts": list(layouts), "components": []}
+
+
+def test_cover_layout_prefers_semantic_alias():
+    caps = _caps({"name": "slide1", "slots": ["body-26"], "alias": "cover",
+                  "roles": {"title": "body-26"}, "intent": "Deck cover."},
+                 {"name": "cover", "slots": ["default"]})
+    assert scaffold_deck.cover_layout(caps)["name"] == "slide1"   # alias wins
+
+
+def test_cover_layout_falls_back_to_physical_name():
+    caps = _caps({"name": "content", "slots": ["heading"]},
+                 {"name": "cover", "slots": ["default"]})
+    assert scaffold_deck.cover_layout(caps)["name"] == "cover"
+
+
+def test_cover_layout_none_when_absent():
+    caps = _caps({"name": "content", "slots": ["heading"]})
+    assert scaffold_deck.cover_layout(caps) is None
+
+
+def test_cover_questions_semantic_combined_field_asked_verbatim():
+    # `meta` is a combined field — with the synonym table dropped it is asked
+    # verbatim like any other slot (no composition). `title`/`date` are dropped.
+    caps = _caps({"name": "slide1", "slots": ["body-26", "body-12", "body-1"],
+                  "alias": "cover",
+                  "roles": {"title": "body-26", "meta": "body-12",
+                            "date": "body-1"},
+                  "intent": "Deck cover: title; author+date in meta."})
+    ids = [q["id"] for q in scaffold_deck.cover_slot_questions(caps)]
+    assert ids == ["meta"]                       # title + date dropped
+
+
+def test_cover_questions_semantic_standalone_field():
+    caps = _caps({"name": "slide1", "slots": ["h", "p"], "alias": "cover",
+                  "roles": {"title": "h", "presenter": "p"},
+                  "intent": "Cover."})
+    ids = [q["id"] for q in scaffold_deck.cover_slot_questions(caps)]
+    assert ids == ["presenter"]
+
+
+def test_cover_questions_physical_fallback():
+    caps = _caps({"name": "cover", "slots": ["default", "author", "title"]})
+    ids = [q["id"] for q in scaffold_deck.cover_slot_questions(caps)]
+    assert ids == ["author"]                     # default + title dropped
+
+
+def test_cover_questions_empty_when_no_cover_layout():
+    caps = _caps({"name": "content", "slots": ["heading"]})
+    assert scaffold_deck.cover_slot_questions(caps) == []
+
+
+def test_cover_answers_stored_verbatim_in_deck_context(tmp_path):
+    theme_dir = _make_theme(tmp_path / "theme", styleguide=False)
+    deck = tmp_path / "deck"
+    deck.mkdir()
+    ans = _answers({"type": "local", "source": str(theme_dir)},
+                   cover={"meta": "Dr. Jane Roe · 2026-07-23"})
+    scaffold_deck.scaffold(deck, ans)
+    ctx = json.loads((deck / "deck-context.json").read_text(encoding="utf-8"))
+    assert ctx["deck"]["cover"] == {"meta": "Dr. Jane Roe · 2026-07-23"}
+
+
+# ---------------------------------------------------------------------------
 # D38 — duration → slides pacing (max_slides derived when not given)
 # ---------------------------------------------------------------------------
 

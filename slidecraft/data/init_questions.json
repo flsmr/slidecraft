@@ -1,0 +1,21 @@
+{
+  "questions": [
+    { "id": "topic", "prompt": "Deck topic / working title", "options": ["Skip"] },
+    {
+      "id": "audience",
+      "prompt": "Who is this deck for?",
+      "options": ["Students", "Experts", "Management", "General public"],
+      "follow_up": {
+        "Students": {
+          "id": "deck_subtype",
+          "prompt": "What kind of session?",
+          "options": ["University lecture", "High school class"]
+        }
+      }
+    },
+    { "id": "language", "prompt": "Language for all composed content", "options": ["English", "German"] },
+    { "id": "deck_type", "prompt": "Deck type", "options": ["Lecture", "Pitch", "Executive meeting", "Workshop"] },
+    { "id": "setting", "prompt": "Where is it presented?", "options": ["University course", "Conference", "Internal meeting", "Trade fair"] },
+    { "id": "max_duration_minutes", "prompt": "Maximum duration in minutes", "options": ["30", "45", "60", "90"] }
+  ]
+}

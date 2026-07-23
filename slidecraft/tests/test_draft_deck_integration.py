@@ -34,6 +34,7 @@ from argparse import Namespace
 from pathlib import Path
 
 from slidecraft.scripts import compose_deck, invoke_shim, km, source_converter
+from slidecraft.scripts import draft_deck as dd   # the real driver (A2/A3)
 from slidecraft.tests.conftest import wire_fake_executor
 
 KM = str(Path(km.__file__))
@@ -577,3 +578,188 @@ def test_status_slide_is_threaded_and_cleared_without_costing_budget(deck, tmp_p
     final = (deck / "slides.md").read_text(encoding="utf-8")
     assert "Mining sources…" not in final              # cleared
     assert not (deck / ".draft-status.json").exists()
+
+
+# ==========================================================================
+# The real driver (draft_deck.py, design §5): digest mode + fail-fast/resume
+# ==========================================================================
+
+def test_digest_mode_mines_then_stops(deck, tmp_path):
+    """Digest mode runs convert + mine and STOPS — plan/compose/validate are
+    null (not run at all, §5.2). A re-run mines nothing (delta, §5.3)."""
+    _seed_inputs(deck)
+    wire_fake_executor(deck, tmp_path, "knowledge-miner", [CH9_MINE, EMPTY_MINE])
+    wire_fake_executor(deck, tmp_path, "image-miner", [IMG_MINE], image_arg=True)
+
+    report = dd.run(deck, mode="digest")
+
+    assert report["status"] == "ok"
+    assert report["mode"] == "digest"
+    assert report["mine"]["sources_mined"] == 2
+    assert report["mine"]["nuggets_created"] == 3      # 2 text + 1 image
+    assert report["mine"]["dropped"] == []
+    assert report["plan"] is None                      # not run at all
+    assert report["compose"] is None
+    assert report["validate"] is None
+    assert list((deck / "slides").glob("*.md")) == []  # nothing composed
+
+    # Re-run: every source is now marked mined → nothing to mine.
+    report2 = dd.run(deck, mode="digest")
+    assert report2["mine"]["sources_mined"] == 0
+    assert report2["mine"]["nuggets_created"] == 0
+
+
+def _count_nuggets(deck):
+    return len(list((deck / "nuggets").glob("*.json")))
+
+
+def _wire_boom(deck, tmp_path, role, image_arg=False):
+    """Point a role at a `cmd` executor that exits non-zero → the shim records
+    status='error' (an infra failure no re-invoke can fix)."""
+    respdir = tmp_path / f"boom-{role}"
+    respdir.mkdir(parents=True)
+    script = tmp_path / "boom.py"
+    script.write_text("import sys; sys.exit(1)", encoding="utf-8")
+    command = [sys.executable, str(script)]
+    if image_arg:
+        command.append("{image}")
+    ctx_path = deck / "deck-context.json"
+    ctx = json.loads(ctx_path.read_text(encoding="utf-8"))
+    ctx.setdefault("executors", {})[role] = {
+        "executor": "cmd", "command": command}
+    ctx_path.write_text(json.dumps(ctx, indent=2), encoding="utf-8")
+
+
+def test_mine_infra_error_stops_then_resumes(deck, tmp_path):
+    """A shim `error` mid-mine stops the run at `mine` (the source stays
+    unmined); a re-run with a healthy executor resumes and mines it (§5.3/§5.4)."""
+    _seed_inputs(deck)
+    _wire_boom(deck, tmp_path, "knowledge-miner")
+
+    stopped = dd.run(deck, mode="digest")
+    assert stopped["status"] == "error"
+    assert stopped["stopped_at"] == "mine"
+    assert _count_nuggets(deck) == 0                   # nothing persisted
+    # chapter-9 was never marked mined → still unmined.
+    unmined = [p.stem for p in (deck / "sources").glob("*.json")
+               if not json.loads(p.read_text(encoding="utf-8")).get("mined_at")]
+    assert TEXT_SLUG in unmined
+
+    # Heal the executor and resume (distinct role dirs → no mkdir collision).
+    wire_fake_executor(deck, tmp_path, "knowledge-miner", [CH9_MINE, EMPTY_MINE])
+    wire_fake_executor(deck, tmp_path, "image-miner", [IMG_MINE], image_arg=True)
+    resumed = dd.run(deck, mode="digest")
+    assert resumed["status"] == "ok"
+    assert resumed["mine"]["sources_mined"] == 2
+    assert _count_nuggets(deck) == 3
+
+
+def test_mid_source_stop_does_not_duplicate_on_resume(deck, tmp_path):
+    """A source with BOTH minable text and an image: text mines first (persists
+    a nugget), then the image mine hits an infra error -> stop. On resume the
+    source must NOT re-persist the text nugget (no duplicate). Guards the
+    clear-before-remine fix; without it the resume would leave 3 nuggets."""
+    (deck / "sources").mkdir(exist_ok=True)
+    (deck / "public" / "extracted").mkdir(parents=True, exist_ok=True)
+    (deck / "public" / "extracted" / "combo-p1-img1.png").write_bytes(b"\x89PNG fake")
+    (deck / "sources" / "combo.json").write_text(json.dumps({
+        "source_id": "s-combo", "original_file": "combo.pdf", "type": "pdf",
+        "pages": [{"page": 1, "text": RAW_1}],
+        "images": [{"image_source_id": "combo-p1-img1",
+                    "path": "/extracted/combo-p1-img1.png", "page": 1,
+                    "context_text": "the loop"}],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    # Text miner yields a valid nugget (raw_text is a verbatim substring of the
+    # page); image miner errors on every attempt.
+    text_nug = _text_batch({"title": "Tracking", "information": "- estimate",
+                            "raw_text": RAW_1, "page": 1})
+    wire_fake_executor(deck, tmp_path, "knowledge-miner", [text_nug])
+    _wire_boom(deck, tmp_path, "image-miner", image_arg=True)
+
+    stopped = dd.run(deck, mode="digest")
+    assert stopped["status"] == "error" and stopped["stopped_at"] == "mine"
+    assert _count_nuggets(deck) == 1        # text persisted before the image boom
+
+    # Heal the image miner and resume.
+    wire_fake_executor(deck, tmp_path, "image-miner", [IMG_MINE], image_arg=True)
+    resumed = dd.run(deck, mode="digest")
+    assert resumed["status"] == "ok"
+    assert _count_nuggets(deck) == 2        # exactly one text + one image, no dup
+
+
+def test_full_mode_via_real_driver_reaches_green(deck, tmp_path):
+    """Digest first (mines → real nugget ids), then wire the storyteller/planner/
+    designer fakes against those ids and run the REAL driver in full mode: it
+    mines nothing new (all marked), plans, executes, composes, validates green."""
+    _seed_inputs(deck)
+
+    # 1. Mine everything (digest) so real nugget ids exist.
+    wire_fake_executor(deck, tmp_path, "knowledge-miner", [CH9_MINE, EMPTY_MINE])
+    wire_fake_executor(deck, tmp_path, "image-miner", [IMG_MINE], image_arg=True)
+    assert dd.run(deck, mode="digest")["mine"]["sources_mined"] == 2
+
+    # 2. Build the plan against the just-mined ids and wire the fakes (distinct
+    #    roles → distinct responses-<role> dirs under tmp_path, no collision).
+    by_kind = {"text": [], "image": []}
+    for np_ in sorted((deck / "nuggets").glob("*.json")):
+        n = json.loads(np_.read_text(encoding="utf-8"))
+        by_kind.setdefault(n["kind"], []).append(n["nugget_id"])
+    built = _full_plan(deck, by_kind)
+    wire_fake_executor(deck, tmp_path, "storyteller", [json.dumps(built["plan"])])
+    wire_fake_executor(deck, tmp_path, "slide-composer", built["planner"])
+    wire_fake_executor(deck, tmp_path, "text-designer", built["text_designer"])
+
+    # 3. Full run through the real driver (max_workers=1 → deterministic replay).
+    report = dd.run(deck, mode="full", run_label="test", max_workers=1)
+
+    assert report["status"] == "ok"
+    assert report["plan"]["slides_planned"] == 4
+    assert report["compose"]["parked"] == []
+    assert report["validate"]["ok"] is True
+    assert report["validate"]["exit_ok"] is True
+    assert report["validate"]["slides"] == 4
+
+
+def test_full_mode_storyteller_abort_composes_nothing(deck, tmp_path):
+    """An invalid plan (unknown nugget id) → storyteller exhausted → stop at
+    `plan`; nothing is composed and no plan.json survives (§5.4)."""
+    _seed_inputs(deck)
+    wire_fake_executor(deck, tmp_path, "knowledge-miner", [CH9_MINE, EMPTY_MINE])
+    wire_fake_executor(deck, tmp_path, "image-miner", [IMG_MINE], image_arg=True)
+    dd.run(deck, mode="digest")
+
+    wire_fake_executor(deck, tmp_path, "storyteller", [json.dumps(
+        {"plan": [{"action": "create", "title": "Ghost",
+                   "nuggets": ["no-such-id"]}], "notes": ""})])
+
+    report = dd.run(deck, mode="full")
+    assert report["status"] == "error"
+    assert report["stopped_at"] == "plan"
+    assert list((deck / "slides").glob("*.md")) == []
+    assert not (deck / "plan.json").exists()
+
+
+def test_full_mode_nothing_to_do_reports_ok(deck, tmp_path):
+    """A full run on a fully-composed deck re-derives clean state and reports ok
+    without re-planning: plan stays null, compose composes nothing (§5.3)."""
+    _seed_inputs(deck)
+    # Reach a green deck first via the real driver.
+    wire_fake_executor(deck, tmp_path, "knowledge-miner", [CH9_MINE, EMPTY_MINE])
+    wire_fake_executor(deck, tmp_path, "image-miner", [IMG_MINE], image_arg=True)
+    dd.run(deck, mode="digest")
+    by_kind = {"text": [], "image": []}
+    for np_ in sorted((deck / "nuggets").glob("*.json")):
+        n = json.loads(np_.read_text(encoding="utf-8"))
+        by_kind.setdefault(n["kind"], []).append(n["nugget_id"])
+    built = _full_plan(deck, by_kind)
+    wire_fake_executor(deck, tmp_path, "storyteller", [json.dumps(built["plan"])])
+    wire_fake_executor(deck, tmp_path, "slide-composer", built["planner"])
+    wire_fake_executor(deck, tmp_path, "text-designer", built["text_designer"])
+    dd.run(deck, mode="full", max_workers=1)
+
+    # Now nothing is unplaced and nothing is to-compose.
+    report = dd.run(deck, mode="full", max_workers=1)
+    assert report["status"] == "ok"
+    assert report["plan"] is None                 # storyteller not re-invoked
+    assert report["compose"] is None or report["compose"]["composed"] == []
